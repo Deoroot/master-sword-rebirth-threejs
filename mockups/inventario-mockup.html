@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<!--
+================================================================================
+ESPECIFICACIÓN — INVENTARIO (tecla I) · versión "cuerpo + contenedores"
+================================================================================
+IDEA CENTRAL
+  El motor no tiene casillas: tiene DOS MANOS, CONTENEDORES llevados en el cuerpo
+  (vainas, holsters, sacos) con listas de objetos, y un límite de PESO derivado de
+  STR. La UI representa exactamente eso. No hay rejilla global inventada.
+  Inspiración Diablo = muñeco (paper doll) + iconos con tooltip + arrastrar/soltar.
+
+CONTENEDOR
+  Overlay centrado, ~720 px de ancho, fondo semitransparente sobre el juego.
+
+LAYOUT
+  [Cabecera]  "Inventario · NOMBRE"  ·  barra de Carga (cur/max)  ·  Oro
+              La barra de carga cambia de color: <60% normal, 60–90% ámbar, >90% rojo.
+  [Fila principal, 2 columnas]
+     Izq: CUERPO. Silueta del personaje con ranuras en su posición anatómica:
+          - Mano izquierda / Mano derecha  → contienen un OBJETO directamente.
+          - Espalda (x2), Cinturón, Cadera → contienen un CONTENEDOR.
+          Cada ranura de contenedor muestra: nombre corto, iconos en miniatura de
+          su contenido y una barra de llenado (tamaño usado / capacidad).
+     Der: DETALLE del objeto o contenedor seleccionado/bajo el cursor:
+          nombre, tipo, peso, cantidad, valor, tamaño, dónde está.
+  [Fila inferior] CONTENIDO del contenedor seleccionado:
+          rejilla con tantas celdas como su CAPACIDAD (campo size del motor);
+          cada objeto ocupa `size` celdas contiguas. Título: "Nombre — usado/capacidad".
+
+INTERACCIÓN
+  - Clic en ranura de contenedor → lo selecciona (su contenido aparece abajo).
+  - Clic / hover en objeto → detalle.
+  - Arrastrar objeto → soltar en: mano, ranura de contenedor, o rejilla de contenido.
+    Validación: el contenedor acepta solo sus tipos (accepts) y tiene capacidad;
+    una mano acepta cualquier objeto si está vacía. Si falla: la ranura parpadea en
+    rojo y la línea de estado explica por qué ("La vaina de daga solo acepta dagas").
+  - Doble clic en objeto dentro de contenedor → a una mano libre (desenvainar).
+    Doble clic en objeto en mano → al primer contenedor compatible (envainar).
+  - I / Esc cierra. P abre la hoja de personaje. (Sin botones.)
+  - Clic derecho en pila → dividir (no implementado en el mockup).
+
+ELIMINADO RESPECTO A LA VERSIÓN ANTERIOR
+  - Rejilla global de 90 celdas y la métrica "% de la rejilla".
+  - Contenedores dibujados como objetos gigantes en la rejilla.
+  - Nota de desarrollador y botones "hoja de personaje"/"cerrar".
+  - Comillas literales en nombres ("Back Sword Sheath") — era un bug de escape.
+
+MODELO DE DATOS (const INV)
+  { name, gold, load:{max},                        // cur se calcula
+    hands:{ left:itemId|null, right:itemId|null },
+    containers:[ {id, name, slot /*back1|back2|belt|hip*/, weight,
+                  capacity /*unidades de size*/, accepts:[kind…]|["*"],
+                  items:[itemId…]} ],
+    items:{ id:{name, kind, icon, weight, qty, value, size} } }
+  Peso total = Σ peso contenedores + Σ (peso·qty) de todos los objetos.
+  Los iconos son emoji de marcador de posición: sustituir por sprites del juego.
+  Los objetos que no son la espada son DATOS DE EJEMPLO.
+================================================================================
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Inventario — mockup</title>
+<style>
+  :root{
+    --panel:rgba(22,19,29,.93); --line:#3a3446; --line2:#524a61;
+    --text:#e8e2d4; --dim:#8f8799; --accent:#e8a33d;
+    --ok:#6fa35a; --warn:#e8a33d; --bad:#c9503f;
+    --slot:#1d1926; --slot-hi:#2a2436; --bar-bg:#2c2736;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;
+       font:13px/1.4 "JetBrains Mono",ui-monospace,Consolas,monospace;color:var(--text);
+       background:repeating-linear-gradient(45deg,#34322c 0 18px,#2b2a26 18px 36px)}
+  .inv{width:min(720px,100%);background:var(--panel);border:1px solid var(--line);
+       border-radius:6px;padding:14px 16px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  header{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+         border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:12px}
+  .title{color:var(--accent);font-weight:700;font-size:16px;flex:1}
+  .load{display:flex;align-items:center;gap:8px;min-width:220px}
+  .bar{height:6px;background:var(--bar-bg);border-radius:3px;overflow:hidden;flex:1}
+  .bar>i{display:block;height:100%;transition:width .2s,background .2s}
+  .gold b,.load b{color:var(--accent);font-weight:400}
+  .keys{width:100%;color:var(--dim);font-size:11px}
+  .main{display:grid;grid-template-columns:1fr 220px;gap:14px}
+  @media (max-width:620px){.main{grid-template-columns:1fr}}
+  h3{margin:0 0 6px;font-size:10px;letter-spacing:.12em;color:var(--dim);font-weight:600}
+
+  /* CUERPO */
+  .body{position:relative;height:330px;border:1px solid var(--line);border-radius:4px;
+        background:radial-gradient(ellipse at 50% 40%,#231e2d,transparent 70%)}
+  .body svg{position:absolute;left:50%;top:10px;transform:translateX(-50%);height:310px;opacity:.35}
+  .slot{position:absolute;width:118px;min-height:54px;background:var(--slot);
+        border:1px solid var(--line2);border-radius:4px;padding:4px 6px;cursor:pointer;
+        transition:background .15s,border-color .15s}
+  .slot:hover,.slot.over{background:var(--slot-hi)}
+  .slot.sel{border-color:var(--accent)}
+  .slot.bad{border-color:var(--bad);animation:shake .3s}
+  @keyframes shake{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+  .slot .where{font-size:9.5px;letter-spacing:.1em;color:var(--dim)}
+  .slot .cname{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .slot .minis{display:flex;gap:3px;margin:3px 0 2px;min-height:20px}
+  .slot .bar{height:3px}
+  .hand{width:70px;text-align:center}
+  .hand .cell{margin:3px auto 0}
+  .empty{color:var(--dim);font-size:11px}
+
+  /* OBJETOS */
+  .item{width:30px;height:30px;display:grid;place-items:center;font-size:17px;
+        background:#2b2536;border:1px solid var(--line2);border-radius:3px;cursor:grab;
+        position:relative;user-select:none}
+  .item.mini{width:20px;height:20px;font-size:12px}
+  .item.sel{outline:1px solid var(--accent)}
+  .item .qty{position:absolute;right:1px;bottom:-1px;font-size:9px;color:var(--text)}
+
+  /* DETALLE */
+  .detail{border:1px solid var(--line);border-radius:4px;padding:10px;min-height:150px}
+  .detail .dn{color:var(--accent);font-weight:700;margin-bottom:6px}
+  .detail dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0;font-size:12px}
+  .detail dt{color:var(--dim)} .detail dd{margin:0;text-align:right}
+  .status{margin-top:10px;font-size:11.5px;min-height:34px;color:var(--dim)}
+  .status.err{color:var(--bad)}
+
+  /* CONTENIDO */
+  .contents{margin-top:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,34px);gap:4px;padding:6px;
+        border:1px solid var(--line);border-radius:4px;min-height:46px}
+  .grid.over{background:var(--slot-hi)}
+  .cell{width:34px;height:34px;border:1px dashed var(--line);border-radius:3px}
+  .grid .item{width:auto;height:34px}
+</style>
+</head>
+<body>
+<main class="inv" role="dialog" aria-label="Inventario">
+  <header>
+    <div class="title" id="title"></div>
+    <div class="load">Carga <div class="bar"><i id="loadbar"></i></div> <b id="loadtxt"></b></div>
+    <div class="gold">Oro <b id="gold"></b></div>
+    <div class="keys">arrastra para mover · doble clic desenvaina/envaina · I cierra · P hoja</div>
+  </header>
+
+  <div class="main">
+    <section>
+      <h3>CUERPO</h3>
+      <div class="body" id="body">
+        <!-- Silueta simple de marcador de posición -->
+        <svg viewBox="0 0 100 200" fill="#8f8799">
+          <circle cx="50" cy="20" r="14"/>
+          <rect x="30" y="38" width="40" height="62" rx="8"/>
+          <rect x="14" y="40" width="13" height="58" rx="6"/>
+          <rect x="73" y="40" width="13" height="58" rx="6"/>
+          <rect x="32" y="102" width="15" height="88" rx="6"/>
+          <rect x="53" y="102" width="15" height="88" rx="6"/>
+        </svg>
+        <div id="slots"></div>
+      </div>
+    </section>
+    <aside>
+      <h3>DETALLE</h3>
+      <div class="detail" id="detail"></div>
+      <div class="status" id="status"></div>
+    </aside>
+  </div>
+
+  <section class="contents">
+    <h3 id="ctitle"></h3>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<script>
+const INV = {
+  name:"MYR", gold:10, load:{max:75},
+  hands:{left:null, right:null},
+  containers:[
+    {id:"holster", name:"Heavy Weapon Holster", slot:"back1", weight:1,   capacity:4, accepts:["pesada"], items:[]},
+    {id:"sheath",  name:"Back Sword Sheath",    slot:"back2", weight:1,   capacity:3, accepts:["espada"], items:["sword"]},
+    {id:"dagger",  name:"Dagger Sheath",        slot:"belt",  weight:0.5, capacity:1, accepts:["daga"],   items:[]},
+    {id:"sack",    name:"Small Sack",           slot:"hip",   weight:0.5, capacity:8, accepts:["*"],      items:["bread","potion"]}
+  ],
+  items:{
+    sword: {name:"Rusty Short Sword", kind:"espada",    icon:"🗡️", weight:10,  qty:1, value:3,  size:3},
+    bread: {name:"Pan duro",          kind:"comida",    icon:"🍞", weight:0.5, qty:3, value:1,  size:1},
+    potion:{name:"Poción menor",      kind:"consumible",icon:"🧪", weight:0.5, qty:1, value:15, size:1}
+  }
+};
+
+/* Posiciones de ranuras en el panel del cuerpo (%). */
+const SLOT_POS = {
+  back1:{left:"2%",  top:"4%",  label:"ESPALDA"},
+  back2:{right:"2%", top:"4%",  label:"ESPALDA"},
+  left: {left:"4%",  top:"40%", label:"MANO IZQ"},
+  right:{right:"4%", top:"40%", label:"MANO DER"},
+  belt: {left:"2%",  top:"72%", label:"CINTURÓN"},
+  hip:  {right:"2%", top:"72%", label:"CADERA"}
+};
+
+const $ = id => document.getElementById(id);
+let selContainer = "sheath", selItem = "sword", drag = null;
+
+const cont = id => INV.containers.find(c => c.id === id);
+const used = c => c.items.reduce((s,i) => s + INV.items[i].size, 0);
+const whereIs = id => {
+  if (INV.hands.left === id) return "Mano izquierda";
+  if (INV.hands.right === id) return "Mano derecha";
+  const c = INV.containers.find(c => c.items.includes(id));
+  return c ? c.name : "—";
+};
+function totalWeight(){
+  let w = INV.containers.reduce((s,c) => s + c.weight, 0);
+  for (const it of Object.values(INV.items)) w += it.weight * it.qty;
+  return w;
+}
+function removeFromAnywhere(id){
+  for (const h of ["left","right"]) if (INV.hands[h] === id) INV.hands[h] = null;
+  for (const c of INV.containers) c.items = c.items.filter(x => x !== id);
+}
+function status(msg, err){ const s=$("status"); s.textContent=msg||""; s.className="status"+(err?" err":""); }
+function flash(el){ el.classList.remove("bad"); void el.offsetWidth; el.classList.add("bad"); }
+
+/* Mover un objeto a un destino: {hand:"left"} o {container:id}. Devuelve error o null. */
+function moveTo(id, dest){
+  const it = INV.items[id];
+  if (dest.hand){
+    if (INV.hands[dest.hand] && INV.hands[dest.hand] !== id) return "Esa mano ya está ocupada.";
+    removeFromAnywhere(id); INV.hands[dest.hand] = id; return null;
+  }
+  const c = cont(dest.container);
+  if (c.items.includes(id)) return null;
+  if (!c.accepts.includes("*") && !c.accepts.includes(it.kind))
+    return `${c.name} solo acepta: ${c.accepts.join(", ")}.`;
+  if (used(c) + it.size > c.capacity) return `No cabe en ${c.name} (${used(c)}/${c.capacity}, necesita ${it.size}).`;
+  removeFromAnywhere(id); c.items.push(id); return null;
+}
+
+function itemEl(id, mini){
+  const it = INV.items[id], e = document.createElement("div");
+  e.className = "item"+(mini?" mini":"")+(id===selItem?" sel":"");
+  e.draggable = true; e.title = `${it.name} · ${it.weight} kg`;
+  e.innerHTML = it.icon + (it.qty>1 ? `<span class="qty">${it.qty}</span>` : "");
+  if (!mini) e.style.gridColumn = `span ${it.size}`;
+  e.addEventListener("dragstart", ev => { drag = id; ev.dataTransfer.setData("text/plain", id); ev.stopPropagation(); });
+  e.addEventListener("click", ev => { ev.stopPropagation(); selItem = id; render(); });
+  e.addEventListener("dblclick", ev => { ev.stopPropagation(); quickMove(id); });
+  return e;
+}
+
+function quickMove(id){
+  const inHand = INV.hands.left === id || INV.hands.right === id;
+  let err = null;
+  if (inHand){
+    const target = INV.containers.find(c => !moveTest(id, c));
+    err = target ? moveTo(id,{container:target.id}) : "No hay contenedor compatible con espacio.";
+    if (!err) status(`Guardado en ${target.name}.`);
+  } else {
+    const h = !INV.hands.right ? "right" : !INV.hands.left ? "left" : null;
+    err = h ? moveTo(id,{hand:h}) : "Tienes las dos manos ocupadas.";
+    if (!err) status(`${INV.items[id].name} en ${h==="right"?"mano derecha":"mano izquierda"}.`);
+  }
+  if (err) status(err, true);
+  selItem = id; render();
+}
+function moveTest(id, c){
+  const it = INV.items[id];
+  if (!c.accepts.includes("*") && !c.accepts.includes(it.kind)) return "tipo";
+  if (used(c) + it.size > c.capacity) return "espacio";
+  return null;
+}
+
+function dropTarget(el, dest){
+  el.addEventListener("dragover", e => { e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragleave", () => el.classList.remove("over"));
+  el.addEventListener("drop", e => {
+    e.preventDefault(); el.classList.remove("over");
+    const id = drag; if (!id) return;
+    const err = moveTo(id, dest);
+    if (err){ status(err, true); flash(el); return; }
+    status(""); selItem = id; if (dest.container) selContainer = dest.container; render();
+  });
+}
+
+function render(){
+  $("title").textContent = `Inventario · ${INV.name}`;
+  $("gold").textContent = INV.gold;
+  const w = totalWeight(), pct = 100*w/INV.load.max;
+  $("loadbar").style.width = Math.min(pct,100)+"%";
+  $("loadbar").style.background = pct>90 ? "var(--bad)" : pct>60 ? "var(--warn)" : "var(--ok)";
+  $("loadtxt").textContent = `${+w.toFixed(1)} / ${INV.load.max}`;
+
+  /* Ranuras del cuerpo */
+  const slots = $("slots"); slots.innerHTML = "";
+  const place = (el, key) => { const p = SLOT_POS[key]; for (const k of ["left","right","top"]) if (p[k]) el.style[k]=p[k]; };
+
+  for (const h of ["left","right"]){
+    const el = document.createElement("div");
+    el.className = "slot hand"; place(el, h);
+    el.innerHTML = `<div class="where">${SLOT_POS[h].label}</div>`;
+    const id = INV.hands[h];
+    if (id){ const ie = itemEl(id); ie.classList.add("cell"); el.appendChild(ie); }
+    else el.insertAdjacentHTML("beforeend", `<div class="empty" style="margin-top:8px">vacía</div>`);
+    dropTarget(el, {hand:h});
+    slots.appendChild(el);
+  }
+  for (const c of INV.containers){
+    const el = document.createElement("div");
+    el.className = "slot"+(c.id===selContainer?" sel":""); place(el, c.slot);
+    el.innerHTML = `<div class="where">${SLOT_POS[c.slot].label}</div><div class="cname">${c.name}</div>`;
+    const minis = document.createElement("div"); minis.className = "minis";
+    c.items.forEach(id => minis.appendChild(itemEl(id, true)));
+    if (!c.items.length) minis.innerHTML = `<span class="empty">vacío</span>`;
+    el.appendChild(minis);
+    el.insertAdjacentHTML("beforeend", `<div class="bar"><i style="width:${100*used(c)/c.capacity}%;background:var(--accent)"></i></div>`);
+    el.addEventListener("click", () => { selContainer = c.id; selItem = null; render(); });
+    dropTarget(el, {container:c.id});
+    slots.appendChild(el);
+  }
+
+  /* Contenido del contenedor seleccionado */
+  const c = cont(selContainer);
+  $("ctitle").textContent = `${c.name.toUpperCase()} — ${used(c)}/${c.capacity} · acepta: ${c.accepts.includes("*")?"cualquier cosa":c.accepts.join(", ")}`;
+  const g = $("grid"); g.innerHTML = "";
+  c.items.forEach(id => g.appendChild(itemEl(id)));
+  for (let i = used(c); i < c.capacity; i++) g.insertAdjacentHTML("beforeend", `<div class="cell"></div>`);
+  if (!g._bound){ dropTarget(g, {get container(){ return selContainer; }}); g._bound = true; }
+
+  /* Detalle */
+  const d = $("detail");
+  if (selItem){
+    const it = INV.items[selItem];
+    d.innerHTML = `<div class="dn">${it.icon} ${it.name}</div><dl>
+      <dt>Tipo</dt><dd>${it.kind}</dd><dt>Peso</dt><dd>${it.weight} × ${it.qty}</dd>
+      <dt>Valor</dt><dd>${it.value}</dd><dt>Tamaño</dt><dd>${it.size}</dd>
+      <dt>En</dt><dd>${whereIs(selItem)}</dd></dl>`;
+  } else {
+    d.innerHTML = `<div class="dn">${c.name}</div><dl>
+      <dt>Posición</dt><dd>${SLOT_POS[c.slot].label.toLowerCase()}</dd>
+      <dt>Peso</dt><dd>${c.weight}</dd><dt>Capacidad</dt><dd>${used(c)}/${c.capacity}</dd>
+      <dt>Acepta</dt><dd>${c.accepts.includes("*")?"todo":c.accepts.join(", ")}</dd></dl>`;
+  }
+}
+
+document.addEventListener("keydown", e => {
+  if (["i","I","Escape"].includes(e.key)) document.querySelector(".inv").style.display="none";
+});
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mydra Web Lab — sonda 03</title>
+<style>
+:root {
+  color-scheme: dark;
+  --ground: #15101d;
+  --ink: #efe2c2;
+  --muted: #b3a58a;
+  --amber: #f4a640;
+  --panel: rgba(21, 16, 29, 0.78);
+  --line: rgba(239, 226, 194, 0.22);
+}
+* { box-sizing: border-box; }
+/* Sin esto, cualquier regla que ponga display: block o flex gana al display:
+   none que trae el atributo hidden, y el velo de entrada se queda encima del
+   canvas para siempre. El juego corre debajo y nada lo avisa. */
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 14px ui-monospace, "Cascadia Mono", Consolas, monospace;
+  overflow: hidden;
+}
+/* La resolucion interna del canvas la fija scene.js; aqui solo se estira.
+   image-rendering: pixelated es lo que produce el pixel gordo de la referencia
+   en vez de un desenfoque. */
+#view {
+  width: 100%; height: 100%; display: block;
+  image-rendering: pixelated;
+  cursor: crosshair;
+  background: #8d8db6;
+}
+#hud { position: absolute; inset: 0; pointer-events: none; }
+.counters {
+  position: absolute; left: 10px; top: 10px; padding: 6px 9px;
+  background: var(--panel); border: 1px solid var(--line);
+  display: grid; grid-template-columns: auto auto; column-gap: 12px;
+  font-variant-numeric: tabular-nums; line-height: 1.5;
+}
+.counters dt { color: var(--muted); text-transform: uppercase; font-size: 11px; align-self: center; }
+.counters dd { margin: 0; text-align: right; }
+#status {
+  position: absolute; left: 10px; bottom: 10px; right: 10px;
+  padding: 6px 9px; background: var(--panel); border: 1px solid var(--line);
+  color: var(--muted); font-size: 12px;
+}
+#help {
+  position: absolute; right: 10px; top: 10px; padding: 6px 9px;
+  background: var(--panel); border: 1px solid var(--line);
+  font-size: 12px; line-height: 1.6; text-align: right;
+}
+#help kbd { color: var(--amber); }
+#intro {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  justify-content: center; align-items: center; gap: 10px;
+  background: var(--ground); padding: 20px; text-align: center;
+}
+#intro h1 { margin: 0; font-size: clamp(20px, 5vw, 34px); font-weight: 400; }
+#intro p { margin: 0; color: var(--muted); max-width: 50ch; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<canvas id="view"></canvas>
+
+<div id="hud" hidden>
+  <dl class="counters">
+    <dt>Andado</dt><dd><span id="h-dist">0.0</span> m</dd>
+    <dt>Pos</dt><dd id="h-pos">– – –</dd>
+    <dt>Pies</dt><dd id="h-ground">–</dd>
+  </dl>
+  <div id="help">
+    <kbd>WASD</kbd> andar · <kbd>Raton</kbd> mirar<br>
+    <kbd>Espacio</kbd> saltar · <kbd>R</kbd> volver al inicio<br>
+    clic para capturar el raton
+  </div>
+</div>
+
+<div id="intro">
+  <h1>Sonda minima — experimento 03</h1>
+  <p>plaza.map del experimento 02, cargado en Three.js y caminado con Rapier.
+     Las mismas piezas corren en Node sin navegador: <code>npm test</code>.
+     El sellado lo sigue juzgando qbsp: <code>npm run verdict</code>.</p>
+</div>
+
+<p id="status">arrancando…</p>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

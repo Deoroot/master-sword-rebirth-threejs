@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<!--
+================================================================================
+ESPECIFICACIÓN — SELECCIÓN Y CREACIÓN DE PERSONAJE
+================================================================================
+DOS PANTALLAS en el mismo overlay, sobre el mapa real renderizado de fondo
+(en el mockup se simula con un degradado). Navegación: selección ⇄ creación.
+
+------------------------------------------------------------------ PANTALLA 1
+SELECCIÓN ("Personajes")
+  - Línea de almacenamiento (una sola línea, no un párrafo):
+      si NO hay permanencia: "⚠ Guardados solo en este navegador" + [Proteger] + [Exportar todo]
+        [Proteger] llama navigator.storage.persist(); si lo concede, la línea pasa a
+        "✓ Protegidos en este navegador" + [Exportar todo].
+      si hay permanencia: "✓ Protegidos en este navegador" + [Exportar todo].
+  - Rejilla de TARJETAS (una por personaje) + tarjetas vacías "+ Nuevo personaje"
+    hasta completar al menos 3 (como las ranuras del original).
+    Tarjeta: retrato (modelo), nombre, ubicación ("En Edana"), arma principal,
+    tiempo relativo ("hace 3 min"; fecha exacta en tooltip).
+    Clic en la tarjeta (o Enter con foco) → JUGAR.
+    Botón ⋯ en la esquina → menú: Exportar, Borrar.
+    Borrar abre confirmación que exige escribir el nombre exacto.
+  - Enlace secundario al pie: "Importar desde archivo".
+
+------------------------------------------------------------------ PANTALLA 2
+CREACIÓN ("Personaje nuevo") — una sola pantalla, sin pasos
+  Izquierda: VISTA PREVIA del modelo. Cambia con el género y sostiene el arma
+    elegida. (En el juego: modelo 3D real; aquí, silueta SVG + icono.)
+  Derecha, de arriba a abajo:
+    1. Nombre: input + botón 🎲 (nombre aleatorio). Validación en línea:
+       2–16 caracteres, letras/números/espacio/-/_ y no repetido. Mensaje debajo.
+    2. Género: toggle Masculino / Femenino.
+    3. Arma: rejilla de iconos (sprites del juego). Una seleccionada siempre.
+    4. Detalle del arma: nombre, daño, tipo de daño, habilidad que entrena y
+       ATRIBUTOS QUE HACE CRECER (derivados de esa habilidad).
+    5. [Volver]  [Crear ▸]  — Crear desactivado hasta que el nombre sea válido.
+       Enter = Crear. Esc = Volver.
+  El jugador empieza con 10 de oro y los objetos iniciales del motor; no se
+  muestra texto técnico (CreateChar, LEGACY, raza fija, habilidad faltante).
+  Martial Arts NO aparece hasta que el motor permita empezar sin arma
+  (entonces será una tarjeta más: "Puños").
+
+DATOS
+  characters:[{name, gender, weapon /*id*/, location, lastPlayed /*ms*/}]
+  WEAPONS:[{id, name, icon, skill, damage|null, dtype|null}]
+  SKILL_GROWS:{skill:[atributos]}  ← EJEMPLO, sustituir por la tabla real del motor.
+  Iconos emoji = marcadores; usar los sprites del juego.
+================================================================================
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Personajes — mockup</title>
+<style>
+  :root{
+    --panel:rgba(22,19,29,.94); --line:#3a3446; --line2:#524a61;
+    --text:#e8e2d4; --dim:#8f8799; --accent:#e8a33d; --card:#1d1926; --card-hi:#2a2436;
+    --ok:#6fa35a; --warn:#e8a33d; --bad:#c9503f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;
+       font:13px/1.45 "JetBrains Mono",ui-monospace,Consolas,monospace;color:var(--text);
+       /* simula el mapa real detrás */
+       background:linear-gradient(#5d88c4 0 32%,#4a3b2c 32% 60%,#3b2e22 60%)}
+  button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line2);
+         border-radius:4px;padding:6px 12px;cursor:pointer}
+  button:hover:not(:disabled){background:var(--card-hi)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{border-color:var(--accent);color:var(--accent)}
+  .win{width:min(760px,100%);background:var(--panel);border:1px solid var(--line);
+       border-radius:6px;padding:16px 18px;box-shadow:0 10px 40px rgba(0,0,0,.55)}
+  h1{margin:0 0 10px;font-size:17px;color:var(--accent)}
+  h3{margin:14px 0 6px;font-size:10px;letter-spacing:.12em;color:var(--dim);font-weight:600}
+  .hidden{display:none!important}
+
+  /* ---------- selección ---------- */
+  .storage{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;
+           padding:6px 10px;border:1px solid var(--line);border-radius:4px;margin-bottom:14px}
+  .storage .msg{flex:1;min-width:180px}
+  .storage.warn .msg{color:var(--warn)} .storage.safe .msg{color:var(--ok)}
+  .storage button{padding:3px 10px;font-size:12px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+  .card{position:relative;background:var(--card);border:1px solid var(--line2);border-radius:5px;
+        padding:10px;cursor:pointer;display:flex;gap:10px;align-items:center;min-height:96px;
+        transition:border-color .15s,background .15s}
+  .card:hover,.card:focus-visible{border-color:var(--accent);background:var(--card-hi);outline:none}
+  .card .portrait{width:54px;height:74px;flex:none;border-radius:3px;background:#120f18}
+  .card .nm{font-weight:700;font-size:14px}
+  .card .meta{color:var(--dim);font-size:11.5px}
+  .card .play{color:var(--accent);font-size:11px;margin-top:4px;opacity:0;transition:opacity .15s}
+  .card:hover .play,.card:focus-visible .play{opacity:1}
+  .card.empty{justify-content:center;color:var(--dim);border-style:dashed}
+  .card.empty:hover{color:var(--accent)}
+  .more{position:absolute;top:4px;right:4px;padding:0 7px;border:none;background:none;
+        color:var(--dim);font-size:16px}
+  .menu{position:absolute;top:28px;right:6px;z-index:5;background:#15121c;border:1px solid var(--line2);
+        border-radius:4px;display:flex;flex-direction:column;min-width:120px}
+  .menu button{border:none;border-radius:0;text-align:left;background:none}
+  .menu button:hover{background:var(--card-hi)} .menu .danger{color:var(--bad)}
+  .foot{margin-top:12px;font-size:12px}
+  .link{background:none;border:none;padding:0;color:var(--dim);text-decoration:underline}
+  .link:hover{color:var(--text);background:none!important}
+
+  /* ---------- confirmación borrar ---------- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;padding:16px}
+  .modal .box{background:#17131f;border:1px solid var(--bad);border-radius:6px;padding:16px;width:min(380px,100%)}
+  .modal p{margin:0 0 10px}
+  input[type=text]{font:inherit;color:var(--text);background:#120f18;border:1px solid var(--line2);
+        border-radius:4px;padding:7px 10px;width:100%}
+  input[type=text]:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+
+  /* ---------- creación ---------- */
+  .create{display:grid;grid-template-columns:200px 1fr;gap:18px}
+  @media (max-width:600px){.create{grid-template-columns:1fr}.preview{height:220px}}
+  .preview{border:1px solid var(--line);border-radius:5px;height:340px;
+           background:radial-gradient(ellipse at 50% 85%,#3b2e22,#15121c 70%);
+           display:grid;place-items:center;position:relative}
+  .preview .cap{position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:12px;color:var(--dim)}
+  .namerow{display:flex;gap:6px}
+  .namerow button{padding:6px 10px}
+  .hint{font-size:11.5px;min-height:18px;margin-top:4px;color:var(--dim)}
+  .hint.err{color:var(--bad)} .hint.ok{color:var(--ok)}
+  .toggle{display:inline-flex;border:1px solid var(--line2);border-radius:4px;overflow:hidden}
+  .toggle button{border:none;border-radius:0;background:none;padding:6px 16px}
+  .toggle button.on{background:var(--card-hi);color:var(--accent)}
+  .weapons{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  @media (max-width:600px){.weapons{grid-template-columns:repeat(4,1fr)}}
+  .wpn{aspect-ratio:1;font-size:24px;display:grid;place-items:center;padding:0;
+       background:#120f18;border:1px solid var(--line2)}
+  .wpn.on{border-color:var(--accent);background:var(--card-hi);box-shadow:0 0 0 1px var(--accent) inset}
+  .wdetail{margin-top:10px;border:1px solid var(--line);border-radius:4px;padding:10px}
+  .wdetail .wn{font-weight:700;color:var(--accent)}
+  .wdetail .ws{color:var(--dim);font-size:12px}
+  .grows{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px}
+  .chip{border:1px solid var(--line2);border-radius:10px;padding:1px 8px}
+  .chip b{color:var(--ok);font-weight:400}
+</style>
+</head>
+<body>
+<main class="win">
+
+  <!-- ======================= PANTALLA 1: SELECCIÓN ======================= -->
+  <section id="select">
+    <h1>Personajes</h1>
+    <div class="storage warn" id="storage">
+      <span class="msg" id="storageMsg"></span>
+      <button id="protectBtn">Proteger</button>
+      <button id="exportAll">Exportar todo</button>
+    </div>
+    <div class="cards" id="cards"></div>
+    <div class="foot"><button class="link" id="importBtn">Importar desde archivo</button></div>
+  </section>
+
+  <!-- ======================= PANTALLA 2: CREACIÓN ======================= -->
+  <section id="create" class="hidden">
+    <h1>Personaje nuevo</h1>
+    <div class="create">
+      <div class="preview"><div id="model"></div><div class="cap" id="modelCap"></div></div>
+      <div>
+        <h3 style="margin-top:0">NOMBRE</h3>
+        <div class="namerow">
+          <input type="text" id="name" placeholder="¿Cómo te llamas?" maxlength="16" autocomplete="off">
+          <button id="rand" title="Nombre aleatorio">🎲</button>
+        </div>
+        <div class="hint" id="nameHint">De 2 a 16 caracteres.</div>
+
+        <h3>GÉNERO</h3>
+        <div class="toggle" id="gender">
+          <button data-g="m" class="on">Masculino</button><button data-g="f">Femenino</button>
+        </div>
+
+        <h3>ARMA INICIAL</h3>
+        <div class="weapons" id="weapons"></div>
+        <div class="wdetail" id="wdetail"></div>
+
+        <div class="row" style="justify-content:space-between">
+          <button id="back">Volver</button>
+          <button id="createBtn" class="primary" disabled>Crear ▸</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal hidden" id="confirm">
+  <div class="box">
+    <p>Borrar a <b id="delName"></b> es permanente. Escribe su nombre para confirmar.</p>
+    <input type="text" id="delInput" autocomplete="off">
+    <div class="row"><button id="delCancel">Cancelar</button><button id="delOk" disabled style="color:var(--bad);border-color:var(--bad)">Borrar</button></div>
+  </div>
+</div>
+
+<script>
+const WEAPONS = [
+  {id:"sword",  name:"Rusty Short Sword", icon:"🗡️", skill:"Swordsmanship", damage:90,  dtype:"corte"},
+  {id:"bow",    name:"Tree Bow",          icon:"🏹", skill:"Archery",       damage:null,dtype:"perforante"},
+  {id:"knife",  name:"Dull Knife",        icon:"🔪", skill:"Small Arms",    damage:70,  dtype:"perforante"},
+  {id:"axe",    name:"Rusted Axe",        icon:"🪓", skill:"Axe Handling",  damage:100, dtype:"corte"},
+  {id:"hammer", name:"Training Hammer",   icon:"🔨", skill:"Blunt Arms",    damage:100, dtype:"contundente"},
+  {id:"spell",  name:"Erratic Lightning", icon:"⚡", skill:"Spell Casting", damage:null,dtype:"rayo"},
+  {id:"staff",  name:"Quarterstaff",      icon:"🦯", skill:"Pole Arms",     damage:120, dtype:"contundente"}
+];
+/* EJEMPLO: qué atributos alimenta cada habilidad. Sustituir por la tabla real del motor. */
+const SKILL_GROWS = {
+  "Swordsmanship":["Fuerza","Agilidad"], "Archery":["Agilidad","Percepción"],
+  "Small Arms":["Agilidad","Percepción"], "Axe Handling":["Fuerza","Resistencia"],
+  "Blunt Arms":["Fuerza","Resistencia"], "Spell Casting":["Concentración","Sabiduría"],
+  "Pole Arms":["Fuerza","Agilidad"]
+};
+const NAMES = ["Aldric","Brenna","Corwin","Dara","Edrik","Fenna","Garrick","Isolde","Kael","Lyra","Orin","Sable","Tamsin","Varek"];
+
+const now = Date.now();
+let characters = [
+  {name:"MYR",  gender:"m", weapon:"sword", location:"Edana",      lastPlayed: now - 3*60e3},
+  {name:"Urd",  gender:"f", weapon:"spell", location:"Deralia",    lastPlayed: now - 2*86400e3}
+];
+let persisted = false;
+
+const $ = id => document.getElementById(id);
+const W = id => WEAPONS.find(w => w.id === id);
+
+function ago(ms){
+  const m = Math.round((Date.now()-ms)/60e3);
+  if (m < 1) return "ahora";
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.round(m/60); if (h < 24) return `hace ${h} h`;
+  const d = Math.round(h/24); return d === 1 ? "ayer" : `hace ${d} días`;
+}
+
+/* Silueta de marcador; el juego usa el modelo 3D real. */
+function figure(gender, weaponId, h){
+  const w = W(weaponId), body = gender === "f" ? "#8c3b3b" : "#5b6b8c";
+  const hair = gender === "f"
+    ? `<path d="M36 14 q14 -14 28 0 v22 h-6 v-16 h-16 v16 h-6z" fill="#6b4a2b"/>`
+    : `<path d="M37 12 q13 -10 26 0 v6 h-26z" fill="#4a3322"/>`;
+  return `<svg viewBox="0 0 100 200" height="${h}">
+    <circle cx="50" cy="22" r="13" fill="#c9a27e"/>${hair}
+    <rect x="32" y="38" width="36" height="60" rx="8" fill="${body}"/>
+    <rect x="34" y="52" width="32" height="30" rx="4" fill="#6b5a2e" opacity=".8"/>
+    <rect x="18" y="40" width="12" height="54" rx="6" fill="${body}"/>
+    <rect x="70" y="40" width="12" height="54" rx="6" fill="${body}"/>
+    <rect x="34" y="98" width="14" height="86" rx="6" fill="#7a6a47"/>
+    <rect x="52" y="98" width="14" height="86" rx="6" fill="#7a6a47"/>
+    <text x="84" y="104" font-size="26" text-anchor="middle">${w.icon}</text></svg>`;
+}
+
+/* ------------------------- SELECCIÓN ------------------------- */
+function renderStorage(){
+  const s = $("storage");
+  s.className = "storage " + (persisted ? "safe" : "warn");
+  $("storageMsg").textContent = persisted
+    ? "✓ Protegidos en este navegador"
+    : "⚠ Guardados solo en este navegador; puede borrarlos";
+  $("protectBtn").classList.toggle("hidden", persisted);
+}
+$("protectBtn").onclick = async () => {
+  try { persisted = await navigator.storage?.persist?.() ?? false; } catch { persisted = false; }
+  if (!persisted) $("storageMsg").textContent = "⚠ El navegador no lo concedió; exporta para no perderlos";
+  else renderStorage();
+};
+$("exportAll").onclick = () => alert("Mockup: descargaría un .json con todos los personajes.");
+$("importBtn").onclick = () => alert("Mockup: abriría el selector de archivos.");
+
+let openMenu = null;
+function renderCards(){
+  const box = $("cards"); box.innerHTML = "";
+  [...characters].sort((a,b)=>b.lastPlayed-a.lastPlayed).forEach(c => {
+    const w = W(c.weapon), el = document.createElement("div");
+    el.className = "card"; el.tabIndex = 0;
+    el.innerHTML = `<div class="portrait">${figure(c.gender,c.weapon,74)}</div>
+      <div><div class="nm">${c.name}</div>
+        <div class="meta">En ${c.location}</div>
+        <div class="meta">${w.icon} ${w.skill}</div>
+        <div class="meta" title="${new Date(c.lastPlayed).toLocaleString()}">${ago(c.lastPlayed)}</div>
+        <div class="play">▸ Jugar</div></div>
+      <button class="more" aria-label="Más opciones">⋯</button>`;
+    const play = () => alert(`Mockup: entrar al juego con ${c.name}.`);
+    el.onclick = play;
+    el.onkeydown = e => { if (e.key === "Enter") play(); };
+    el.querySelector(".more").onclick = e => {
+      e.stopPropagation(); closeMenu();
+      const m = document.createElement("div"); m.className = "menu";
+      m.innerHTML = `<button>Exportar</button><button class="danger">Borrar…</button>`;
+      m.onclick = e => e.stopPropagation();
+      m.children[0].onclick = () => { alert(`Mockup: descargaría ${c.name}.json`); closeMenu(); };
+      m.children[1].onclick = () => { closeMenu(); askDelete(c); };
+      el.appendChild(m); openMenu = m;
+    };
+    box.appendChild(el);
+  });
+  for (let i = characters.length; i < Math.max(3, characters.length + 1); i++){
+    const el = document.createElement("div");
+    el.className = "card empty"; el.tabIndex = 0; el.textContent = "+ Nuevo personaje";
+    el.onclick = openCreate; el.onkeydown = e => { if (e.key === "Enter") openCreate(); };
+    box.appendChild(el);
+  }
+}
+function closeMenu(){ openMenu?.remove(); openMenu = null; }
+document.addEventListener("click", closeMenu);
+
+let toDelete = null;
+function askDelete(c){
+  toDelete = c; $("delName").textContent = c.name; $("delInput").value = "";
+  $("delOk").disabled = true; $("confirm").classList.remove("hidden"); $("delInput").focus();
+}
+$("delInput").oninput = () => $("delOk").disabled = $("delInput").value !== toDelete.name;
+$("delCancel").onclick = () => $("confirm").classList.add("hidden");
+$("delOk").onclick = () => {
+  characters = characters.filter(c => c !== toDelete);
+  $("confirm").classList.add("hidden"); renderCards();
+};
+
+/* ------------------------- CREACIÓN ------------------------- */
+let draft = {gender:"m", weapon:"sword"};
+function openCreate(){
+  draft = {gender:"m", weapon:"sword"}; $("name").value = "";
+  $("select").classList.add("hidden"); $("create").classList.remove("hidden");
+  renderCreate(); $("name").focus();
+}
+function closeCreate(){
+  $("create").classList.add("hidden"); $("select").classList.remove("hidden"); renderCards();
+}
+function validateName(){
+  const v = $("name").value.trim(), h = $("nameHint");
+  let err = null;
+  if (v.length < 2) err = "De 2 a 16 caracteres.";
+  else if (!/^[\p{L}\p{N} _-]+$/u.test(v)) err = "Solo letras, números, espacio, - y _.";
+  else if (characters.some(c => c.name.toLowerCase() === v.toLowerCase())) err = "Ya tienes un personaje con ese nombre.";
+  h.textContent = err ?? "✓ Nombre disponible";
+  h.className = "hint " + (err ? (v.length ? "err" : "") : "ok");
+  $("createBtn").disabled = !!err;
+  return !err;
+}
+function renderCreate(){
+  $("model").innerHTML = figure(draft.gender, draft.weapon, 280);
+  $("modelCap").textContent = $("name").value.trim() || "Sin nombre";
+  document.querySelectorAll("#gender button").forEach(b => b.classList.toggle("on", b.dataset.g === draft.gender));
+  const wb = $("weapons"); wb.innerHTML = "";
+  WEAPONS.forEach(w => {
+    const b = document.createElement("button");
+    b.className = "wpn" + (w.id === draft.weapon ? " on" : "");
+    b.textContent = w.icon; b.title = w.name;
+    b.onclick = () => { draft.weapon = w.id; renderCreate(); };
+    wb.appendChild(b);
+  });
+  const w = W(draft.weapon);
+  const stats = [w.damage ? `${w.damage} de daño` : null, w.dtype].filter(Boolean).join(" · ");
+  $("wdetail").innerHTML = `<div class="wn">${w.name}</div>
+    <div class="ws">${stats}</div>
+    <div class="grows">Entrena <span class="chip">${w.skill}</span> → hace crecer
+      ${SKILL_GROWS[w.skill].map(a => `<span class="chip">${a} <b>▲</b></span>`).join("")}</div>`;
+  validateName();
+}
+$("name").oninput = () => { $("modelCap").textContent = $("name").value.trim() || "Sin nombre"; validateName(); };
+$("rand").onclick = () => {
+  const free = NAMES.filter(n => !characters.some(c => c.name.toLowerCase() === n.toLowerCase()));
+  $("name").value = free[Math.floor(Math.random()*free.length)] ?? "";
+  $("name").dispatchEvent(new Event("input"));
+};
+document.querySelectorAll("#gender button").forEach(b => b.onclick = () => { draft.gender = b.dataset.g; renderCreate(); });
+$("back").onclick = closeCreate;
+$("createBtn").onclick = () => {
+  if (!validateName()) return;
+  characters.push({name:$("name").value.trim(), gender:draft.gender, weapon:draft.weapon, location:"Edana", lastPlayed:Date.now()});
+  closeCreate();
+};
+document.addEventListener("keydown", e => {
+  if ($("create").classList.contains("hidden")) return;
+  if (e.key === "Enter" && !$("createBtn").disabled) $("createBtn").click();
+  if (e.key === "Escape") closeCreate();
+});
+
+renderStorage(); renderCards();
+</script>
+</body>
+</html>

@@ -1,0 +1,729 @@
+<title>Casas de Corinth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Paleta sacada del propio atlas del kit: el ocre de la paja, el yeso de las
+   fachadas, el roble del entramado y la pizarra del tejado azul. Los neutros
+   van sesgados hacia el roble, no hacia el gris puro. */
+:root {
+  color-scheme: light;
+  --yeso: #e9e0cf;
+  --yeso-hondo: #dbcfb8;
+  --roble: #4c372a;
+  --roble-claro: #6f5442;
+  --tinta: #241a13;
+  --tinta-suave: #5d4c3e;
+  --paja: #c08a3e;
+  --pizarra: #59667f;
+  --fondo: var(--yeso);
+  --panel: #f3ece0;
+  --linea: rgba(76, 55, 42, 0.18);
+  --linea-fuerte: rgba(76, 55, 42, 0.38);
+  --texto: var(--tinta);
+  --texto-suave: var(--tinta-suave);
+  --acento: #8c3b2a;
+  --sombra: 0 1px 0 rgba(76, 55, 42, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --fondo: #171310;
+    --panel: #201a15;
+    --linea: rgba(233, 224, 207, 0.14);
+    --linea-fuerte: rgba(233, 224, 207, 0.3);
+    --texto: #ebe1cf;
+    --texto-suave: #a8998a;
+    --roble: #c9ac93;
+    --roble-claro: #a2856c;
+    --acento: #cf7357;
+    --sombra: 0 1px 0 rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --fondo: #171310;
+  --panel: #201a15;
+  --linea: rgba(233, 224, 207, 0.14);
+  --linea-fuerte: rgba(233, 224, 207, 0.3);
+  --texto: #ebe1cf;
+  --texto-suave: #a8998a;
+  --roble: #c9ac93;
+  --roble-claro: #a2856c;
+  --acento: #cf7357;
+  --sombra: 0 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+* { box-sizing: border-box; }
+/* Sin esto, cualquier regla con display: flex gana al display: none que trae el
+   atributo hidden, y la lista de casas se queda encima del plano. */
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 400 15px/1.55 Spectral, Georgia, "Times New Roman", serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Rejilla general: columna de datos a la izquierda, visor a la derecha.
+   A ancho de telefono se apilan y el visor va arriba, que es lo que se mira. */
+.hoja {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) 1fr;
+}
+@media (max-width: 860px) {
+  .hoja { grid-template-columns: 1fr; grid-template-rows: 52vh 1fr; }
+  .rail { order: 2; border-right: none; border-top: 1px solid var(--linea); }
+  .visor { order: 1; }
+}
+
+.rail {
+  border-right: 1px solid var(--linea);
+  background: var(--panel);
+  overflow-y: auto;
+  padding: 24px 22px calc(24px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.cabecera h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+.cabecera .sub {
+  margin: 4px 0 0;
+  color: var(--texto-suave);
+  font-size: 14px;
+  font-style: italic;
+  max-width: 34ch;
+}
+.eyebrow {
+  font: 600 11px/1 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--texto-suave);
+}
+
+/* Las tres casas. No llevan numero: no son una secuencia, son tres tipos que
+   conviven en el mismo pueblo. */
+.tipos { display: flex; flex-direction: column; gap: 8px; }
+.tipo {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 4px 12px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 13px;
+  background: transparent;
+  border: 1px solid var(--linea);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.tipo:hover { border-color: var(--linea-fuerte); }
+.tipo[aria-pressed="true"] {
+  border-color: var(--acento);
+  box-shadow: inset 3px 0 0 var(--acento);
+  background: color-mix(in srgb, var(--acento) 7%, transparent);
+}
+.tipo:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+.tipo .nombre { font-weight: 600; }
+.tipo .celdas {
+  font: 400 12px/1 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  color: var(--texto-suave);
+  font-variant-numeric: tabular-nums;
+}
+.tipo .nota {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--texto-suave);
+}
+
+/* Las medidas. Van en monoespaciada y alineadas por la coma: son cifras
+   leidas del .glb, no adjetivos. */
+.medidas { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; }
+.medidas dt { color: var(--texto-suave); font-size: 13px; }
+.medidas dd {
+  margin: 0;
+  font: 400 13px/1.4 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.piezas { display: flex; flex-direction: column; gap: 3px; }
+.pieza {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font: 400 12px/1.5 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  color: var(--texto-suave);
+}
+.pieza .papel {
+  font-family: Spectral, Georgia, serif;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--roble-claro);
+  min-width: 5.5em;
+}
+.pieza .n { font-variant-numeric: tabular-nums; }
+
+.mandos { display: flex; flex-wrap: wrap; gap: 7px; }
+.mando {
+  font: 400 12px/1 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  letter-spacing: 0.04em;
+  padding: 8px 11px;
+  border: 1px solid var(--linea);
+  background: transparent;
+  color: var(--texto-suave);
+  cursor: pointer;
+}
+.mando[aria-pressed="true"] { border-color: var(--acento); color: var(--texto); }
+.mando:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+
+.nota-pie {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--texto-suave);
+  max-width: 38ch;
+}
+.nota-pie code {
+  font: 400 12px/1 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  color: var(--roble-claro);
+}
+
+.visor { position: relative; min-height: 0; background: #14110f; }
+#lienzo { width: 100%; height: 100%; display: block; image-rendering: pixelated; touch-action: none; cursor: grab; }
+#lienzo:active { cursor: grabbing; }
+.pista {
+  position: absolute;
+  left: 14px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  font: 400 11px/1.5 "JetBrains Mono", ui-monospace, Consolas, monospace;
+  letter-spacing: 0.06em;
+  color: rgba(233, 224, 207, 0.5);
+  pointer-events: none;
+}
+/* El plano: se mira entero de una vez, asi que se escala al hueco en vez de
+   pedir que se haga zoom. */
+.plano {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  padding: 16px;
+  background: #14110f;
+  overflow: auto;
+}
+.plano svg { max-width: 100%; max-height: 100%; height: auto; }
+.fallo {
+  position: absolute; inset: 0;
+  display: grid; place-content: center;
+  padding: 24px; text-align: center;
+  color: #ebe1cf; background: #14110f;
+  font-size: 14px;
+}
+</style>
+
+<div class="hoja">
+  <aside class="rail">
+    <div class="cabecera">
+      <p class="eyebrow">Corinth · celda de 4 m</p>
+      <h1>Hoja de tipos</h1>
+      <p class="sub">Lo que se construye en Corinth, sobre la rejilla de 4 metros:
+        tres casas del kit CC0 y la boca de la mazmorra, que no sale de ningún
+        catálogo. Gíralas antes de que se repitan por el valle.</p>
+    </div>
+
+    <div class="mandos" role="group" aria-label="Qué se mira">
+      <button class="mando" id="v-casas" aria-pressed="true">Casas</button>
+      <button class="mando" id="v-plano" aria-pressed="false">Plano del pueblo</button>
+    </div>
+
+    <div class="tipos" id="tipos" role="group" aria-label="Tipos de casa"></div>
+
+    <div>
+      <p class="eyebrow" style="margin:0 0 9px">Medida</p>
+      <dl class="medidas" id="medidas"></dl>
+    </div>
+
+    <div>
+      <p class="eyebrow" style="margin:0 0 9px">Despiece</p>
+      <div class="piezas" id="piezas"></div>
+    </div>
+
+    <div>
+      <p class="eyebrow" style="margin:0 0 9px">Vista</p>
+      <div class="mandos">
+        <button class="mando" id="m-rejilla" aria-pressed="true">Rejilla</button>
+        <button class="mando" id="m-hombre" aria-pressed="true">1,75 m</button>
+        <button class="mando" id="m-luz" aria-pressed="false">Ocaso</button>
+        <button class="mando" id="m-giro" aria-pressed="false">Girar</button>
+      </div>
+    </div>
+
+    <p class="nota-pie">El muro mide 3 m y es una cáscara de cuatro paredes: una
+      pieza ya es un cuarto. El tejado arranca <code>0,366 m</code> por debajo de
+      lo alto del muro, porque está hecho para solapar y no para apoyarse — a ojo
+      queda una rendija que sólo se ve de noche.</p>
+  </aside>
+
+  <div class="visor">
+    <canvas id="lienzo"></canvas>
+    <p class="pista">arrastra para girar · rueda para acercar</p>
+    <div class="plano" id="plano" hidden>/*PLANO*/</div>
+  </div>
+</div>
+
+<script>
+const DATOS = /*DATOS*/;
+
+// --- aritmetica de matrices, en columnas ------------------------------------
+function perspectiva(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, (2 * far * near) / (near - far), 0];
+}
+function mirarDesde(ojo, centro, arriba) {
+  const z = normalizar([ojo[0] - centro[0], ojo[1] - centro[1], ojo[2] - centro[2]]);
+  const x = normalizar(cruz(arriba, z));
+  const y = cruz(z, x);
+  return [
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -punto(x, ojo), -punto(y, ojo), -punto(z, ojo), 1,
+  ];
+}
+const cruz = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const punto = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const normalizar = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+
+// --- WebGL -------------------------------------------------------------------
+const lienzo = document.getElementById("lienzo");
+// WebGL 2 primero, y no por gusto: el atlas del kit mide 704 px, que no es
+// potencia de dos. En WebGL 1 una textura asi no admite repetido ni mipmaps, y
+// las piezas cuyas UV tilan -el zocalo de piedra, el suelo- saldrian con la
+// tesela estirada de un borde al otro. WebGL 2 no tiene esa limitacion.
+const gl = lienzo.getContext("webgl2", { antialias: false, alpha: false })
+  ?? lienzo.getContext("webgl", { antialias: false, alpha: false });
+const es2 = !!(gl && gl.TEXTURE_BINDING_3D);
+
+function romper(mensaje) {
+  const aviso = document.createElement("p");
+  aviso.className = "fallo";
+  aviso.textContent = mensaje;
+  document.querySelector(".visor").appendChild(aviso);
+}
+
+if (!gl) {
+  romper("Este navegador no ha dado un contexto WebGL, así que la casa no se puede dibujar.");
+} else if (!es2) {
+  // Sin WebGL 2 los índices de 32 bits tampoco están garantizados.
+  gl.getExtension("OES_element_index_uint");
+}
+
+const VS = `
+attribute vec3 aPos; attribute vec3 aNor; attribute vec2 aUV;
+uniform mat4 uProj, uView;
+varying vec3 vNor; varying vec2 vUV;
+void main() {
+  vNor = aNor; vUV = aUV;
+  gl_Position = uProj * uView * vec4(aPos, 1.0);
+}`;
+
+// Las piezas del kit son cascaras sin grosor y se dibujan por las dos caras, asi
+// que la normal se voltea en la cara de atras: sin eso el interior sale negro y
+// parece un agujero.
+const FS = `
+precision mediump float;
+varying vec3 vNor; varying vec2 vUV;
+uniform sampler2D uTex;
+uniform vec3 uCielo, uSuelo, uSol, uSolDir, uPlano;
+uniform float uTextura;
+void main() {
+  vec4 t = texture2D(uTex, vUV);
+  if (t.a < 0.5) discard;
+  vec3 n = normalize(vNor) * (gl_FrontFacing ? 1.0 : -1.0);
+  float hemi = 0.5 + 0.5 * n.y;
+  vec3 amb = mix(uSuelo, uCielo, hemi);
+  float dif = max(dot(n, normalize(uSolDir)), 0.0);
+  vec3 base = mix(uPlano, t.rgb, uTextura);
+  gl_FragColor = vec4(base * (amb + uSol * dif), 1.0);
+}`;
+
+function compilar(tipo, fuente) {
+  const s = gl.createShader(tipo);
+  gl.shaderSource(s, fuente);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+let prog, loc, texturas = {}, mallas = {}, ayudas = null;
+
+function arrancar() {
+  prog = gl.createProgram();
+  gl.attachShader(prog, compilar(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compilar(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  loc = {
+    aPos: gl.getAttribLocation(prog, "aPos"),
+    aNor: gl.getAttribLocation(prog, "aNor"),
+    aUV: gl.getAttribLocation(prog, "aUV"),
+    uProj: gl.getUniformLocation(prog, "uProj"),
+    uView: gl.getUniformLocation(prog, "uView"),
+    uTex: gl.getUniformLocation(prog, "uTex"),
+    uCielo: gl.getUniformLocation(prog, "uCielo"),
+    uSuelo: gl.getUniformLocation(prog, "uSuelo"),
+    uSol: gl.getUniformLocation(prog, "uSol"),
+    uSolDir: gl.getUniformLocation(prog, "uSolDir"),
+    uTextura: gl.getUniformLocation(prog, "uTextura"),
+    uPlano: gl.getUniformLocation(prog, "uPlano"),
+  };
+  gl.enable(gl.DEPTH_TEST);
+  gl.disable(gl.CULL_FACE);
+
+  // Una textura blanca de un pixel para la rejilla y la vara, que no llevan
+  // imagen: asi el mismo programa dibuja las dos cosas.
+  const blanca = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, blanca);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+  texturas.__blanca = blanca;
+
+  for (const [nombre, b64] of Object.entries(DATOS.texturas)) {
+    const tex = gl.createTexture();
+    texturas[nombre] = tex;
+    const img = new Image();
+    img.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      // SIN voltear. glTF pone el origen de la UV arriba a la izquierda, que es
+      // justo donde WebGL deja la primera fila del PNG si no se toca nada.
+      // Voltearla ademas -que es lo que parece "lo normal" en WebGL- desplaza el
+      // muestreo a otra zona del atlas: los muros de entramado salian de piedra
+      // y la pagina no daba ni un error.
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      // NEAREST a proposito: el kit viene con filtro de punto y con lineal deja
+      // de parecerse a si mismo.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      if (es2) {
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
+        gl.generateMipmap(gl.TEXTURE_2D);
+      } else {
+        // Sin potencia de dos, WebGL 1 solo admite esto. El tilado saldra peor,
+        // pero la pagina se ve en vez de quedarse en negro.
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      }
+      pintar();
+    };
+    img.src = "data:image/png;base64," + b64;
+  }
+
+  for (const c of DATOS.casas) {
+    mallas[c.nombre] = c.grupos.map((g) => subir(g.pos, g.nor, g.uv, g.idx, g.textura));
+  }
+  ayudas = construirAyudas();
+}
+
+function subir(pos, nor, uv, idx, textura) {
+  const buf = (datos, Tipo, objetivo) => {
+    const b = gl.createBuffer();
+    gl.bindBuffer(objetivo, b);
+    gl.bufferData(objetivo, new Tipo(datos), gl.STATIC_DRAW);
+    return b;
+  };
+  // Los indices caben en 16 bits salvo que una malla pase de 65 536 vertices.
+  // Se mira de verdad en vez de suponerlo: una casa no llega, el pueblo entero
+  // llegara, y el sintoma de pasarse son triangulos que apuntan a otro vertice
+  // -o sea, geometria de espagueti, no un error.
+  const grande = idx.some((i) => i > 65535);
+  return {
+    pos: buf(pos, Float32Array, gl.ARRAY_BUFFER),
+    nor: buf(nor, Float32Array, gl.ARRAY_BUFFER),
+    uv: buf(uv, Float32Array, gl.ARRAY_BUFFER),
+    idx: buf(idx, grande ? Uint32Array : Uint16Array, gl.ELEMENT_ARRAY_BUFFER),
+    tipoIdx: grande ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+    cuenta: idx.length,
+    textura,
+  };
+}
+
+/** La rejilla de 1 m y la vara de 1,75 m, generadas, no dibujadas a mano. */
+function construirAyudas() {
+  const pos = [], nor = [], uv = [], idx = [];
+  const quad = (a, b, c, d, n) => {
+    const base = pos.length / 3;
+    for (const v of [a, b, c, d]) { pos.push(v[0], v[1], v[2]); nor.push(n[0], n[1], n[2]); uv.push(0, 0); }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  // Lineas de la rejilla como tiras finas, que WebGL dibuja mejor que gl.LINES
+  // con grosor -el grosor de linea no es fiable en la mayoria de navegadores.
+  const R = 16, grosor = 0.012;
+  for (let i = -R; i <= R; i++) {
+    const g = i % 4 === 0 ? grosor * 2.2 : grosor;
+    quad([-R, 0, i - g], [R, 0, i - g], [R, 0, i + g], [-R, 0, i + g], [0, 1, 0]);
+    quad([i - g, 0, -R], [i - g, 0, R], [i + g, 0, R], [i + g, 0, -R], [0, 1, 0]);
+  }
+  const rejilla = subir(pos, nor, uv, idx, "__blanca");
+  rejilla.cuentaRejilla = idx.length;
+
+  // La vara: una caja de 0,4 x 1,75 x 0,25 al lado de la casa.
+  const p2 = [], n2 = [], u2 = [], i2 = [];
+  const caja = (cx, cy, cz, sx, sy, sz) => {
+    const x0 = cx - sx / 2, x1 = cx + sx / 2, y0 = cy, y1 = cy + sy, z0 = cz - sz / 2, z1 = cz + sz / 2;
+    const v = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+    const caras = [[4, 5, 6, 7, [0, 0, 1]], [1, 0, 3, 2, [0, 0, -1]], [5, 1, 2, 6, [1, 0, 0]], [0, 4, 7, 3, [-1, 0, 0]], [3, 7, 6, 2, [0, 1, 0]], [4, 0, 1, 5, [0, -1, 0]]];
+    for (const [a, b, c, d, n] of caras) {
+      const base = p2.length / 3;
+      for (const k of [a, b, c, d]) { p2.push(v[k][0], v[k][1], v[k][2]); n2.push(n[0], n[1], n[2]); u2.push(0, 0); }
+      i2.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+  };
+  caja(-1.4, 0, 1.4, 0.4, 1.75, 0.25);
+  const hombre = subir(p2, n2, u2, i2, "__blanca");
+  return { rejilla, hombre };
+}
+
+// --- estado y camara ---------------------------------------------------------
+const estado = {
+  casa: DATOS.casas[0].nombre,
+  yaw: 0.62, pitch: 0.36, dist: 16,
+  centro: [0, 0, 0],
+  rejilla: true, hombre: true, ocaso: false, girar: false,
+};
+
+function encuadrar(nombre) {
+  const c = DATOS.casas.find((x) => x.nombre === nombre);
+  let min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (const g of c.grupos) {
+    for (let i = 0; i < g.pos.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        if (g.pos[i + k] < min[k]) min[k] = g.pos[i + k];
+        if (g.pos[i + k] > max[k]) max[k] = g.pos[i + k];
+      }
+    }
+  }
+  estado.centro = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+  const radio = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2;
+  estado.dist = Math.max(6, (radio * 1.9) / Math.tan(Math.PI / 8));
+}
+
+function pintar() {
+  if (!gl || !prog) return;
+  const w = lienzo.clientWidth, h = lienzo.clientHeight;
+  if (lienzo.width !== w || lienzo.height !== h) { lienzo.width = w; lienzo.height = h; }
+  gl.viewport(0, 0, w, h);
+  gl.clearColor(...(estado.ocaso ? [0.10, 0.09, 0.12, 1] : [0.15, 0.14, 0.13, 1]));
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const ojo = [
+    estado.centro[0] + estado.dist * Math.cos(estado.pitch) * Math.sin(estado.yaw),
+    estado.centro[1] + estado.dist * Math.sin(estado.pitch),
+    estado.centro[2] + estado.dist * Math.cos(estado.pitch) * Math.cos(estado.yaw),
+  ];
+  gl.uniformMatrix4fv(loc.uProj, false, perspectiva(Math.PI / 4, w / h || 1, 0.05, 400));
+  gl.uniformMatrix4fv(loc.uView, false, mirarDesde(ojo, estado.centro, [0, 1, 0]));
+
+  if (estado.ocaso) {
+    // El tono que le toca a Corinth: cielo frío, sol bajo y anaranjado.
+    gl.uniform3f(loc.uCielo, 0.30, 0.33, 0.46);
+    gl.uniform3f(loc.uSuelo, 0.10, 0.09, 0.11);
+    gl.uniform3f(loc.uSol, 0.85, 0.48, 0.26);
+    gl.uniform3f(loc.uSolDir, -0.75, 0.22, 0.4);
+  } else {
+    gl.uniform3f(loc.uCielo, 0.62, 0.66, 0.76);
+    gl.uniform3f(loc.uSuelo, 0.22, 0.20, 0.18);
+    gl.uniform3f(loc.uSol, 0.72, 0.66, 0.54);
+    gl.uniform3f(loc.uSolDir, 0.45, 0.78, 0.5);
+  }
+
+  const dibujar = (m, conTextura, plano) => {
+    gl.uniform1f(loc.uTextura, conTextura ? 1 : 0);
+    gl.uniform3f(loc.uPlano, ...(plano ?? [0.7, 0.66, 0.6]));
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.pos);
+    gl.enableVertexAttribArray(loc.aPos); gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.nor);
+    gl.enableVertexAttribArray(loc.aNor); gl.vertexAttribPointer(loc.aNor, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.uv);
+    gl.enableVertexAttribArray(loc.aUV); gl.vertexAttribPointer(loc.aUV, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texturas[m.textura] ?? texturas.__blanca);
+    gl.uniform1i(loc.uTex, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idx);
+    gl.drawElements(gl.TRIANGLES, m.cuenta, m.tipoIdx, 0);
+  };
+
+  if (ayudas) {
+    // La rejilla, apagada: es una referencia, no un elemento de la escena. En
+    // blanco competia con la casa por la atencion.
+    if (estado.rejilla) dibujar(ayudas.rejilla, false, [0.26, 0.25, 0.27]);
+    // La vara en rojo, como en la ficha del estudio: misma referencia, mismo
+    // color, para que las dos se puedan comparar.
+    if (estado.hombre) dibujar(ayudas.hombre, false, [0.78, 0.27, 0.23]);
+  }
+  for (const m of mallas[estado.casa] ?? []) dibujar(m, true);
+}
+
+// --- interfaz ----------------------------------------------------------------
+const PAPELES = { "suelo": "suelo", "tejado": "tejado", "remate": "remate", "puerta": "puerta", "ventana": "ventana", "extra": "extra" };
+
+function papelDe(p) {
+  if (p.startsWith("muro")) return "muro";
+  if (p.startsWith("remate")) return "remate";
+  return PAPELES[p] ?? p;
+}
+
+function pintarRail() {
+  const c = DATOS.casas.find((x) => x.nombre === estado.casa);
+
+  const medidas = document.getElementById("medidas");
+  const alto = c.plantas * 3;
+  medidas.innerHTML = "";
+  const fila = (k, v) => {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    medidas.append(dt, dd);
+  };
+  fila("Huella", `${c.ancho * 4} × ${c.fondo * 4} m`);
+  fila("Celdas", `${c.ancho} × ${c.fondo}`);
+  fila("Plantas", `${c.plantas} · ${alto} m`);
+  fila("Piezas", String(c.piezas));
+  fila("Triángulos", c.triangulos.toLocaleString("es-ES"));
+  fila("Mallas", `${c.grupos.length} · atlas ${c.grupos[0].textura}`);
+
+  // El despiece, contado por papel: es lo que dice de un vistazo si a una casa
+  // le falta una ventana o le sobra un remate.
+  const cuenta = new Map();
+  for (const p of c.despiece) {
+    const k = papelDe(p.papel);
+    if (!cuenta.has(k)) cuenta.set(k, new Map());
+    const m = cuenta.get(k);
+    m.set(p.pieza, (m.get(p.pieza) ?? 0) + 1);
+  }
+  const piezas = document.getElementById("piezas");
+  piezas.innerHTML = "";
+  for (const [papel, m] of cuenta) {
+    for (const [pieza, n] of m) {
+      const fila = document.createElement("div");
+      fila.className = "pieza";
+      const a = document.createElement("span"); a.className = "papel"; a.textContent = papel;
+      const b = document.createElement("span"); b.textContent = pieza;
+      const d = document.createElement("span"); d.className = "n"; d.textContent = "×" + n;
+      fila.append(a, b, d);
+      piezas.appendChild(fila);
+    }
+  }
+
+  for (const boton of document.querySelectorAll(".tipo")) {
+    boton.setAttribute("aria-pressed", String(boton.dataset.casa === estado.casa));
+  }
+}
+
+const tipos = document.getElementById("tipos");
+for (const c of DATOS.casas) {
+  const b = document.createElement("button");
+  b.className = "tipo";
+  b.dataset.casa = c.nombre;
+  b.type = "button";
+  b.setAttribute("aria-pressed", String(c.nombre === estado.casa));
+  const n = document.createElement("span"); n.className = "nombre"; n.textContent = c.titulo.split("—")[0].trim();
+  const cel = document.createElement("span"); cel.className = "celdas"; cel.textContent = `${c.ancho}×${c.fondo}·${c.plantas}p`;
+  const nota = document.createElement("span"); nota.className = "nota"; nota.textContent = c.nota;
+  b.append(n, cel, nota);
+  b.addEventListener("click", () => {
+    estado.casa = c.nombre;
+    encuadrar(c.nombre);
+    pintarRail();
+    pintar();
+  });
+  tipos.appendChild(b);
+}
+
+function alternar(id, clave, alCambiar) {
+  const b = document.getElementById(id);
+  b.addEventListener("click", () => {
+    estado[clave] = !estado[clave];
+    b.setAttribute("aria-pressed", String(estado[clave]));
+    if (alCambiar) alCambiar();
+    pintar();
+  });
+}
+alternar("m-rejilla", "rejilla");
+alternar("m-hombre", "hombre");
+alternar("m-luz", "ocaso");
+alternar("m-giro", "girar", () => { if (estado.girar) requestAnimationFrame(girarUnPoco); });
+
+let ultimo = 0;
+function girarUnPoco(t) {
+  if (!estado.girar) return;
+  const dt = ultimo ? (t - ultimo) / 1000 : 0;
+  ultimo = t;
+  estado.yaw += dt * 0.35;
+  pintar();
+  requestAnimationFrame(girarUnPoco);
+}
+// Quien pide menos movimiento no quiere una casa girando sola.
+if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+  document.getElementById("m-giro").hidden = true;
+}
+
+// Casas o plano. Son dos preguntas distintas -«¿se ve bien esta casa?» y
+// «¿se puede llegar a la boca?»- y no se contestan en la misma imagen.
+const bCasas = document.getElementById("v-casas");
+const bPlano = document.getElementById("v-plano");
+function verPlano(si) {
+  document.getElementById("plano").hidden = !si;
+  document.getElementById("tipos").hidden = si;
+  bCasas.setAttribute("aria-pressed", String(!si));
+  bPlano.setAttribute("aria-pressed", String(si));
+  if (!si) pintar();
+}
+bCasas.addEventListener("click", () => verPlano(false));
+bPlano.addEventListener("click", () => verPlano(true));
+
+let arrastrando = false, ux = 0, uy = 0;
+lienzo.addEventListener("pointerdown", (e) => {
+  arrastrando = true; ux = e.clientX; uy = e.clientY;
+  lienzo.setPointerCapture(e.pointerId);
+});
+lienzo.addEventListener("pointermove", (e) => {
+  if (!arrastrando) return;
+  estado.yaw -= (e.clientX - ux) * 0.008;
+  estado.pitch = Math.max(-0.2, Math.min(1.45, estado.pitch + (e.clientY - uy) * 0.006));
+  ux = e.clientX; uy = e.clientY;
+  pintar();
+});
+lienzo.addEventListener("pointerup", (e) => { arrastrando = false; lienzo.releasePointerCapture(e.pointerId); });
+lienzo.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  estado.dist = Math.max(4, Math.min(70, estado.dist * (1 + Math.sign(e.deltaY) * 0.12)));
+  pintar();
+}, { passive: false });
+
+addEventListener("resize", pintar);
+
+try {
+  if (gl) {
+    arrancar();
+    encuadrar(estado.casa);
+    pintarRail();
+    pintar();
+  }
+} catch (e) {
+  romper("La casa no se pudo dibujar: " + e.message);
+}
+</script>

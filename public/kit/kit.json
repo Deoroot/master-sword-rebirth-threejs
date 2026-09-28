@@ -1,0 +1,512 @@
+{
+  "generado": "tools/import_kit.mjs",
+  "celda": 4,
+  "alturaMuro": 3,
+  "piezas": [
+    {
+      "nombre": "plaster_wall",
+      "tipo": "modulo",
+      "motivo": "cuerpo de casa, entramado de madera",
+      "size": [
+        4,
+        3,
+        4
+      ],
+      "triangulos": 96,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "plaster_wall_alt",
+      "tipo": "modulo",
+      "motivo": "la misma con otro entramado: diferencia casas sin modelar nada",
+      "size": [
+        4,
+        3,
+        4
+      ],
+      "triangulos": 96,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "plaster_wall_stone_base",
+      "tipo": "modulo",
+      "motivo": "casa con zocalo de piedra, para las de la calle mojada",
+      "size": [
+        4,
+        3,
+        4
+      ],
+      "triangulos": 96,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "plaster_wall_stone_base_alt",
+      "tipo": "modulo",
+      "motivo": "variante del zocalo",
+      "size": [
+        4,
+        3,
+        4
+      ],
+      "triangulos": 96,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "plaster_wall_half",
+      "tipo": "modulo",
+      "motivo": "modulo de 2 m, para casas que no son multiplo de 4",
+      "size": [
+        2,
+        3,
+        2
+      ],
+      "triangulos": 48,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stone_square",
+      "tipo": "modulo",
+      "motivo": "cuerpo todo de piedra: la guarnicion y la herreria",
+      "size": [
+        4,
+        3,
+        4
+      ],
+      "triangulos": 96,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stone_archway",
+      "tipo": "modulo",
+      "motivo": "el UNICO modulo con vano; portones y pasos cubiertos",
+      "size": [
+        4,
+        3,
+        4
+      ],
+      "triangulos": 208,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stone_archway_top",
+      "tipo": "techo",
+      "motivo": "el remate del vano cuando lleva piso encima",
+      "size": [
+        4,
+        1,
+        4
+      ],
+      "triangulos": 96,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stone_floor_4x4",
+      "tipo": "modulo",
+      "motivo": "suelo de calle y de interior de piedra",
+      "size": [
+        4,
+        0,
+        4
+      ],
+      "triangulos": 32,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "wooden_floor_4x4",
+      "tipo": "modulo",
+      "motivo": "suelo de madera, interiores",
+      "size": [
+        4,
+        0,
+        4
+      ],
+      "triangulos": 32,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "wood_support_square",
+      "tipo": "encaje",
+      "motivo": "voladizo: el piso de arriba sobresale, que es la silueta medieval",
+      "size": [
+        4.2254,
+        3.1108,
+        4.2254
+      ],
+      "triangulos": 580,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "wood_support_beam",
+      "tipo": "encaje",
+      "motivo": "viga suelta, para romper fachadas iguales",
+      "size": [
+        2,
+        0.225,
+        0.2
+      ],
+      "triangulos": 20,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_straw",
+      "tipo": "techo",
+      "motivo": "paja: las casas pobres, que en Corinth son casi todas",
+      "size": [
+        4,
+        2.5592,
+        4.7645
+      ],
+      "triangulos": 184,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_straw_end",
+      "tipo": "techo",
+      "motivo": "remate del faldon de paja",
+      "size": [
+        4.7645,
+        2.5594,
+        0.5
+      ],
+      "triangulos": 44,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_straw_corner",
+      "tipo": "techo",
+      "motivo": "esquina, para plantas en L",
+      "size": [
+        4.3964,
+        2.5592,
+        4.3893
+      ],
+      "triangulos": 189,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_straw_square",
+      "tipo": "techo",
+      "motivo": "tejado a cuatro aguas sobre un solo modulo",
+      "size": [
+        4.7645,
+        2.5371,
+        4.7645
+      ],
+      "triangulos": 215,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_red",
+      "tipo": "techo",
+      "motivo": "teja roja: las pocas casas con dinero",
+      "size": [
+        4,
+        2.5592,
+        4.7645
+      ],
+      "triangulos": 184,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_red_end",
+      "tipo": "techo",
+      "motivo": "remate del faldon de teja",
+      "size": [
+        4.7645,
+        2.5594,
+        0.5
+      ],
+      "triangulos": 44,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "roof_red_square",
+      "tipo": "techo",
+      "motivo": "cuatro aguas de teja",
+      "size": [
+        4.7645,
+        2.5371,
+        4.7645
+      ],
+      "triangulos": 215,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "door_wood",
+      "tipo": "adorno",
+      "motivo": "puerta; es una losa que se pega, NO abre vano",
+      "size": [
+        1.2279,
+        2.1741,
+        0.2885
+      ],
+      "triangulos": 28,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "door_wood_rounded",
+      "tipo": "adorno",
+      "motivo": "puerta de arco, para diferenciar",
+      "size": [
+        1.2279,
+        2.1741,
+        0.2885
+      ],
+      "triangulos": 76,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "door_wood_metal_grate",
+      "tipo": "adorno",
+      "motivo": "puerta reforzada: la de la guarnicion",
+      "size": [
+        1.2279,
+        2.1741,
+        0.2885
+      ],
+      "triangulos": 30,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "window_square",
+      "tipo": "adorno",
+      "motivo": "ventana",
+      "size": [
+        0.9499,
+        0.9083,
+        0.2488
+      ],
+      "triangulos": 28,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "window_rounded",
+      "tipo": "adorno",
+      "motivo": "ventana de arco",
+      "size": [
+        0.9528,
+        1.6869,
+        0.2238
+      ],
+      "triangulos": 76,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "chimney",
+      "tipo": "adorno",
+      "motivo": "chimenea; en la herreria es la que cuenta la historia",
+      "size": [
+        1.1491,
+        5,
+        1.7359
+      ],
+      "triangulos": 92,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "chimney_large",
+      "tipo": "adorno",
+      "motivo": "chimenea gorda, para la fragua",
+      "size": [
+        1.1682,
+        8,
+        1.7407
+      ],
+      "triangulos": 116,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stairs_wood",
+      "tipo": "encaje",
+      "motivo": "escalera exterior",
+      "size": [
+        2.0228,
+        1.0146,
+        2.1828
+      ],
+      "triangulos": 128,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "strairs_stone",
+      "tipo": "encaje",
+      "motivo": "el tramo de escalera de piedra: sube 1,015 m por cada 2,183 m",
+      "size": [
+        2.0228,
+        1.0146,
+        2.1828
+      ],
+      "triangulos": 128,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "door_stone_metal_grate",
+      "tipo": "adorno",
+      "motivo": "LA reja: lo unico que hay que ver para entender que no se pasa",
+      "size": [
+        1.2279,
+        2.1741,
+        0.2885
+      ],
+      "triangulos": 30,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stone_square_half_1m",
+      "tipo": "encaje",
+      "motivo": "pieza de brocal de 2x1x2. Baja 19 mm bajo cero: el pack la hizo para encastrarse, no para apoyar",
+      "size": [
+        2,
+        1,
+        2
+      ],
+      "triangulos": 16,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "stone_square_1m",
+      "tipo": "encaje",
+      "motivo": "brocal de celda entera y parapeto del patio; baja los mismos 19 mm",
+      "size": [
+        4,
+        1,
+        4
+      ],
+      "triangulos": 32,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "wood_support_beam_metal",
+      "tipo": "encaje",
+      "motivo": "poste con herraje: la horca del torno",
+      "size": [
+        0.2328,
+        3.0975,
+        0.2231
+      ],
+      "triangulos": 100,
+      "texturas": [
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "barrel",
+      "tipo": "adorno",
+      "motivo": "barril cerrado",
+      "size": [
+        0.9799,
+        1.1448,
+        0.9799
+      ],
+      "triangulos": 252,
+      "texturas": [
+        "wood_planks.png",
+        "bauerhaus.png"
+      ]
+    },
+    {
+      "nombre": "crate",
+      "tipo": "adorno",
+      "motivo": "cajon",
+      "size": [
+        0.4679,
+        0.2438,
+        0.735
+      ],
+      "triangulos": 28,
+      "texturas": [
+        "market.png"
+      ]
+    },
+    {
+      "nombre": "haybale",
+      "tipo": "adorno",
+      "motivo": "paja",
+      "size": [
+        1.8,
+        0.7936,
+        1.3528
+      ],
+      "triangulos": 44,
+      "texturas": [
+        "hay.png"
+      ]
+    },
+    {
+      "nombre": "jutesack_closed",
+      "tipo": "adorno",
+      "motivo": "saco",
+      "size": [
+        0.7563,
+        0.8285,
+        0.4584
+      ],
+      "triangulos": 120,
+      "texturas": [
+        "jute.png"
+      ]
+    }
+  ]
+}

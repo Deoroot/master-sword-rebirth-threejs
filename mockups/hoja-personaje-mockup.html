@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<!--
+================================================================================
+ESPECIFICACIÓN — HOJA DE PERSONAJE (tecla P) · versión compacta
+================================================================================
+PROPÓSITO
+  Reemplazar la hoja actual (pantalla completa, todas las habilidades expandidas)
+  por un overlay compacto con patrón MAESTRO-DETALLE: resumen siempre visible,
+  detalle solo de la habilidad seleccionada.
+
+CONTENEDOR
+  - Overlay centrado sobre el juego, ~640x420 px, fondo semitransparente
+    (rgba(22,19,29,0.92)) para que el mundo se vea detrás. NO pantalla completa.
+  - Fuente monoespaciada. Colores en variables CSS (ver :root).
+
+LAYOUT (2 columnas)
+  [Cabecera]  Nombre · raza/clase · género ............ atajos (P cierra, ↑↓)
+  [Col. izq ~40%]
+     1. Recursos con barra: Vida, Maná, Carga (valor actual / máximo).
+     2. Aguante y Oro en una línea (sin barra).
+     3. Atributos en grilla 3x2 con abreviaturas: STR AGI CON / AWA FIT WIS.
+        Tooltip (title) en cada recurso con su fórmula del motor.
+  [Col. der ~60%]
+     Lista de habilidades AGRUPADA por categoría:
+       CUERPO A CUERPO: Swordsmanship, Axe Handling, Blunt Arms, Pole Arms, Martial Arts
+       A DISTANCIA:     Small Arms, Archery
+       MAGIA:           Spell Casting (sub-propiedades = escuelas)
+       DEFENSA:         Parry
+     Cada habilidad = UNA fila: nombre · nivel · mini-barra (progreso de la
+     sub-propiedad más avanzada, es decir, la más cercana a subir).
+     La fila SELECCIONADA se expande y muestra sus sub-propiedades con:
+       nombre · nivel · barra · porcentaje · "faltan N"
+
+INTERACCIÓN
+  - ↑ / ↓ (o PgUp/PgDn): mover selección entre habilidades (salta encabezados).
+  - Clic en una fila: seleccionarla.
+  - P o Esc: cerrar la hoja.
+  - Solo UNA habilidad expandida a la vez.
+
+ELIMINADO RESPECTO A LA VERSIÓN ANTERIOR
+  - Textos para desarrollador ("las fórmulas son del motor…", "derivados, no
+    repartidos", nota sobre Parry/Spell Casting). Las fórmulas pasan a tooltip.
+  - Botones inferiores (inventario / exportar / cambiar de personaje):
+    inventario ya es la tecla I; los otros dos se mueven al menú de opciones (G).
+
+MODELO DE DATOS (ver const CHARACTER más abajo)
+  character = {
+    name, race, cls, gender, gold, stamina,
+    hp:{cur,max}, mp:{cur,max}, load:{cur,max},
+    attrs:{STR,AGI,CON,AWA,FIT,WIS},
+    skillGroups:[ {label, skills:[ {name, level,
+        subs:[ {name, level, pct /*0-100 hacia el siguiente punto*/, left /*acciones restantes*/} ] } ] } ]
+  }
+  Nivel de habilidad mostrado = nivel del motor. Barra de la fila = max(pct) de sus subs.
+  Los valores pct/left de este archivo son de ejemplo.
+================================================================================
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Hoja de personaje — mockup compacto</title>
+<style>
+  :root{
+    --bg-game:#2b2a26;
+    --panel:rgba(22,19,29,.92);
+    --line:#3a3446;
+    --text:#e8e2d4;
+    --dim:#8f8799;
+    --accent:#e8a33d;
+    --hp:#c9503f; --mp:#4f7fd1; --load:#b59a4a;
+    --bar-bg:#2c2736; --bar:#e8a33d;
+    --sel:#241f2e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;
+       font:13px/1.4 "JetBrains Mono",ui-monospace,Consolas,monospace;color:var(--text);
+       /* fondo que simula el juego detrás del overlay */
+       background:repeating-linear-gradient(45deg,#34322c 0 18px,#2b2a26 18px 36px);}
+  .sheet{width:min(640px,100% - 32px);background:var(--panel);border:1px solid var(--line);
+         border-radius:6px;padding:14px 16px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  header{display:flex;justify-content:space-between;align-items:baseline;
+         border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:12px}
+  .name{color:var(--accent);font-weight:700;font-size:16px}
+  .id{color:var(--dim);margin-left:8px}
+  .keys{color:var(--dim);font-size:11px}
+  .cols{display:grid;grid-template-columns:40% 1fr;gap:18px}
+  h3{margin:0 0 6px;font-size:10px;letter-spacing:.12em;color:var(--dim);font-weight:600}
+  .res{margin-bottom:8px;cursor:help}
+  .res .row{display:flex;justify-content:space-between}
+  .res .val{color:var(--accent)}
+  .bar{height:5px;background:var(--bar-bg);border-radius:3px;overflow:hidden;margin-top:3px}
+  .bar>i{display:block;height:100%}
+  .misc{display:flex;gap:16px;margin:10px 0 14px}
+  .misc b{color:var(--accent);font-weight:400}
+  .attrs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .attr{border:1px solid var(--line);border-radius:4px;padding:4px 0;text-align:center}
+  .attr small{display:block;color:var(--dim);font-size:10px}
+  .attr span{color:var(--accent);font-size:15px}
+  .group{margin:8px 0 2px;font-size:10px;letter-spacing:.12em;color:var(--dim)}
+  .group:first-child{margin-top:0}
+  .skill{display:grid;grid-template-columns:1fr 24px 70px;gap:8px;align-items:center;
+         padding:2px 6px;border-radius:3px;cursor:pointer}
+  .skill:hover{background:var(--sel)}
+  .skill.sel{background:var(--sel);outline:1px solid var(--line)}
+  .skill.sel .sname::before{content:"▸ ";color:var(--accent)}
+  .skill .lvl{text-align:right;color:var(--accent)}
+  .skill .bar{margin:0}
+  .skill .bar>i{background:var(--bar)}
+  .detail{padding:2px 6px 6px 22px;display:none}
+  .detail.open{display:block}
+  .sub{display:grid;grid-template-columns:82px 16px 1fr 34px 62px;gap:6px;align-items:center;
+       font-size:11.5px;color:var(--dim)}
+  .sub .n{color:var(--text)} .sub .bar{margin:0}
+  .sub .bar>i{background:var(--bar)}
+  .sub .pct{text-align:right} .sub .left{text-align:right}
+</style>
+</head>
+<body>
+<main class="sheet" role="dialog" aria-label="Hoja de personaje">
+  <header>
+    <div><span class="name" id="name"></span><span class="id" id="ident"></span></div>
+    <div class="keys">↑↓ habilidad · P / Esc cierra</div>
+  </header>
+  <div class="cols">
+    <!-- COLUMNA IZQUIERDA: recursos, misceláneos, atributos -->
+    <section aria-label="Estado">
+      <h3>ESTADO</h3>
+      <div id="resources"></div>
+      <div class="misc" id="misc"></div>
+      <h3>ATRIBUTOS</h3>
+      <div class="attrs" id="attrs"></div>
+    </section>
+    <!-- COLUMNA DERECHA: habilidades agrupadas, maestro-detalle -->
+    <section aria-label="Habilidades" id="skills"></section>
+  </div>
+</main>
+
+<script>
+/* Datos de ejemplo. pct y left son ilustrativos. */
+const CHARACTER = {
+  name:"MYR", race:"Humano", cls:"Aventurero", gender:"♂", gold:10, stamina:7.5,
+  hp:{cur:15,max:15}, mp:{cur:20,max:20}, load:{cur:14,max:75},
+  attrs:{STR:2,AGI:1,CON:2,AWA:1,FIT:1,WIS:2},
+  skillGroups:[
+    {label:"CUERPO A CUERPO", skills:[
+      {name:"Swordsmanship", level:2, subs:[
+        {name:"Proficiency",level:2,pct:0,left:13},{name:"Balance",level:2,pct:8,left:12},{name:"Power",level:2,pct:16,left:11}]},
+      {name:"Axe Handling", level:1, subs:[
+        {name:"Proficiency",level:1,pct:0,left:10},{name:"Balance",level:1,pct:0,left:10},{name:"Power",level:1,pct:0,left:10}]},
+      {name:"Blunt Arms", level:1, subs:[
+        {name:"Proficiency",level:1,pct:0,left:10},{name:"Balance",level:1,pct:0,left:10},{name:"Power",level:1,pct:0,left:10}]},
+      {name:"Pole Arms", level:1, subs:[
+        {name:"Proficiency",level:1,pct:0,left:10},{name:"Balance",level:1,pct:0,left:10},{name:"Power",level:1,pct:0,left:10}]},
+      {name:"Martial Arts", level:1, subs:[
+        {name:"Proficiency",level:1,pct:30,left:7},{name:"Balance",level:1,pct:10,left:9},{name:"Power",level:1,pct:20,left:8}]}
+    ]},
+    {label:"A DISTANCIA", skills:[
+      {name:"Small Arms", level:1, subs:[
+        {name:"Proficiency",level:1,pct:0,left:10},{name:"Balance",level:1,pct:0,left:10},{name:"Power",level:1,pct:0,left:10}]},
+      {name:"Archery", level:1, subs:[
+        {name:"Proficiency",level:1,pct:0,left:10},{name:"Balance",level:1,pct:0,left:10},{name:"Power",level:1,pct:0,left:10}]}
+    ]},
+    {label:"MAGIA", skills:[
+      {name:"Spell Casting", level:1, subs:[
+        {name:"Fire",level:1,pct:45,left:6},{name:"Ice",level:1,pct:0,left:11},{name:"Lightning",level:1,pct:0,left:11},
+        {name:"Divination",level:1,pct:12,left:9},{name:"Affliction",level:1,pct:0,left:11}]}
+    ]},
+    {label:"DEFENSA", skills:[
+      {name:"Parry", level:2, subs:[{name:"Proficiency",level:2,pct:22,left:9}]}
+    ]}
+  ]
+};
+
+const FORMULAS = {
+  Vida:"MaxHP = 5 + (STR−1)·7 + (FIT−1)·7 + (WIS−1)·3",
+  Maná:"MaxMP = WIS·10",
+  Carga:"Carga máx = min(STR·25 + 25, 2000)"
+};
+
+const c = CHARACTER;
+const $ = id => document.getElementById(id);
+const bar = (pct,color) => `<div class="bar"><i style="width:${pct}%;${color?`background:${color}`:""}"></i></div>`;
+
+$("name").textContent = c.name;
+$("ident").textContent = `${c.race} ${c.cls.toLowerCase()} · ${c.gender}`;
+
+$("resources").innerHTML = [["Vida",c.hp,"var(--hp)"],["Maná",c.mp,"var(--mp)"],["Carga",c.load,"var(--load)"]]
+  .map(([n,r,col]) => `<div class="res" title="${FORMULAS[n]}">
+     <div class="row"><span>${n}</span><span class="val">${r.cur} / ${r.max}</span></div>
+     ${bar(100*r.cur/r.max,col)}</div>`).join("");
+
+$("misc").innerHTML = `<span>Aguante <b>${c.stamina}</b></span><span>Oro <b>${c.gold}</b></span>`;
+
+$("attrs").innerHTML = Object.entries(c.attrs)
+  .map(([k,v]) => `<div class="attr"><small>${k}</small><span>${v}</span></div>`).join("");
+
+/* Lista plana para navegación con teclado */
+const flat = [];
+$("skills").innerHTML = c.skillGroups.map(g =>
+  `<div class="group">${g.label}</div>` + g.skills.map(s => {
+    const i = flat.push(s) - 1;
+    const best = Math.max(...s.subs.map(x => x.pct));
+    return `<div class="skill" data-i="${i}">
+        <span class="sname">${s.name}</span><span class="lvl">${s.level}</span>${bar(best)}
+      </div>
+      <div class="detail" data-d="${i}">${s.subs.map(x => `<div class="sub">
+        <span class="n">${x.name}</span><span>${x.level}</span>${bar(x.pct)}
+        <span class="pct">${x.pct}%</span><span class="left">faltan ${x.left}</span></div>`).join("")}
+      </div>`;
+  }).join("")
+).join("");
+
+let sel = 0;
+function select(i){
+  sel = (i + flat.length) % flat.length;
+  document.querySelectorAll(".skill").forEach(e => e.classList.toggle("sel", +e.dataset.i === sel));
+  document.querySelectorAll(".detail").forEach(e => e.classList.toggle("open", +e.dataset.d === sel));
+}
+document.querySelectorAll(".skill").forEach(e => e.onclick = () => select(+e.dataset.i));
+document.addEventListener("keydown", e => {
+  if (["ArrowDown","PageDown"].includes(e.key)) { select(sel+1); e.preventDefault(); }
+  if (["ArrowUp","PageUp"].includes(e.key))     { select(sel-1); e.preventDefault(); }
+  if (["p","P","Escape"].includes(e.key)) document.querySelector(".sheet").style.display="none";
+});
+select(0);
+</script>
+</body>
+</html>

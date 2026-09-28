@@ -1,0 +1,101 @@
+{
+  "cells": [
+    26,
+    22
+  ],
+  "cell_units": 128,
+  "units": [
+    3328,
+    2816
+  ],
+  "metres": [
+    104,
+    88
+  ],
+  "houses": {
+    "A": {
+      "cells": 6,
+      "wall": 160,
+      "rise": 96
+    },
+    "C": {
+      "cells": 6,
+      "wall": 160,
+      "rise": 96
+    },
+    "B": {
+      "cells": 8,
+      "wall": 192,
+      "rise": 112
+    },
+    "D": {
+      "cells": 8,
+      "wall": 224,
+      "rise": 128
+    },
+    "E": {
+      "cells": 2,
+      "wall": 128,
+      "rise": 80
+    },
+    "G": {
+      "cells": 2,
+      "wall": 128,
+      "rise": 80
+    },
+    "F": {
+      "cells": 8,
+      "wall": 192,
+      "rise": 112
+    },
+    "H": {
+      "cells": 8,
+      "wall": 208,
+      "rise": 120
+    },
+    "I": {
+      "cells": 6,
+      "wall": 176,
+      "rise": 104
+    },
+    "J": {
+      "cells": 3,
+      "wall": 176,
+      "rise": 104
+    }
+  },
+  "trees": 7,
+  "bushes": 104,
+  "bush_variants": 8,
+  "well": {
+    "units": [
+      1632,
+      1440,
+      11
+    ],
+    "segmentos": 16,
+    "r_interior": 13,
+    "r_exterior": 26,
+    "boca": 26
+  },
+  "pozo_brushes": 31,
+  "porton_brushes": 5,
+  "plaza_brushes": 56,
+  "porton_alto": 152,
+  "wall_top": 256,
+  "sky_top": 512,
+  "relieve": {
+    "modo": "rampas",
+    "sub": 2,
+    "celda": 64,
+    "rango": 48,
+    "min": -34,
+    "max": 28,
+    "desnivel_maximo": 8,
+    "desnivel_permitido": 53,
+    "pendiente_maxima_grados": 7.13,
+    "pendiente_permitida_grados": 40,
+    "pasadas": 2,
+    "pozo_nivelado_a": 11
+  }
+}
