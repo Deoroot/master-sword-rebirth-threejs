@@ -93,6 +93,16 @@ try {
   // ── 1. LA F LO ABRE. Con la tecla, no con una llamada ────────────────────
   console.log(`\n  LA TECLA`);
   await pag.click("#view", { position: { x: 600, y: 400 } });
+  // EL CONTROL POSITIVO DEL PUNTERO, y va antes de la F a propósito.
+  //
+  // Sin esta línea, el control de abajo —«al abrir el panel el puntero se
+  // suelta»— saldría verde en un navegador que no lo hubiera atrapado nunca, que
+  // es un cero disfrazado de resultado. Así que primero se mide que el clic en el
+  // `canvas` SÍ lo atrapa, y sólo entonces vale decir que el panel lo suelta.
+  const punteroJugando = await pag.evaluate(() => window.probe.vgui.puntero());
+  console.log(`    puntero jugando ${punteroJugando ? "atrapado" : "libre"}`);
+  control("jugando, el clic en el mapa ATRAPA el puntero", punteroJugando === true,
+    "si esto sale rojo, el control de abajo no mide nada");
   await pag.keyboard.press("KeyF");
   // 900 ms y no 400: el desvanecido dura MEDIO SEGUNDO, y medir el color a mitad
   // de camino da el ambar al 93 % de alfa. El primer intento de esta sonda midio
@@ -129,6 +139,22 @@ try {
   control("siempre hay un «Cancel»: el panel nunca deja al jugador encerrado",
     abierto.botones.some((b) => b.texto === "Cancel"),
     abierto.botones.map((b) => b.texto).join(", "));
+  // ── EL PUNTERO SE SUELTA, que es lo que hacía el panel inservible ─────────
+  //
+  // El fallo que esto mide: el panel abría perfecto —con sus botones, su color y
+  // su borde verde, o sea con todos los controles de esta sonda en verde— y **no
+  // se podía pulsar nada**, porque el puntero seguía atrapado en el `canvas` y
+  // los clics no llegaban al DOM. Ni un control lo veía: todos preguntaban por lo
+  // que se dibuja y ninguno por lo que se puede tocar.
+  const punteroConPanel = await pag.evaluate(() => ({
+    puntero: window.probe.vgui.puntero(),
+    atrapa: window.probe.vgui.atrapaElRaton(),
+  }));
+  console.log(`    puntero c/panel ${punteroConPanel.puntero ? "ATRAPADO (mal)" : "libre"} · registro pide soltarlo: ${punteroConPanel.atrapa}`);
+  control("el registro dice que el ratón es del panel", punteroConPanel.atrapa === true);
+  control("Y EL PUNTERO SE SUELTA DE VERDAD: los clics llegan a los botones",
+    punteroConPanel.puntero === false,
+    punteroConPanel.puntero ? "atrapado: el panel se ve y no se puede pulsar" : "libre");
 
   // ── 2. EL ASPECTO: el alfa al revés, medido en la pantalla ───────────────
   console.log(`\n  EL ASPECTO`);
@@ -213,6 +239,36 @@ try {
   control("la F abre y la F cierra: es un interruptor, como `ToggleMenuVisible`",
     unoAbierto === "interact" && unoCerrado === null, `${unoAbierto} -> ${unoCerrado}`);
 
+  // ── EL RATÓN PULSA UN BOTÓN DE VERDAD ────────────────────────────────────
+  //
+  // Éste es el control que faltaba, y el que habría visto el fallo. Todos los
+  // demás preguntan por lo que el panel DIBUJA; ninguno intentaba **tocarlo**, y
+  // el panel se abría con el puntero atrapado y no respondía a un solo clic.
+  //
+  // Se pulsa el Cancel y no una opción del NPC a propósito: el Cancel siempre
+  // está y su efecto no depende de ningún script, así que si esto sale rojo es
+  // del ratón y no de lo que la opción hiciera.
+  await pag.keyboard.press("KeyF");
+  await new Promise((r) => setTimeout(r, 700));
+  const paraPulsar = await pag.evaluate(() => window.probe.vgui.botones());
+  const elCancel = paraPulsar.find((b) => b.texto === "Cancel");
+  console.log(`    Cancel en       ${elCancel ? `${elCancel.centro}, ${elCancel.arriba}` : "NO ESTÁ"}`);
+  if (elCancel) {
+    await pag.mouse.click(elCancel.centro, elCancel.arriba + 6);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const trasElClic = await pag.evaluate(() => window.probe.vgui.abierto());
+  control("UN CLIC DEL RATÓN EN «Cancel» CIERRA EL PANEL",
+    Boolean(elCancel) && trasElClic === null,
+    elCancel ? `queda abierto: ${trasElClic}` : "no se encontró el botón");
+  // Y al cerrarse, el puntero vuelve al juego — que es lo que hace el motor sin
+  // menú delante (`IN_ResetMouse()`, vgui_teamfortressviewport.cpp:1741-1750).
+  const punteroTrasCerrar = await pag.evaluate(() => window.probe.vgui.puntero());
+  console.log(`    puntero al cerrar ${punteroTrasCerrar ? "atrapado" : "libre"}`);
+  control("y con el panel cerrado el puntero vuelve a ser del juego",
+    punteroTrasCerrar === true,
+    punteroTrasCerrar ? "" : "sin panel, el ratón tiene que volver a girar la cámara");
+
   await pag.keyboard.press("KeyF");
   await new Promise((r) => setTimeout(r, 700));
   const antesDelUno = await pag.evaluate(() => window.probe.vgui.botones().length);
@@ -242,8 +298,12 @@ try {
   // ── 6. LAS OPCIONES SALEN DEL SCRIPT DEL NPC ────────────────────────────
   //
   // Sin nadie delante el servidor contesta con el menú DEL JUGADOR
-  // (`else pMonster = pPlayer`), que es la descripción de lo que lleva en la
-  // mano. Con un NPC delante, las suyas.
+  // (`else pMonster = pPlayer`). Con un NPC delante, las suyas.
+  //
+  // Este control pedía una entrada con «Describe», y estaba comprobando un
+  // fallo nuestro: el menú del jugador no lo decide el C++, lo decide
+  // `player/player_sv_menu.script:17-64`, y son SEIS opciones fijas. Ahora se
+  // comprueban las seis por su texto, que es lo que se lee en pantalla.
   console.log(`\n  LAS OPCIONES`);
   const solo = await pag.evaluate(() => ({
     titulo: window.probe.vgui.panel()?.titulo,
@@ -252,9 +312,16 @@ try {
     delante: window.probe.vgui.delante(),
   }));
   console.log(`    sin nadie       título ${JSON.stringify(solo.titulo)} · ${JSON.stringify(solo.botones)}`);
-  control("sin nadie delante contesta el menú DEL JUGADOR, no uno vacío",
-    solo.delante === null && solo.botones.some((t) => /Describe/.test(t)),
-    `delante=${solo.delante} · ${solo.botones.join(", ")}`);
+  const SEIS = ["Sit Down (Rest)", "Emote: Nod Yes", "Emote: Nod No",
+    "Emote: Stand At Attention", "Item Desc", "Forgive Last PK"];
+  const faltan = SEIS.filter((t) => !solo.botones.includes(t));
+  control("sin nadie delante salen las SEIS de player_sv_menu.script",
+    solo.delante === null && !faltan.length,
+    faltan.length ? `faltan: ${faltan.join(", ")}` : `las seis, y ${solo.botones.length} botones con el Cancel`);
+  // Y el Cancel va EL ÚLTIMO, detrás de las seis: en el original se crea con
+  // los diez botones y se baja al final de la lista al rellenarla.
+  control("y el Cancel sigue siendo el último",
+    solo.botones[solo.botones.length - 1] === "Cancel", `${solo.botones.join(", ")}`);
   control("y el título es el del jugador, no «Interact» a secas",
     solo.titulo === "You", `${solo.titulo}`);
 

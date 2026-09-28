@@ -62,10 +62,27 @@
 // `ms_player_begin`. La preferencia y el diseño del mod coinciden, y eso se
 // puede comprobar con un `grep` en vez de discutirlo.
 //
-// Por eso el ANCLA es el templo y la luz sólo decide DÓNDE dentro de él. Al
-// revés —«el sitio más claro del mapa»— sale la herrería, que tiene una lámpara
+// Por eso el ANCLA es el templo y sólo se decide DÓNDE dentro de él. Al revés
+// —«el sitio más claro del mapa»— sale la herrería, que tiene una lámpara
 // encima: optimizar el brillo elige una bombilla, no un lugar. La tabla de
 // abajo lo imprime para que se vea.
+//
+// ── Y DENTRO DEL TEMPLO, EL RAYO DE LUZ ────────────────────────────────────
+//
+// Esa segunda mitad la decidía la luz, y estaba mal por el mismo motivo que la
+// primera: premiaba un número. El luxel más alto de los dieciséis que mira
+// `apartar()` dejaba al jugador **a 1,6 m del sacerdote, de cara a un rincón**.
+// Nadie eligió ese sitio; era el residuo de una ordenación.
+//
+// Ahora se prefiere un rayo de luz —`func_illusionary` con `rendermode 5`, los
+// 31 que el experimento 05 encontró dibujados opacos—, porque un tragaluz sí
+// está puesto a mano por el autor del mapa. Es el mismo movimiento que el
+// ancla: leer una intención en vez de optimizar una métrica.
+//
+// Y el detalle que lo hace algo más que un gusto: **el mapa de luz no sabe que
+// un rayo existe**. Un brush aditivo no aporta un solo luxel, así que «el sitio
+// más claro» no podía encontrarlos ni por casualidad. Son dos preguntas
+// distintas, y la que se parece a la que se quería hacer es la segunda.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import {
@@ -271,8 +288,131 @@ function apartar(c) {
 // «se ve algo» y no «es bonito».
 sitios.sort((a, b) => b.luz - a.luz || a.alPueblo - b.alPueblo);
 if (!sitios.length) throw new Error("ningún sacerdote tiene hueco seguro alrededor");
-const elegido = sitios[0];
+const delTemplo = sitios[0];
 const delMapa = candidatos.find((c) => c.nombre === "ms_player_begin");
+
+// ── Y DENTRO DEL TEMPLO, DEBAJO DE UN RAYO DE LUZ ──────────────────────────
+//
+// El ancla no cambia —sigue siendo el templo, sacado de los cuatro scripts que
+// incluyen `help/first_npc`—; lo que cambia es qué decide el rincón.
+//
+// Hasta aquí lo decidía `apartar()`: ocho rumbos alrededor del sacerdote, el
+// más claro. Y eso dejaba al jugador **a 1,6 m del sacerdote, mirando a la
+// pared de un rincón**, porque el luxel más alto de los dieciséis que mira cae
+// donde cae. Nadie eligió ese rincón: es el residuo de una ordenación.
+//
+// Un rayo de luz sí está elegido. Son `func_illusionary` con `rendermode 5`
+// —aditivo—, los mismos 31 que el experimento 05 encontró dibujados opacos y
+// que el 06 dejó bien, y los puso a mano el autor del mapa: un tragaluz, y
+// debajo un charco de luz. Preferirlos es leer la intención del mapa, que es
+// exactamente lo que ya se hizo con el templo, en vez de premiar un número.
+//
+// Y esto es lo que el criterio viejo no podía ver: **el mapa de luz no sabe
+// que un rayo existe.** Un brush aditivo no aporta un solo luxel. O sea que
+// «el sitio más claro» y «debajo del rayo» son dos preguntas distintas, y la
+// cabecera de este archivo ya avisaba de adónde lleva la primera — al revés,
+// sin ancla, sale la herrería, que tiene una lámpara encima.
+//
+// Las dos reglas duras de antes siguen (0 hostiles a SEGURO, HUECO del NPC más
+// cercano) y se añaden dos propias del rayo.
+const RAYO_TEMPLO = 12;    // metros del sacerdote: que el rayo sea el DEL TEMPLO
+// ── Y este número lo puso el autor del mapa, no yo ─────────────────────────
+//
+// La primera versión de esto pedía que el rayo LLEGARA al suelo (64 unidades)
+// y se quedó sin candidatos: los 31. Medidos, **ninguno toca el suelo**, y no
+// por poco — se paran todos a la misma altura:
+//
+//     unidades por encima del suelo   72  76  80  82  83  84  100  232  404
+//     cuántos rayos                    1   2   2   6   3   4    8    1    3
+//
+// Veintiséis de los treinta y uno entre 72 y 100, que es el estilo del autor:
+// el haz baja del tragaluz y se corta a la altura de una cabeza. Un jugador de
+// pie mide 72 (`VEC_HULL_MAX.z`), así que «debajo del rayo» aquí es literal —
+// el haz termina justo encima de ti. El umbral es 100 porque es donde está el
+// escalón de la tabla, no porque sea redondo: deja fuera los cuatro altos
+// (232 y los tres de 404), que son haces de nave y no charcos.
+const RAYO_AL_SUELO = 100;
+
+/**
+ * ¿Se ve `b` desde `a`? Marcha por el segmento a la altura de los ojos.
+ *
+ * Hace falta porque «a 7,9 m del sacerdote» no quiere decir en su sala: la
+ * primera versión de esto eligió un rayo que está a 7,9 m **y en otro piso del
+ * templo**, con un forjado en medio. Y eso vacía el ancla, que es lo único que
+ * la sostiene: el sacerdote es el punto de partida porque el mod lo designa
+ * como el primer NPC que ve un personaje nuevo (los 4 scripts con
+ * `help/first_npc`), así que aparecer donde no se le ve deja el ancla de
+ * adorno. La distancia era un sustituto de «en su sala»; esto lo mide.
+ */
+function seVeDesde(a, b, ojo = 54, paso = 8) {
+  const A = [a[0], a[1], a[2] + ojo];
+  const B = [b[0], b[1], b[2] + ojo];
+  const d = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+  if (d === 0) return true;
+  for (let t = paso; t < d; t += paso) {
+    const k = t / d;
+    if (!sePuedeEstar(bsp, [A[0] + (B[0] - A[0]) * k, A[1] + (B[1] - A[1]) * k, A[2] + (B[2] - A[2]) * k])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Los 31 rayos del mapa, con el suelo que tienen debajo. */
+function rayosDeLuz() {
+  const salida = [];
+  for (const e of entidades) {
+    if (String(e.rendermode) !== "5" || !/^\*\d+$/.test(e.model ?? "")) continue;
+    const m = modelos[Number(e.model.slice(1))];
+    if (!m) continue;
+    const x = (m.mins[0] + m.maxs[0]) / 2;
+    const y = (m.mins[1] + m.maxs[1]) / 2;
+    const z = sueloBajo(bsp, [x, y, m.mins[2] + 8]);
+    if (z === null) continue;
+    const vistos = sacerdotes.filter((s) => seVeDesde([x, y, z], s.pies));
+    salida.push({
+      unidades: [x, y, z],
+      alSuelo: m.mins[2] - z,
+      alSacerdote: Math.min(...sacerdotes.map((s) => dist([x, y, z], s.pies))),
+      // La sala del sacerdote: el más cercano DE LOS QUE SE VEN desde aquí.
+      alSacerdoteVisible: vistos.length
+        ? Math.min(...vistos.map((s) => dist([x, y, z], s.pies)))
+        : Infinity,
+      ancho: Math.max(m.maxs[0] - m.mins[0], m.maxs[1] - m.mins[1]) / U,
+    });
+  }
+  return salida;
+}
+
+const rayos = rayosDeLuz();
+const bajoRayo = [];
+const rayosFuera = [];   // los descartados por no ser del templo: el control de
+                         // que el ancla sigue decidiendo algo
+for (const r of rayos) {
+  const [x, y, z] = r.unidades;
+  if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) continue;
+  if (r.alSuelo > RAYO_AL_SUELO) continue;
+  const visible = Number.isFinite(r.alSacerdoteVisible);
+  const m = medir(
+    r.unidades,
+    `rayo a ${r.alSacerdote.toFixed(1)} m del sacerdote${visible ? "" : " (no se le ve)"}`,
+    "rayo",
+  );
+  if (m.hostiles15 > 0 || m.alAmigo < HUECO || !m.enPueblo) continue;
+  const fila = {
+    ...m,
+    alSacerdote: Number(r.alSacerdote.toFixed(1)),
+    alSacerdoteVisible: visible ? Number(r.alSacerdoteVisible.toFixed(1)) : null,
+  };
+  // «En el templo» es ver al sacerdote y estar cerca, no sólo estar cerca.
+  (visible && r.alSacerdoteVisible <= RAYO_TEMPLO ? bajoRayo : rayosFuera).push(fila);
+}
+bajoRayo.sort((a, b) => b.luz - a.luz || a.alSacerdoteVisible - b.alSacerdoteVisible);
+rayosFuera.sort((a, b) => b.luz - a.luz);
+
+// Si el mapa no tiene rayos utilizables, se cae al rincón del sacerdote. Un
+// mapa sin tragaluces no es un error: es un mapa sin tragaluces.
+const elegido = bajoRayo[0] ?? delTemplo;
 
 // ── La tabla, que es la prueba ─────────────────────────────────────────────
 const fila = (c, marca = " ") => console.log(
@@ -288,6 +428,11 @@ console.log("\n  los pueblos");
 for (const c of candidatos.filter((c) => c.familia === "pueblo").slice(0, 3)) fila(c);
 console.log("\n  EL TEMPLO — el ancla, sacada de los 4 scripts que incluyen help/first_npc");
 for (const c of sitios) fila(c, c === elegido ? "→" : " ");
+console.log(`\n  LOS RAYOS DEL TEMPLO — ${rayos.length} func_illusionary rendermode 5 en el mapa`);
+for (const c of bajoRayo.slice(0, 4)) fila(c, c === elegido ? "→" : " ");
+if (!bajoRayo.length) console.log("  (ninguno utilizable: se cae al rincón del sacerdote)");
+console.log("\n  los rayos de FUERA del templo, que el ancla descarta");
+for (const c of rayosFuera.slice(0, 3)) fila(c);
 console.log("\n  los demás sitios seguros, que NO se eligen aunque tengan más luz");
 for (const c of resto.slice(0, 4)) fila(c);
 
@@ -331,6 +476,50 @@ control("la regla de los hostiles descarta algo", candidatos.some((c) => c.hosti
 // Y el que impide que el ANCLA sea decorativa: tiene que haber al menos un
 // sitio seguro MÁS CLARO que el elegido y aun así descartado. Si no lo hay,
 // «el templo» y «el sitio más claro» son lo mismo y anclar no ha hecho nada.
+// ── Y los tres del rayo ────────────────────────────────────────────────────
+//
+// El primero es el que dice que esto se ha hecho; los otros dos son los que
+// impiden que sea un sello de goma.
+control("aparece DEBAJO de un rayo de luz", elegido.familia === "rayo",
+  bajoRayo.length
+    ? `${bajoRayo.length} rayos utilizables en el templo, elegido el de luz ${elegido.luz}`
+    : "ninguno utilizable: se ha caído al rincón del sacerdote");
+// El ancla es el sacerdote porque el mod lo designa primer NPC. Si desde donde
+// aparece el jugador no se le ve, el ancla no ha servido para nada.
+control("desde donde aparece SE VE al sacerdote",
+  sacerdotes.some((s) => seVeDesde(elegido.unidades, s.pies)),
+  elegido.alSacerdoteVisible != null
+    ? `el más cercano a la vista, a ${elegido.alSacerdoteVisible} m`
+    : "ninguno a la vista");
+// El control positivo del anterior, y hay que leerlo con cuidado porque dice
+// menos de lo que parece: **en Gate City la línea de visión no descarta ni un
+// rayo.** Los seis que están a menos de RAYO_TEMPLO del sacerdote lo ven todos,
+// así que aquí la distancia ya implicaba la sala y la comprobación sobra.
+//
+// Se queda igualmente, por dos razones: es lo que «estar en el templo»
+// significa de verdad —la distancia sólo era un sustituto— y otro mapa con dos
+// pisos sí la necesitará. Pero entonces el control no puede ser «descarta
+// algo», porque sería un control que no puede fallar. Lo que se comprueba es
+// que la FUNCIÓN sabe decir que no: en el mapa entero hay rayos desde los que
+// no se ve ningún sacerdote. Sin esto, `seVeDesde` podría devolver `true`
+// siempre y los dos controles de arriba saldrían verdes igual.
+{
+  const ciegos = rayos.filter((r) => !Number.isFinite(r.alSacerdoteVisible)).length;
+  control("la línea de visión sabe decir que no", ciegos > 0,
+    `${ciegos} de ${rayos.length} rayos del mapa no ven a ningún sacerdote` +
+    ` · dentro del templo descarta 0, o sea que aquí la distancia bastaba`);
+}
+// Si todos los rayos del mapa estuvieran en el templo, «del templo» no filtra
+// nada y el ancla sería decorativa aquí igual que lo sería arriba.
+control("el ancla descarta rayos", rayosFuera.length > 0,
+  `${bajoRayo.length} rayos dentro del templo, ${rayosFuera.length} descartados por estar fuera` +
+  (rayosFuera[0] ? ` (el más claro, luz ${rayosFuera[0].luz})` : ""));
+// Y el que compara con lo que había: el rayo tiene que ser mejor que el rincón
+// en algo medible, o el cambio es sólo un gusto. Se pide que no empeore la luz
+// Y que separe más del NPC, que es lo que se notaba jugando.
+control("el rayo mejora el rincón del sacerdote",
+  elegido.familia !== "rayo" || (elegido.luz >= delTemplo.luz && elegido.alAmigo > delTemplo.alAmigo),
+  `luz ${elegido.luz} contra ${delTemplo.luz} · ${elegido.alAmigo} m al NPC contra ${delTemplo.alAmigo} m`);
 control("el ancla cambia la respuesta", resto.some((c) => c.luz > elegido.luz),
   resto.length
     ? `el más claro descartado es ${resto[0].nombre} con ${resto[0].luz}, contra ${elegido.luz} del templo`
@@ -348,9 +537,12 @@ const salida = {
   procedencia: "derivado de gatecity.bsp por tools/aparicion.mjs. Ver PROCEDENCIA.md",
   criterio: {
     ancla: "los sacerdotes del templo: los 4 scripts de 2884 que incluyen help/first_npc",
-    regla: "de los sacerdotes, el rincón con 0 hostiles a 15 m y más luz",
+    regla: "del templo, el rayo de luz (func_illusionary rendermode 5) con 0 hostiles " +
+           "a 15 m y más luz; si el mapa no tiene rayos utilizables, el rincón del sacerdote",
     seguroMetros: SEGURO,
     huecoMetros: HUECO,
+    rayoTemploMetros: RAYO_TEMPLO,
+    rayoAlSueloUnidades: RAYO_AL_SUELO,
     hostil: "script en monsters/",
   },
   // Dónde NACE un personaje nuevo. `ms_player_begin` de MSR, movido a propósito.
@@ -362,8 +554,11 @@ const salida = {
   // Lo que trae el mapa, para poder volver a él y para que la comparación quede
   // guardada y no sólo impresa.
   delMapa,
-  // Los otros rincones del templo, por si el elegido se queda corto.
-  alternativas: sitios.slice(1, 6),
+  // Los otros rayos del templo y los rincones del sacerdote, por si el elegido
+  // se queda corto. El rincón va el primero porque es lo que había antes.
+  alternativas: [delTemplo, ...bajoRayo.slice(1, 4), ...sitios.slice(1, 3)].filter((c) => c !== elegido),
+  // Los rayos que el ancla descartó por estar fuera del templo.
+  rayosDescartados: rayosFuera.slice(0, 6),
   // Y los sitios seguros que se han descartado teniendo MÁS luz. Van al fichero
   // a propósito: son lo que demuestra que anclar en el templo decide algo.
   descartados: resto.slice(0, 6),

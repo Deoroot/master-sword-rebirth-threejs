@@ -54,6 +54,11 @@ try {
   await pag.evaluate(() => window.probe.ranuras.armarse());
   await pag.evaluate(() => window.probe.hud.avanzar(20));
   await pag.click("#view", { position: { x: 600, y: 400 } });
+  // El control positivo del puntero, antes de abrir: sin esto, «al abrir se
+  // suelta» saldría verde en un navegador que nunca lo hubiera atrapado.
+  const punteroJugando = await pag.evaluate(() => window.probe.vgui.puntero());
+  control("jugando, el clic en el mapa ATRAPA el puntero", punteroJugando === true,
+    "si esto sale rojo, el control del ratón de abajo no mide nada");
 
   // ── 1. LA `i` LO ABRE, Y LA REJILLA NO SALE ─────────────────────────────
   console.log(`\n  LA TECLA`);
@@ -67,6 +72,8 @@ try {
     equipo: [...document.querySelectorAll(".vg-inv-lista")][0]?.getBoundingClientRect(),
     contenedor: [...document.querySelectorAll(".vg-inv-lista")][1]?.getBoundingClientRect(),
     filasEquipo: [...document.querySelectorAll(".vg-inv-lista")][0]?.children.length ?? 0,
+    equipoTextos: [...([...document.querySelectorAll(".vg-inv-lista")][0]?.children ?? [])]
+      .map((n) => n.textContent.trim()),
     filas: [...([...document.querySelectorAll(".vg-inv-lista")][1]?.children ?? [])].map((n) => n.textContent),
   }));
   console.log(`    i -> panel      ${abierto.cual}`);
@@ -86,9 +93,86 @@ try {
   control("y están las tres piezas del original: equipo, contenedor e información",
     piezas.listas === 2 && piezas.info === 1,
     `${piezas.listas} listas, ${piezas.info} etiqueta de oro`);
-  control("con lo que lleva encima de verdad dentro",
-    abierto.filas.length >= 3 && abierto.filas.some((t) => /Sword|Bow|Knife|Axe|Hammer|Staff/i.test(t)),
-    `${abierto.filas.length} objetos`);
+  // ── LA COLUMNA ES LA DEL JUEGO, no una entrada inventada ────────────────
+  //
+  // Antes este control pedía «tres o más objetos dentro» y salía verde con la
+  // columna puesta a una sola entrada, «Pack», y todo lo que llevas amontonado
+  // a la derecha. Lo que hay que comprobar es la COLUMNA: las manos primero y
+  // detrás los cuatro contenedores de `reg.newchar.freeitems`
+  // (`global.script:29`), con sus nombres del catálogo.
+  const COLUMNA = ["Player Hands", "Heavy Weapon Holster", "Back Sword Sheath",
+    "Dagger Sheath", "Small Sack"];
+  const faltanCajas = COLUMNA.filter((n) => !abierto.equipoTextos.includes(n));
+  control("la columna son LAS MANOS y los cuatro contenedores de partida",
+    !faltanCajas.length,
+    faltanCajas.length ? `faltan: ${faltanCajas.join(", ")}` : abierto.equipoTextos.join(" · "));
+  // Y ninguno lleva comillas: 125 de los 861 scripts de `items/` escriben su
+  // `name` entrecomillado y el lector se las quedaba. «Back Sword Sheath» es
+  // uno de ellos, y lo lleva encima todo el mundo desde el primer minuto.
+  control("y ningún nombre sale con las comillas del script",
+    !abierto.equipoTextos.some((t) => t.includes('"')), abierto.equipoTextos.join(" · "));
+  // `m_Selected == 0` son las manos, así que al abrir se ve lo que llevas en
+  // ellas: el arma que elegiste al crear el personaje, y sólo ella.
+  control("y al abrir enseña LAS MANOS, con el arma de partida dentro",
+    abierto.filas.length === 1 && /Sword|Bow|Knife|Axe|Hammer|Staff|Lightning/i.test(abierto.filas[0]),
+    `${abierto.filas.length} objeto(s): ${abierto.filas.join(", ")}`);
+
+  // ── 1b. EL RATÓN, que es lo que hacía este panel inservible ─────────────
+  //
+  // El panel se abría entero y bien —columna, contenedor, información, todo lo
+  // que mide esta sonda en verde— y **no se podía pulsar ni una fila**: el
+  // puntero seguía atrapado en el `canvas`, así que los clics nunca llegaban al
+  // DOM. Ningún control lo veía porque todos preguntaban por lo que se dibuja y
+  // ninguno intentaba tocarlo, y el teclado (el `1` de más abajo) sí funcionaba,
+  // que es lo que lo hacía difícil de creer.
+  console.log(`\n  EL RATÓN`);
+  const punteroConPanel = await pag.evaluate(() => window.probe.vgui.puntero());
+  console.log(`    puntero         ${punteroConPanel ? "ATRAPADO (mal)" : "libre"}`);
+  control("con el inventario abierto EL PUNTERO SE SUELTA",
+    punteroConPanel === false,
+    punteroConPanel ? "atrapado: el panel se ve y no se puede pulsar" : "libre");
+  // Y se pulsa de verdad: la segunda entrada de la columna es un contenedor, así
+  // que el título tiene que dejar de ser el de las manos.
+  const columna = await pag.evaluate(() => {
+    const filas = [...([...document.querySelectorAll(".vg-inv-lista")][0]?.children ?? [])];
+    return filas.map((n) => {
+      const c = n.getBoundingClientRect();
+      return { texto: n.textContent.trim(), x: Math.round(c.x + c.width / 2), y: Math.round(c.y + c.height / 2) };
+    });
+  });
+  const tituloAntes = await pag.evaluate(() =>
+    [...document.querySelectorAll(".vg-etiqueta")].map((n) => n.textContent).find((t) => /hands|Hands/.test(t)) ?? null);
+  if (columna[1]) {
+    await pag.mouse.click(columna[1].x, columna[1].y);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const elegidoAhora = await pag.evaluate(() =>
+    [...([...document.querySelectorAll(".vg-inv-lista")][0]?.children ?? [])]
+      .filter((n) => n.dataset.elegida === "si").map((n) => n.textContent.trim()));
+  console.log(`    clic en         ${JSON.stringify(columna[1]?.texto ?? null)} -> ${JSON.stringify(elegidoAhora)}`);
+  control("UN CLIC DEL RATÓN EN LA COLUMNA ELIGE ESE CONTENEDOR",
+    Boolean(columna[1]) && elegidoAhora.length > 0
+      && elegidoAhora.some((t) => t === columna[1].texto),
+    columna[1] ? `pulsado ${JSON.stringify(columna[1].texto)}, marcado ${JSON.stringify(elegidoAhora)}` : "la columna no tiene segunda fila");
+  // Y EL TÍTULO CAMBIA, que es lo que lo convierte en un resultado y no en dos
+  // clases de CSS: el panel dice «Player hands» con las manos elegidas y el
+  // nombre del contenedor con un contenedor (vgui_containerlist.cpp:135-167).
+  const tituloConBolsa = await pag.evaluate(() =>
+    [...document.querySelectorAll(".vg-etiqueta")].map((n) => n.textContent)
+      .find((t) => /Player hands|Holster|Sheath|Sack/.test(t)) ?? null);
+  control("y el título del panel pasa a ser el del contenedor, no «Player hands»",
+    tituloConBolsa !== null && tituloConBolsa !== tituloAntes && !/hands/i.test(tituloConBolsa),
+    `${JSON.stringify(tituloAntes)} -> ${JSON.stringify(tituloConBolsa)}`);
+  // Se vuelve a las manos para que el resto de la sonda mida lo de siempre.
+  if (columna[0]) {
+    await pag.mouse.click(columna[0].x, columna[0].y);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const vueltaAManos = await pag.evaluate(() =>
+    [...document.querySelectorAll(".vg-etiqueta")].map((n) => n.textContent).find((t) => /hands|Hands/.test(t)) ?? null);
+  control("y otro clic vuelve a las manos: la columna es un selector, no un botón",
+    Boolean(vueltaAManos) && vueltaAManos === tituloAntes,
+    `${JSON.stringify(tituloAntes)} -> ${JSON.stringify(tituloConBolsa)} -> ${JSON.stringify(vueltaAManos)}`);
 
   // ── 2. LAS DOS MEDIDAS RARAS DEL ORIGINAL ───────────────────────────────
   console.log(`\n  LAS MEDIDAS`);

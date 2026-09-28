@@ -560,12 +560,124 @@ export function montarSonda(S) {
      * verde con la tecla desconectada, que es exactamente el fallo que se está
      * quitando.
      */
+    /**
+     * LAS VENTANAS DE VALVE (VGUI2, experimento 34): «Options» y «Servers».
+     *
+     * Bloque aparte del de arriba a propósito: son otro sistema de interfaz, con
+     * otra letra, otros colores y el alfa al revés. Juntarlos aquí invitaría a
+     * medir uno creyendo que se mide el otro, que es el error que el informe
+     * explica en su §1.
+     *
+     * NO hay `abrir()`: la ventana se abre con la G, que es la acción `opciones`
+     * del `config.cfg`, y una sonda que la abriera desde aquí dejaría de probar
+     * que el jugador puede llegar. Lo que sí hay es leer, y encadenar una
+     * segunda ventana cuando la primera ya está abierta por la tecla.
+     */
+    vgui2: {
+      hay: () => Boolean(S.vgui2?.()),
+      estado: () => S.vgui2?.()?.estado() ?? null,
+      /** Cuántas ventanas hay encima, y cuál está delante. */
+      abiertas: () => S.vgui2?.()?.abiertas.length ?? 0,
+      /** De quién es el ratón AHORA, según el navegador y no según nosotros. */
+      puntero: () => document.pointerLockElement?.tagName ?? null,
+      /** Abre la de servidores. Para encadenar, no para probar la tecla. */
+      servidores: () => { S.vgui2?.()?.abrirServidores(); },
+      /** Los ajustes que hacen algo, y los que no. Lo calcula `cuenta()`. */
+      cuenta: () => S.cuentaDeAjustes ?? null,
+    },
+
+    /**
+     * LO QUE LOS AJUSTES HACEN DE VERDAD (experimento 37).
+     *
+     * Separado de `vgui2` a propósito, y es la distinción entera del
+     * experimento: `vgui2.estado().opciones.valores` es **lo que dice la
+     * ventana**, y esto es **lo que hace el juego**. Mientras los ocho ajustes
+     * vivos no estuvieran enganchados, los dos podían decir cosas distintas y
+     * ningún control se habría enterado.
+     *
+     * Por eso aquí no se devuelve ningún valor de la ventana: se devuelven los
+     * grados con los que gira el ratón, la ganancia de los dos canales de
+     * sonido y cuántas texturas de atlas se han rehecho.
+     */
+    ajustes: {
+      /** Lo aplicado, que no es lo mismo que lo puesto en la ventana. */
+      aplicados: () => S.ajustesAplicados ?? null,
+      /**
+       * Cuánto gira el ratón, en GRADOS, por una cuenta. Se pregunta moviendo
+       * el ratón de mentira cien cuentas y dividiendo: así lo que se mide es la
+       * fórmula entera —filtro incluido— y no un campo que alguien copió bien.
+       *
+       * Se hace dos veces porque el filtro del motor promedia con la muestra
+       * anterior: la primera vale la mitad y la segunda ya es el régimen.
+       */
+      gradosPorCuenta: () => {
+        const r = S.raton;
+        if (!r) return null;
+        const antesX = r.viejoX, antesY = r.viejoY;
+        r.mover(100, 100);
+        const g = r.mover(100, 100);
+        r.viejoX = antesX; r.viejoY = antesY;
+        return {
+          yaw: (g.yaw * 180) / Math.PI / 100,
+          pitch: (g.pitch * 180) / Math.PI / 100,
+          sensibilidad: r.sensibilidad, filtro: r.filtro, invertido: r.invertido,
+        };
+      },
+      /** La ganancia de los dos canales, leída de los nodos de Web Audio. */
+      volumen: () => {
+        const a = S.audio;
+        if (!a) return null;
+        return {
+          efectos: a.maestro?.gain?.value ?? a.volumenEfectos,
+          musica: a.canalMusica?.gain?.value ?? a.volumenMusica,
+          despierto: Boolean(a.despierto),
+        };
+      },
+      /** El mapa de luz rehecho: cuántos atlas y si la tabla era la identidad. */
+      luz: () => {
+        const l = S.luzRehecha;
+        return l ? { texturas: l.texturas, identidad: l.identidad } : null;
+      },
+      /** Con qué gamma se horneó el atlas, según el manifiesto. */
+      horneada: () => S.gammaDelAtlas ?? null,
+      /**
+       * El PÍXEL MEDIO del atlas que está puesto ahora mismo, de 0 a 255.
+       *
+       * Es el control que no se puede falsear: si mover el brillo no cambia
+       * este número, no ha cambiado nada por mucho que la ventana diga otra
+       * cosa. Se mide sobre la textura que el material tiene puesta, no sobre
+       * la imagen descargada.
+       */
+      brilloDelAtlas: () => {
+        const img = S.atlasDeLuz?.()?.image;
+        if (!img?.width) return null;
+        const c = document.createElement("canvas");
+        c.width = img.width; c.height = img.height;
+        const g = c.getContext("2d", { willReadFrequently: true });
+        g.drawImage(img, 0, 0);
+        const d = g.getImageData(0, 0, c.width, c.height).data;
+        let suma = 0;
+        for (let i = 0; i < d.length; i += 4) suma += (d[i] + d[i + 1] + d[i + 2]) / 3;
+        return suma / (d.length / 4);
+      },
+    },
+
     vgui: {
       hay: () => Boolean(S.vgui),
       /** Qué panel está abierto, o null. Es `m_pCurrentMenu`. */
       abierto: () => S.vgui?.abierto?.nombre ?? null,
       /** ¿El juego deja de moverse? `m_NoMouse` es la excepción. */
       atrapaElRaton: () => Boolean(S.vgui?.atrapaElRaton),
+      /**
+       * ¿Y el puntero está atrapado DE VERDAD, o sólo lo cree el registro?
+       *
+       * Las dos cosas por separado a propósito: `atrapaElRaton` es lo que el
+       * registro decide y `puntero` es lo que el navegador ha hecho. Mientras
+       * nadie conectó lo uno con lo otro, el inventario abría con el registro
+       * diciendo «el ratón es del panel» y el puntero seguía en el `canvas` —así
+       * que los clics no llegaban—, y un solo dato no habría podido enseñarlo.
+       */
+      puntero: () => Boolean(document.pointerLockElement),
       /** El archivo de esquema que se ha elegido para este ancho de pantalla. */
       esquema: () => ({
         resolucion: S.vgui?.esquema?.resolucion ?? null,
@@ -630,6 +742,87 @@ export function montarSonda(S) {
       retratosVivos: () => (S.retratosDelPanel?.cuantos ?? 0) + (S.interfaz?.retratos ?? 0),
       /** Lo que se le ha dicho al jugador al elegir una opción. */
       ultimoSuceso: () => S.hudMs?.estado().consola?.at?.(-1) ?? null,
+    },
+    /**
+     * LAS MISIONES, del experimento 33.
+     *
+     * Esto sólo LEE y PREPARA. Elegir una opción **no está aquí a propósito**:
+     * la sonda tiene que pulsar la F y el número como los pulsa una persona, y
+     * si hubiera un `probe.misiones.elegir(2)` la sonda se lo comería y el
+     * camino de `menuselect` se quedaría sin medir. Es la misma regla del 29.
+     */
+    misiones: {
+      /** Qué lleva puesto el personaje. `m_Quests`. */
+      puestas: () => (S.sesion?.personaje?.misiones ?? []).map((q) => `${q.n}=${q.d}`),
+      /** El oro y los objetos, que es lo que un pago tiene que mover. */
+      bolsa: () => ({
+        oro: S.sesion?.personaje?.oro ?? null,
+        objetos: (S.sesion?.personaje?.objetos ?? []).map((o) => `${o.id}×${o.n ?? 1}`),
+        manos: { ...(S.sesion?.personaje?.manos ?? {}) },
+      }),
+      /**
+       * Meterle un objeto a la mochila. Es lo que en el juego hace matar al
+       * jefe goblin, y matarlo no cabe en una sonda: hay que ir a las cuevas.
+       * Se pone el objeto y se dice que se ha puesto, que es honesto; lo que
+       * NO se toca es el camino de después, que es lo que se está midiendo.
+       */
+      dar(id, n = 1) {
+        const p = S.sesion?.personaje; if (!p) return null;
+        (p.objetos ??= []).push({ id, n });
+        return this.bolsa();
+      },
+      /** Quitarlo, para el control positivo de «perdí la cabeza por el camino». */
+      quitar(id) {
+        const p = S.sesion?.personaje; if (!p) return null;
+        p.objetos = (p.objetos ?? []).filter((o) => o.id !== id);
+        return this.bolsa();
+      },
+      /**
+       * TODO lo que se ha dicho, no sólo lo que se ve.
+       *
+       * `hud.estado().consola.lineas` son las VISIBLES, y la consola se
+       * desvanece: `m_VisibleLines--` cada cinco segundos
+       * (`vgui_eventconsole.h:294-311`, ver `paso()` en `src/play/hud.js`). Una
+       * conversación del alcalde dura doce segundos entre `calleventtimed`, o
+       * sea que para cuando termina **lo primero que dijo ya no se ve**, y una
+       * sonda que mirara ahí diría que no lo dijo. Esto lee el anillo entero.
+       */
+      dicho() {
+        const c = S.hudMs?.consola;
+        if (!c) return [];
+        const out = [];
+        for (let i = 0; i < c.total; i++) {
+          const l = c.enLinea?.(i);
+          if (l) out.push(`${l.tipo}: ${l.texto}`);
+        }
+        return out;
+      },
+      /** ¿Hay guiones horneados? Sin esto la sonda mediría el respaldo del 29. */
+      hay: () => Boolean(S.fichaDeGuiones),
+      /** El censo que `npm run guiones` dejó escrito: el resultado del 33. */
+      censo: () => S.fichaDeGuiones?.censo
+        ? {
+          conMenu: S.fichaDeGuiones.censo.conMenu,
+          menuCabe: S.fichaDeGuiones.censo.menuCabe,
+          algunaOpcion: S.fichaDeGuiones.censo.algunaOpcion,
+          caben: S.fichaDeGuiones.censo.caben,
+        }
+        : null,
+      /** Cuántos `calleventtimed` quedan por vencer. */
+      pendientes: () => S.relojDeGuiones?.pendientes ?? 0,
+      /** Lo que el guion de este NPC se ha encontrado y no sabe hacer. */
+      noSoportados(id) {
+        const g = S.guionesVivos?.get?.(id) ?? null;
+        return g ? g.noSoportados.map((x) => `${x.tipo} ${x.nombre}`) : null;
+      },
+      /**
+       * Las opciones que el guion registró la última vez, con su tipo y su
+       * retrollamada. El panel sólo enseña el título; esto dice qué hay detrás.
+       */
+      opcionesDe(id) {
+        const g = S.guionesVivos?.get?.(id) ?? null;
+        return g ? g.opciones.map((o) => ({ titulo: o.titulo, tipo: o.tipo, datos: o.datos, respuesta: o.respuesta })) : null;
+      },
     },
     /**
      * EL CICLADOR Y LAS DOCE RANURAS, por la misma puerta que el bucle.

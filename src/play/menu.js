@@ -28,11 +28,17 @@
 export const COMANDOS = Object.freeze({
   ResumeGame: { que: "cerrar", sirve: true },
   Disconnect: { que: "desconectar", sirve: true },
-  // No hay ni lista de servidores ni forma de montar uno: el demo es una
-  // partida local. Se dejan VISIBLES y apagadas, que es más honesto que
-  // borrarlas del menú del juego.
-  OpenServerBrowser: { que: "servidores", sirve: false, porque: "no servers yet" },
-  OpenCreateMultiplayerGameDialog: { que: "crearPartida", sirve: false, porque: "no servers yet" },
+  // «Visit a Kingdom» ABRE desde el experimento 34: la ventana de servidores
+  // existe (`src/vgui2/servidores.js`) y es el navegador de Steam portado, con
+  // sus seis pestañas y sus columnas. Que la lista salga a cero lo dice ella,
+  // que es donde el juego lo dice también cuando el maestro no contesta.
+  // Apagar la entrada escondería una ventana que ya está hecha.
+  OpenServerBrowser: { que: "servidores", sirve: true },
+  // Y «Establish a Kingdom» desde el 36: abre «Create Server» y su «Start» es
+  // por donde se entra a jugar. Antes el juego hacía esto SOLO al cargar la
+  // página, sin puerta; lo que cambia no es que ahora se pueda montar una
+  // partida, es que ahora se pide.
+  OpenCreateMultiplayerGameDialog: { que: "crearPartida", sirve: true },
   // «Name Character» y «Options» llevan las dos a `OpenOptionsDialog` en el
   // archivo del juego. Aquí se separan por la ETIQUETA, no por el comando, para
   // que nombrar al personaje abra lo que dice que abre.

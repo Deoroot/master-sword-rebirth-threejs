@@ -52,27 +52,58 @@
 // «Visit a Kingdom» se ve apagada en vez de esconderse, y por el mismo motivo:
 // un menú vacío no enseña que el menú funciona.
 //
-// ── UN FALLO DE LOS SCRIPTS QUE SE ENCUENTRA AL LEERLOS ────────────────────
+// ── HAY DOS `if`, Y AQUÍ SE LEÍAN COMO UNO ─────────────────────────────────
 //
-// `if` sin llaves guarda **sólo la línea siguiente** (lo confirma el propio
-// BUG_AUDIT.md del mod: `if ( PARAM4 contains 'effect' ) local EXIT_SUB 1`). Y
-// `menuitem.register` **no limpia** `reg.mitem.*` (npcscript.cpp:940-1000): lee
-// las variables y las deja puestas.
+// **Corrección de lo que este archivo decía antes.** La cabecera afirmaba que
+// en `gatecity/armorer.script` sale «Ask about broken axe» **dos veces**, con
+// su cita y con un campo `guardaSoloElTitulo` en el fichero de salida para
+// llevarlo. Era falso, y no era un fallo del juego: era el modelo de este
+// lector. El mismo error que el de los iconos del experimento 30 — una
+// deducción correcta sobre una premisa que no se comprobó.
 //
-// Júntalo con gatecity/armorer.script:236-241:
+// La premisa que faltaba: **el motor tiene DOS condicionales distintos**, y se
+// distinguen por el paréntesis.
 //
-//     if $item_exists(PARAM1,item_ore_lorel)
-//     local reg.mitem.title 	"Show Loreldian Ore"
-//     local reg.mitem.type 	callback
-//     local reg.mitem.data 	say_ore
-//     local reg.mitem.callback say_ore
-//     menuitem.register
+//     else if (!_stricmp(msstring(TestCommand).substr(0, 2), "if"))
+//     {
+//         if (!strstr(TestCommand, "(") && *CmdLineTmp != '(')
+//             KeepCmd = true;                 // <- el VIEJO, sin paréntesis
+//         else
+//         {   ...ScriptCmd.m_NewConditional = true;   // <- el NUEVO
+//                                     script.cpp:5310-5317
 //
-// El `if` guarda el título y **nada más**. Sin el mineral encima, el tipo, los
-// datos y el registro se ejecutan igual, con el título que quedó de la opción
-// anterior: sale **«Ask about broken axe» dos veces**, y la segunda llama a
-// `say_ore`. Se marca en el fichero como `guardaSoloElTitulo` y se porta tal
-// cual, porque es lo que hace el juego.
+// Y al fallar no hacen lo mismo:
+//
+//     else if (Cmd.m_Conditional)
+//     {
+//         if (!Cmd.m_NewConditional)
+//             break; //Old if command.  Breaks event execution on failure
+//                                     script.cpp:5754-5758
+//
+// O sea: `if ( X )` que falla **se salta sus hijos y sigue**; `if X` que falla
+// **abandona el evento entero**. Lo segundo es lo que no estaba portado.
+//
+// Con eso, el armero (gatecity/armorer.script:229-241) no duplica nada:
+//
+//     if ( $item_exists(PARAM1,item_gaxe_handle) )   <- nuevo
+//     {
+//         ..."Ask about broken axe"...  menuitem.register
+//         if $item_exists(PARAM1,item_ore_lorel)     <- VIEJO
+//         ..."Show Loreldian Ore"...    menuitem.register
+//     }
+//
+// Sin el mineral, el `if` viejo falla y **corta el evento**: «Show Loreldian
+// Ore» no se registra, y tampoco se registraría nada que viniera detrás. El
+// título no se reutiliza porque nunca se llega a la línea que lo reutilizaría.
+//
+// Lo que sigue siendo cierto de lo de antes: `if` sin llaves gobierna sólo la
+// línea siguiente, y `menuitem.register` **no limpia** `reg.mitem.*`
+// (npcscript.cpp:940-1000). Las dos cosas son verdad; lo que estaba mal era la
+// consecuencia.
+//
+// Así que un `if` viejo no es una condición de SU opción: es una condición de
+// **todas las que vengan detrás en el bloque**. Aquí se llaman «cortes» y se
+// añaden a cada opción registrada desde ese punto.
 
 import { writeFileSync, existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -129,7 +160,11 @@ export function opcionesDe(bloque) {
   const fuera = [];
   const reg = {};                              // reg.mitem.*, que persiste
   const pila = [];                             // condiciones por nivel de llave
-  let pendiente = null;                        // un `if` sin llaves, aún sin dueño
+  let pendiente = null;                        // un `if ( )` sin llaves, sin dueño
+  // Los `if` VIEJOS —sin paréntesis— que ya se han pasado. Cada uno gobierna
+  // todo lo que venga detrás, porque al fallar abandona el evento
+  // (`break`, script.cpp:5758). No se sacan nunca de la lista.
+  const cortes = [];
 
   const lineas = bloque.split("\n").slice(1);  // la primera es `{ evento`
   for (const cruda of lineas) {
@@ -146,10 +181,16 @@ export function opcionesDe(bloque) {
       // `$item_exists(PARAM1,item_x)` por la mitad, que es lo que hacía la
       // primera versión: dejaba la condición sin cerrar y `juzgar()` la daba por
       // indescifrable. La condición se leía en la salida y parecía bien.
-      const cond = envoltorio(si[1].trim());
-      // `if COND algo` en una línea: gobierna sólo ese `algo`, que aquí no nos
-      // interesa salvo que sea un `local reg.mitem.*`. Se trata igual.
-      pendiente = cond;
+      const crudo = si[1].trim();
+      const cond = envoltorio(crudo);
+      // EL PARÉNTESIS ES LO QUE LOS DISTINGUE (script.cpp:5310-5317). Uno que
+      // empieza por `(` es el nuevo y gobierna sólo lo suyo; cualquier otro es
+      // el viejo y, si falla, se lleva por delante el resto del evento.
+      if (crudo.startsWith("(")) {
+        pendiente = cond;
+      } else {
+        cortes.push(cond);
+      }
       continue;
     }
 
@@ -160,20 +201,21 @@ export function opcionesDe(bloque) {
       const k = campo.toLowerCase();
       if (como.toLowerCase() === "stradd") reg[k] = (reg[k] ?? "") + v;
       else reg[k] = v;
-      // Si venía un `if` sin llaves, gobierna ESTA línea y se agota aquí.
-      if (pendiente !== null) {
-        reg[`_cond_${k}`] = pendiente;
-        pendiente = null;
-      }
+      // Si venía un `if ( )` sin llaves, gobierna ESTA línea y se agota aquí.
+      // Como sólo pone una variable y no registra nada, no hace falta llevarlo:
+      // la opción se registrará más abajo con el valor puesto o sin poner, y en
+      // el original pasa lo mismo porque `reg.mitem.*` no se limpia.
+      pendiente = null;
       continue;
     }
 
     if (/^menuitem\.register\b/i.test(l)) {
-      const condiciones = pila.map((p) => p.cond).filter(Boolean);
-      // El `if` sin llaves que quedó suelto justo antes del registro gobierna
-      // sólo la línea siguiente, que es el propio `menuitem.register`.
+      // Los cortes van los PRIMEROS: si uno de ellos falla, esta opción no
+      // existe porque el evento se abandonó antes de llegar aquí.
+      const condiciones = [...cortes, ...pila.map((p) => p.cond).filter(Boolean)];
+      // El `if ( )` sin llaves que quedó suelto justo antes del registro
+      // gobierna sólo la línea siguiente, que es el propio `menuitem.register`.
       if (pendiente !== null) { condiciones.push(pendiente); pendiente = null; }
-      const soloTitulo = reg._cond_title ?? null;
       fuera.push({
         titulo: reg.title ?? "",
         tipo: tipoDe(reg.type),
@@ -182,10 +224,10 @@ export function opcionesDe(bloque) {
         siFalla: reg.cb_failed ?? "",
         prioridad: Number(reg.priority ?? 0) || 0,
         condiciones: [...condiciones],
-        // El fallo de arriba: hay un `if` que gobierna el título y no el registro.
-        guardaSoloElTitulo: soloTitulo && !condiciones.includes(soloTitulo) ? soloTitulo : null,
+        // Cuántas de ellas vienen de un `if` viejo, o sea cuántas pueden
+        // llevarse por delante también a las de detrás.
+        cortes: cortes.length,
       });
-      delete reg._cond_title;
       continue;
     }
 
@@ -247,7 +289,7 @@ if (process.argv[1]?.endsWith("menus.mjs")) {
     porScript[clave] = ops;
     total += ops.length;
     decidibles += ops.filter((o) => o.juicio.every((j) => j.decidible)).length;
-    conFallo += ops.filter((o) => o.guardaSoloElTitulo).length;
+    conFallo += ops.filter((o) => o.cortes > 0).length;
   }
 
   console.log(`\n  OPCIONES DE MENÚ DE GATE CITY  (${dir})\n`);
@@ -257,15 +299,25 @@ if (process.argv[1]?.endsWith("menus.mjs")) {
       const malas = o.juicio.filter((j) => !j.decidible).map((j) => j.porque);
       console.log(`      ${o.tipo.padEnd(9)} ${JSON.stringify(o.titulo).padEnd(30)}` +
         `${malas.length ? ` sin decidir: ${malas.join(" && ")}` : ""}` +
-        `${o.guardaSoloElTitulo ? `  [FALLO: el if sólo guarda el título — ${o.guardaSoloElTitulo}]` : ""}`);
+        `${o.cortes ? `  [detrás de ${o.cortes} if viejo(s): si fallan, ésta no existe]` : ""}`);
     }
   }
 
   control("hay opciones de verdad en Gate City", total >= 8, `${total} en ${Object.keys(porScript).length} NPC`);
   control("y más de la mitad se pueden decidir sin intérprete", decidibles * 2 >= total,
     `${decidibles} de ${total}`);
-  control("EL FALLO DEL SCRIPT: el `if` del mineral sólo guarda el título",
-    conFallo >= 1, `${conFallo} opción con el if mal puesto`);
+  // Este control decía «EL FALLO DEL SCRIPT: el `if` del mineral sólo guarda
+  // el título» y estaba en verde sobre un hallazgo falso. Ahora mide lo que de
+  // verdad hay: opciones que van DETRÁS de un `if` viejo y que por eso
+  // desaparecen si él falla, porque abandona el evento (script.cpp:5758).
+  control("hay opciones detrás de un `if` viejo, que al fallar se las lleva",
+    conFallo >= 1, `${conFallo} de ${total}`);
+  // Y su contrario, que es el que impide que lo de arriba sea un sello: tiene
+  // que haber también opciones SIN ningún corte delante. Si todas tuvieran uno,
+  // «detrás de un if viejo» no distinguiría nada.
+  control("y otras que no llevan ninguno delante",
+    Object.values(porScript).flat().some((o) => !o.cortes),
+    `${Object.values(porScript).flat().filter((o) => !o.cortes).length} de ${total} sin cortes`);
   control("el tipo desconocido cae en `callback`, como el motor",
     tipoDe("lo-que-sea") === "callback" && tipoDe("payment_silent") === "payment");
   control("una variable de misión sin poner: `!VAR` es cierto y `VAR` es falso",

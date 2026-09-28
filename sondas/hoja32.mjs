@@ -85,6 +85,15 @@ try {
   console.log(`    W con la hoja   ${(movido * 100).toFixed(1)} cm · atrapa el ratón: ${atrapa}`);
   control("CON LA HOJA DELANTE EL JUGADOR SIGUE ANDANDO: `m_NoMouse = true`",
     movido > 0.5 && atrapa === false, `${(movido * 100).toFixed(1)} cm, atrapa=${atrapa}`);
+  // Y EL PUNTERO TAMPOCO SE SUELTA, que es la otra mitad de `m_NoMouse` y la que
+  // se habría portado al revés con más facilidad: `VGUI_MainPanel::
+  // UpdateCursorState` sale por la puerta de atrás sin tocar el cursor cuando el
+  // panel lo declara (vgui_global.cpp:103-108). Una hoja de personaje que te
+  // quita la cámara para leerla sería nuestra invención, no el juego.
+  const punteroConHoja = await pag.evaluate(() => window.probe.vgui.puntero());
+  console.log(`    puntero         ${punteroConHoja ? "atrapado, como debe" : "SUELTO (mal)"}`);
+  control("y el puntero sigue siendo del juego: la hoja se lee sin perder la cámara",
+    punteroConHoja === true, punteroConHoja ? "" : "suelto: mirar la hoja no puede costar el ratón");
   // Y el control que hace que el de arriba signifique algo: el inventario, que
   // NO tiene `m_NoMouse`, sí congela. Si los dos dejaran andar, «m_NoMouse» no
   // estaría implementado, estaría ausente.
@@ -101,6 +110,10 @@ try {
   console.log(`    W con el invent.${(movido2 * 100).toFixed(1)} cm`);
   control("EL CONTRASTE: el inventario, que no lo tiene, sí congela",
     movido2 < 0.05, `${(movido2 * 100).toFixed(1)} cm`);
+  const punteroConInv = await pag.evaluate(() => window.probe.vgui.puntero());
+  console.log(`    puntero         ${punteroConInv ? "ATRAPADO (mal)" : "suelto, como debe"}`);
+  control("y EL CONTRASTE DEL PUNTERO: el inventario sí lo suelta",
+    punteroConInv === false, punteroConInv ? "atrapado: no se podría pulsar nada" : "suelto");
   await pag.keyboard.press("Escape");
   await new Promise((r) => setTimeout(r, 300));
 
@@ -177,9 +190,18 @@ try {
   control("y RePág vuelve", vuelta[0] === antes[0], `${vuelta[0]}`);
 
   // El rojo de la elegida: `Color_SelectedText = COLOR(255, 0, 0, 0)`.
+  //
+  // `offsetParent !== null` no es adorno: cuenta sólo lo que SE VE. Sin él esto
+  // barría el documento entero y contaba también el botón «Tiled» del
+  // inventario, que es rojo porque está armado (`armado = [255,0,0,0]`,
+  // widgets.js:289) y sigue en el DOM con su panel escondido. O sea que el
+  // experimento 31 puso un segundo rojo en la página y este control se volvió
+  // rojo sin que nada de la hoja cambiara — y no se vio porque esta sonda no se
+  // volvió a pasar. Una etiqueta roja que nadie puede ver no es una etiqueta
+  // roja.
   const rojo = await pag.evaluate(() =>
     [...document.querySelectorAll(".vg-etiqueta")]
-      .filter((n) => getComputedStyle(n).color === "rgb(255, 0, 0)")
+      .filter((n) => n.offsetParent !== null && getComputedStyle(n).color === "rgb(255, 0, 0)")
       .map((n) => n.textContent));
   control("la elegida se pinta en ROJO, que es `Color_SelectedText`",
     rojo.length === 1, `${rojo.length}: ${rojo[0] ?? "ninguna"}`);

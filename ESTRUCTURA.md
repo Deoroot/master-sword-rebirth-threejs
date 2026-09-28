@@ -22,13 +22,14 @@ nombre. Mover carpetas habría invalidado esas citas sin arreglar nada.
 | `src/play/` | `game/shared/` | **la regla.** Sin DOM y sin Three: el mismo archivo corre en el navegador y en el servidor de Node. Es la carpeta que hizo posible el experimento 28. 19 archivos, 6 641 líneas. |
 | `src/render/` | `game/client/` | **lo que dibuja.** La escena, el cuerpo, el arma, el muñeco, los bichos, las flechas, el atlas de texturas. 10 archivos, 3 532 líneas. |
 | `src/juego/` | `game/client/ui/` | **la interfaz, las teclas, el guardado y la sesión.** 11 archivos, 3 654 líneas. |
-| `src/vgui/` | `game/client/ui/ms/` | **los paneles del juego.** Aún no existe: es lo que viene ahora (ver abajo). |
+| `src/vgui/` | `game/client/ui/ms/` | **los paneles del mod** (VGUI1): la hoja de personaje, el inventario, el menú de la F. Letra Sitka, esquemas en `*_textscheme.txt`. Experimento 29. |
+| `src/vgui2/` | `GameUI.dll` | **las ventanas de Valve** (VGUI2): «Options» y «Servers». Letra Verdana, esquema en `TrackerScheme.res`. Son OTRO sistema y por eso están aparte: ver `doc/VGUI2_34.md` §1. |
 | `src/red/` | `game/server/` + `common/` | **la partida, la fauna, el protocolo y el socket.** El servidor de verdad y el cliente que habla con él. 11 archivos, 3 253 líneas. |
 | `src/dev/` | — | **la sonda.** `window.probe`, por la que las sondas de navegador miden el juego. 2 094 líneas, y es nuestra: MSR no tiene nada parecido. |
-| `sondas/` | — | los 44 guiones que arrancan un Chromium de verdad y miden. |
+| `sondas/` | — | los guiones que arrancan un Chromium de verdad y miden: 53, de los que 22 son sondas `npm run sonda:*`. |
 | `test/` | — | las comprobaciones de Node, que no necesitan navegador. |
 | `tools/` | — | los extractores: del `.bsp`, de los `.mdl`, de los sonidos, del HUD, del menú, del catálogo de objetos. Escriben en `build/`. |
-| `doc/` | — | los treinta informes de los experimentos, en orden. |
+| `doc/` | — | los treinta y nueve documentos: los informes de los experimentos, los encargos y las notas sueltas. |
 | `build/` | `msr/` | **lo extraído del juego. No se versiona** (`.gitignore`), y lleva su `build/gatecity/PROCEDENCIA.md` diciendo de qué archivo salió cada cosa. |
 
 La correspondencia más importante de la tabla es la segunda fila, y no es
@@ -45,9 +46,11 @@ Se dice aquí para que nadie lo busque en el original:
 - **el guardado.** MSR guarda los personajes en el servidor; aquí viven en el
   `localStorage` del navegador (`src/juego/almacen.js`), con exportar e importar a
   un archivo. Una demo web no tiene cuentas.
-- **la lista de servidores** (`src/juego/servidor.js`), que en MSR es el
-  navegador de servidores de Steam.
-- **la sonda** (`src/dev/sonda.js`) y las 44 de `sondas/`.
+- **lo que hay DENTRO de la lista de servidores.** La ventana sí es un porte
+  (`src/vgui2/servidores.js`, experimento 34: es el navegador de Steam, con sus
+  seis pestañas y sus columnas), pero de dónde salen las filas es cosa nuestra:
+  aquí no hay maestro de Steam, y hoy la lista sale a cero diciendo por qué.
+- **la sonda** (`src/dev/sonda.js`) y las 20 de `sondas/`.
 - **el HUD de la F3**, que es el de la sonda del experimento 03 y sigue ahí
   debajo del HUD del juego.
 
@@ -103,6 +106,14 @@ que se pueden comprobar, y la segunda es la que más pesa:
 
 - **32** ([doc/HOJA_32.md](doc/HOJA_32.md)) Character Info (`estadisticas.js`),
   el único con `m_NoMouse`: se lee sin soltar el puntero.
+
+- **33** ([doc/MISIONES_33.md](doc/MISIONES_33.md)) las misiones: el subconjunto
+  del intérprete de guiones (`play/guion.js`), el diccionario de misiones que se
+  guarda con el personaje (`play/misiones.js`) y `UseMenuOption`
+  (`play/usaropcion.js`). Con eso, **el menú del NPC deja de leerse de una ficha
+  y pasa a salir de ejecutar su script**, y la misión del alcalde de Gate City se
+  puede hacer y terminar. La cuenta de a cuántos NPCs llega eso está en el
+  informe y la hace `tools/guiones.mjs`.
 
 **Los cuatro están.** Lo que queda de `src/juego/interfaz.js` son los suplentes
 —por si los paneles no se montan— y lo que MSR no tiene: exportar el guardado,

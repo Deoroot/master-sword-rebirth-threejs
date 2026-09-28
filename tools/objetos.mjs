@@ -147,6 +147,35 @@ if (nuevo.armas.some((a) => !fichas.find((x) => x.id === a))) {
   process.exit(1);
 }
 
+// ── Y LOS OBJETOS GRATIS, que no tenían control ───────────────────────────
+//
+// Arriba había un control para las siete armas y **ninguno para los cuatro
+// objetos gratis**, que son las fundas y el zurrón de
+// `reg.newchar.freeitems`. Los dos vienen de la misma línea de `global.script`
+// y los dos se le dan al personaje en `crearPersonaje()`, así que la asimetría
+// era un descuido: si mañana el extractor dejara de leer `items/pack_sack`,
+// el personaje seguiría naciendo con un id que no resuelve a nada y el
+// inventario enseñaría `pack_sack` en crudo sin que nada fallara.
+for (const g of nuevo.gratis) {
+  const f = fichas.find((x) => x.id === g);
+  console.log(`      ${g.padEnd(28)} ${f ? `${f.nombre} — ${f.tipo}` : "NO ESTÁ EN EL CATÁLOGO"}`);
+}
+if (nuevo.gratis.some((g) => !fichas.find((x) => x.id === g))) {
+  console.error(`    FALLO: alguno de los objetos gratis de partida no está en el catálogo.`);
+  process.exit(1);
+}
+// Y son contenedores los cuatro, que es lo que los hace ser la columna del
+// inventario y no cosas sueltas dentro de él. Un `pack_sack` leído como «arma»
+// no fallaría arriba y dejaría el panel sin columna.
+{
+  const noContenedor = nuevo.gratis.filter((g) => fichas.find((x) => x.id === g)?.tipo !== "contenedor");
+  if (noContenedor.length) {
+    console.error(`    FALLO: ${noContenedor.join(", ")} tendrían que leerse como 'contenedor' ` +
+      `y no lo son. Son las fundas y el zurrón con los que nace un personaje.`);
+    process.exit(1);
+  }
+}
+
 mkdirSync(SALIDA, { recursive: true });
 writeFileSync(`${SALIDA}/objetos.json`, JSON.stringify({
   procedencia: "derivado local de los .script de Master Sword Rebirth, leídos no copiados. No redistribuible.",

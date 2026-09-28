@@ -25,7 +25,9 @@
     "hud": "node tools/hud.mjs",
     "menu": "node tools/menu.mjs",
     "vgui": "node tools/vgui.mjs",
+    "vgui2": "node tools/vgui2.mjs",
     "menus": "node tools/menus.mjs",
+    "guiones": "node tools/guiones.mjs",
     "iconos": "node tools/iconos.mjs",
     "sonda:mundo": "node sondas/mundo.mjs",
     "sonda:mapa": "node sondas/mapa.mjs",
@@ -44,7 +46,11 @@
     "sonda:vgui29": "node sondas/vgui29.mjs",
     "sonda:personaje30": "node sondas/personaje30.mjs",
     "sonda:inventario31": "node sondas/inventario31.mjs",
-    "sonda:hoja32": "node sondas/hoja32.mjs"
+    "sonda:hoja32": "node sondas/hoja32.mjs",
+    "sonda:misiones33": "node sondas/misiones33.mjs",
+    "sonda:vgui2_34": "node sondas/vgui2_34.mjs",
+    "sonda:arranque36": "node sondas/arranque36.mjs",
+    "sonda:ajustes37": "node sondas/ajustes37.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

@@ -162,23 +162,44 @@ no se cumple hace que la opción no se registre, o sea que no existe. Aquí se v
 gris y dice por qué. Es la misma decisión que ya se tomó en el menú principal con
 «Visit a Kingdom», y por el mismo motivo: un menú vacío no enseña nada.
 
-### Y un fallo de los scripts del juego
+### Y un fallo de los scripts del juego que NO era de los scripts
 
-`if` sin llaves guarda **sólo la línea siguiente** —lo confirma el `BUG_AUDIT.md`
-del propio mod— y `menuitem.register` **no limpia** `reg.mitem.*`
-(`npcscript.cpp:940-1000`). Júntalo con `gatecity/armorer.script:236-241`:
+> **CORREGIDO.** Lo que decía este apartado era falso. Se deja el error a la
+> vista, como el de los iconos del 30, porque la forma de equivocarse importa
+> más que el dato.
 
+Decía esto: `if` sin llaves guarda sólo la línea siguiente —cierto, lo confirma
+el `BUG_AUDIT.md` del mod— y `menuitem.register` no limpia `reg.mitem.*`
+—cierto, `npcscript.cpp:940-1000`—, así que en `gatecity/armorer.script:236-241`,
+sin el mineral encima, el registro se ejecutaría igual con el título anterior y
+saldría **«Ask about broken axe» dos veces**. Las dos premisas son verdad y la
+conclusión no, porque faltaba una tercera: **el motor tiene dos `if` distintos.**
+
+```cpp
+if (!strstr(TestCommand, "(") && *CmdLineTmp != '(')
+    KeepCmd = true;                       // el VIEJO, sin paréntesis
+else { ...ScriptCmd.m_NewConditional = true; }      script.cpp:5310-5317
+
+else if (Cmd.m_Conditional) {
+    if (!Cmd.m_NewConditional)
+        break; //Old if command.  Breaks event execution on failure
+                                                    script.cpp:5754-5758
 ```
-if $item_exists(PARAM1,item_ore_lorel)
-local reg.mitem.title 	"Show Loreldian Ore"
-local reg.mitem.type 	callback
-menuitem.register
-```
 
-El `if` guarda el título y nada más. Sin el mineral encima, el registro se ejecuta
-igual con el título que quedó de la opción anterior: sale **«Ask about broken
-axe» dos veces**, y la segunda llama a `say_ore`. Pasa en tres de las nueve
-opciones de Gate City. Se marca en el fichero y se porta tal cual.
+`if ( X )` que falla se salta sus hijos y **sigue**. `if X` que falla
+**abandona el evento entero**. El del mineral es de los segundos, así que sin el
+mineral no se registra nada más: «Show Loreldian Ore» no existe, y el título no
+se reutiliza porque nunca se llega a la línea que lo reutilizaría.
+
+Lo que hay de verdad es otra cosa y es peor: un `if` viejo no condiciona su
+opción, condiciona **todas las que vengan detrás en el bloque**. En Gate City
+son **7 de las 9**. El lector los llama «cortes» y los arrastra a cada opción
+registrada desde ese punto; el campo `guardaSoloElTitulo`, que existía para
+llevar el fallo inventado, ha desaparecido del fichero.
+
+Lo encontró la sesión del experimento 33 al **ejecutar** los scripts en vez de
+leerlos, que es la misma lección del 30: un hallazgo con cita y control en verde
+encima sigue pudiendo ser un fallo de nuestra herramienta.
 
 ---
 
@@ -210,7 +231,7 @@ cuenta era mía — que es la mitad de las veces.
 ```
 npm test              813 comprobaciones (eran 768 al empezar el 29)
 npm run vgui          9 de 9    los cuatro esquemas, con los dos fallos del motor
-npm run menus         6 de 6    9 opciones en 4 NPC, y el fallo del `if` sin llaves
+npm run menus         7 de 7    9 opciones en 4 NPC, y los dos `if` del motor
 npm run sonda:vgui29  30 de 30  la F en un Chrome de verdad
 ```
 

@@ -1,5 +1,44 @@
 # Dónde se quedó esto
 
+> **EL 35 ESTÁ HECHO: [doc/NAVEGADOR_35.md](doc/NAVEGADOR_35.md).** El navegador
+> no es un escritorio, y ahí se cobra lo suyo.
+>
+> **DOS PANELES SE VEÍAN PERFECTOS Y NO SE PODÍAN PULSAR.** El inventario y el
+> menú de la F abrían enteros —columna, botones ámbar, borde verde, desvanecido de
+> medio segundo— y no recibían un solo clic: el puntero seguía atrapado en el
+> `canvas`. `atrapaElRaton` estaba escrito desde el 29 y **nadie lo conectaba**;
+> faltaba `UpdateCursorState`, que en el motor no es del panel sino del viewport
+> (vgui_teamfortressviewport.cpp:1489-1493, vgui_global.cpp:67-72).
+>
+> Y el hallazgo que hace la traducción exacta: **`g_iVisibleMouse` es el puntero
+> atrapado, al revés.** Apaga las tres cosas que apaga `exitPointerLock` —los
+> botones (inputw32.cpp:387), el giro (:477) y su acumulación (:600)—, así que una
+> sola llamada compra las tres.
+>
+> **`sonda:vgui29` tenía 31 controles en verde contra un panel inservible.** Todos
+> preguntaban por lo que el panel DIBUJA y ninguno intentaba **tocarlo**; y el
+> teclado sí funcionaba, que es lo que lo hacía difícil de creer. Ahora hay clics
+> de ratón de verdad (`pag.mouse.click`) y el positivo delante: que jugando el clic
+> en el mapa SÍ atrapa el puntero. **Patrón obligatorio para cualquier panel
+> nuevo.**
+>
+> **Y CTRL+W CIERRA LA PESTAÑA AL AGACHARSE Y AVANZAR.** `preventDefault()` **no
+> sirve** —los atajos de la ventana no son cancelables— y está escrito en
+> `src/juego/navegador.js` para que nadie lo intente. La única salida es pantalla
+> completa con Keyboard Lock, que es de Chromium: dentro se arregla, fuera se
+> avisa. Acción nueva `pantallaCompleta` en la `b`, **declarada como nuestra**.
+>
+> **Y UN CONTROL LLEVABA EN ROJO DESDE EL 31 SIN QUE NADIE LO SUPIERA**, porque
+> `sonda:hoja32` no se volvió a pasar al tocar el inventario: el botón «Tiled»
+> armado es rojo y el control contaba etiquetas rojas en todo el documento.
+> Tocar un panel obliga a pasar las sondas de los vecinos.
+>
+> **969 pruebas, vgui29 36/36, inventario31 20/20, hoja32 15/15, mundo 40/40.**
+>
+> Pendiente y dicho: falta la sonda de Keyboard Lock (necesita Chromium en
+> pantalla completa), y **el arranque sigue entrando por elegir personaje y no por
+> un menú principal** — eso es del 34 y de la otra sesión, que tiene el GameUI.
+
 > **LOS CUATRO PANELES ESTÁN: [doc/HOJA_32.md](doc/HOJA_32.md) cierra la serie.**
 > El menú de interacción (F), crear personaje, el inventario (I) y Character
 > Info (P), los cuatro portados de VGUI sobre el kit del 29 y manejados por la
@@ -75,9 +114,14 @@
 > Cuatro fallos del motor van **con el fallo**: el último esquema del archivo no
 > recibe sus valores por defecto, `BorderColor` marca la variable de otro color,
 > el botón décimo no se puede elegir con el teclado (el `0` da la ranura −1), y
-> `GetCenteredItemX` tiene el `−1` fuera del paréntesis. Y uno de los scripts del
-> juego: el `if` sin llaves del armero guarda sólo el título, así que «Ask about
-> broken axe» sale dos veces.
+> `GetCenteredItemX` tiene el `−1` fuera del paréntesis.
+>
+> **Y un quinto que resultó ser NUESTRO y está corregido:** decía que el `if` del
+> armero hacía salir «Ask about broken axe» dos veces. Falso, y con sus dos
+> citas. Faltaba saber que el motor tiene **dos** `if`: con paréntesis se salta
+> sus hijos y sigue; sin ellos **abandona el evento** (`break; //Old if command`,
+> `script.cpp:5754-5758`). O sea que no hay duplicado: hay opciones que
+> desaparecen, 7 de las 9 de Gate City. Ver [doc/VGUI_29.md](doc/VGUI_29.md) §3.
 >
 > **Antes de esto, la mudanza.** El port salió de «Mydra Web Lab» a su propia
 > carpeta; los experimentos 01-09 se quedaron allí. Ver [ESTRUCTURA.md](ESTRUCTURA.md).

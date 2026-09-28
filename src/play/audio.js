@@ -29,6 +29,8 @@
 // corte se pone con `maxDistance`, que es lo que hace que una antorcha no se
 // oiga desde el otro lado del pueblo.
 
+import { ganancia } from "./aplicar.js";
+
 const ATTN_NORM = 0.8;
 /** Unidades a las que se apaga un sonido normal, de `SND_RADIUS`. */
 export const ALCANCE = 1000 / ATTN_NORM;
@@ -46,6 +48,24 @@ export class Audio {
     this.sonando = new Map();   // música por canal
     this.arrancadas = 0;        // para la sonda: cuántas fuentes se han lanzado
     this.fallos = [];
+    // LOS DOS VOLÚMENES del motor, y son dos canales distintos: `volume` para
+    // los efectos y `MP3Volume` para la música. Se guardan aquí porque el
+    // `AudioContext` todavía no existe —nace con el primer gesto— y «Apply»
+    // puede llegar antes. Ver `src/play/aplicar.js`.
+    this.volumenEfectos = 1;
+    this.volumenMusica = 1;
+  }
+
+  /**
+   * Los dos volúmenes, de 0 a 1. Se puede llamar antes de que haya contexto:
+   * se quedan puestos y `despertar()` los estrena.
+   */
+  volumenes({ efectos, musica } = {}) {
+    if (efectos !== undefined) this.volumenEfectos = ganancia(efectos);
+    if (musica !== undefined) this.volumenMusica = ganancia(musica);
+    if (this.maestro) this.maestro.gain.value = this.volumenEfectos;
+    if (this.canalMusica) this.canalMusica.gain.value = this.volumenMusica;
+    return this;
   }
 
   /** El catálogo se puede cargar sin gesto; sólo decodificar necesita contexto. */
@@ -68,7 +88,12 @@ export class Audio {
       this.maestro = this.ctx.createGain();
       this.maestro.connect(this.ctx.destination);
       this.canalMusica = this.ctx.createGain();
-      this.canalMusica.connect(this.maestro);
+      // LA MÚSICA NO CUELGA DEL MAESTRO, y eso es del motor: `volume` es el
+      // volumen de los EFECTOS y `MP3Volume` el de la música, dos cvars
+      // independientes. Colgándola del maestro, bajar los efectos bajaría
+      // también la canción y los dos deslizadores se multiplicarían.
+      this.canalMusica.connect(this.ctx.destination);
+      this.volumenes();
     }
     if (this.ctx.state === "suspended") await this.ctx.resume();
     return this.ctx.state === "running";

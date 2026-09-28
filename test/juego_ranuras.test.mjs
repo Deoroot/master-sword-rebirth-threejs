@@ -397,10 +397,21 @@ describe("el menú principal", () => {
   });
 
   test("lo que no se puede hacer hoy se ve y dice por qué", () => {
-    for (const cmd of ["OpenServerBrowser", "OpenCreateMultiplayerGameDialog", "Quit"]) {
+    // De las tres que había apagadas queda UNA. «Visit a Kingdom» se encendió en
+    // el 34 y «Establish a Kingdom» en el 36, cuando sus ventanas existieron.
+    // «Quit» no se va a encender nunca: un navegador no cierra la pestaña que no
+    // abrió él, y eso no es una carencia del port.
+    for (const cmd of ["Quit"]) {
       assert.equal(COMANDOS[cmd].sirve, false, cmd);
       assert.ok(COMANDOS[cmd].porque, `${cmd} tiene que decir por qué`);
     }
+  });
+
+  test("las dos entradas de partida abren, porque sus ventanas existen", () => {
+    assert.equal(COMANDOS.OpenServerBrowser.sirve, true);
+    assert.equal(COMANDOS.OpenServerBrowser.que, "servidores");
+    assert.equal(COMANDOS.OpenCreateMultiplayerGameDialog.sirve, true);
+    assert.equal(COMANDOS.OpenCreateMultiplayerGameDialog.que, "crearPartida");
   });
 
   test("las flechas saltan los separadores", () => {

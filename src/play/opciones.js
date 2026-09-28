@@ -123,8 +123,10 @@ export function opcionesDe(ficha, script, personaje = null) {
       tipo,
       datos: o.datos,
       porque,
-      // Se conserva para poder decir en las pruebas de dónde viene cada una.
-      guardaSoloElTitulo: o.guardaSoloElTitulo ?? null,
+      // Cuántas de sus condiciones vienen de un `if` viejo, o sea cuántas, al
+      // fallar, se llevan también por delante a las opciones de detrás
+      // (`break`, script.cpp:5758). Se conserva para las pruebas.
+      cortes: o.cortes ?? 0,
     });
   }
 
@@ -141,14 +143,72 @@ export function opcionesDe(ficha, script, personaje = null) {
  *
  *     else pMonster = pPlayer;        client.cpp:679-682
  *
- * El del jugador trae la descripción del objeto que lleva en la mano
- * (`MOT_DESC` → `ShowWeaponDesc(player.ActiveItem())`,
- * vgui_menu_interact.h:183-188). Sin nada en la mano no hay nada que describir, y
- * el menú se queda con el Cancel — que es lo que hace el original.
+ * ── Esto estaba MAL, y el fallo tiene nombre ───────────────────────────────
+ *
+ * Aquí había una sola entrada, «Describe <lo que lleves en la mano>», deducida
+ * de lo que hace `MOT_DESC` en el cliente (`ShowWeaponDesc(player.ActiveItem())`,
+ * vgui_menu_interact.h:183-188). El razonamiento sobre el C++ era correcto y la
+ * respuesta era falsa, porque **el menú del jugador no lo decide el C++**: lo
+ * decide un script, igual que el de cualquier NPC.
+ *
+ *     { game_menu_getoptions
+ *        if( $get(ent_me,id) equals PARAM1 ) callevent menu_self
+ *        else callevent menu_other PARAM1 }
+ *                                     player/player_sv_menu.script:11-15
+ *
+ * Es el mismo error del proyecto una vez más —leer el motor cuando la respuesta
+ * está en los datos— y se ve en una captura del juego: seis opciones, no una.
+ *
+ * ── Las seis, y la condición que las gobierna ──────────────────────────────
+ *
+ * `menu_self` (player_sv_menu.script:17-64) registra, en este orden:
+ *
+ *     Sit Down (Rest) / Stand Up   callback  plr_menu_emote  player_sitstand
+ *     Emote: Nod Yes               callback  plr_menu_emote  player_nodyes
+ *     Emote: Nod No                callback  plr_menu_emote  player_nodno
+ *     Emote: Stand At Attention    callback  plr_menu_emote  player_standidle
+ *     Item Desc                    itemdesc
+ *     Forgive Last PK              forgive
+ *
+ * Y **sentado el menú encoge**: el mismo `if ( !$get(ent_me,sitting) )` cambia
+ * la primera por «Stand Up» y envuelve las tres emociones, así que de pie son
+ * seis y sentado son tres. Es la única condición del menú y se porta.
+ *
+ * Lo que NO se registra: las mascotas, que van detrás de
+ * `$get_quest_data(ent_me,pets)` y un personaje nuevo no tiene ninguna.
+ *
+ * @param personaje  el personaje, por si algún día decide algo. Hoy no: las
+ *                   seis opciones no miran el inventario ni el oro.
+ * @param estado     `{ sentado }`. `$get(ent_me,sitting)`.
  */
-export function opcionesDelJugador(personaje) {
-  const mano = personaje?.manos?.derecha ?? personaje?.manos?.izquierda ?? null;
-  if (!mano) return [];
-  const nombre = typeof mano === "string" ? mano : (mano.nombre ?? mano.clave ?? "item");
-  return [{ titulo: `Describe ${nombre}`, tipo: "itemdesc", datos: "", porque: "" }];
+export function opcionesDelJugador(personaje, estado = {}) {
+  const sentado = Boolean(estado.sentado);
+  const emote = (titulo, datos) => ({ titulo, tipo: "callback", datos, porque: "", callback: "plr_menu_emote" });
+  const fuera = [emote(sentado ? "Stand Up" : "Sit Down (Rest)", "player_sitstand")];
+  if (!sentado) {
+    fuera.push(emote("Emote: Nod Yes", "player_nodyes"));
+    fuera.push(emote("Emote: Nod No", "player_nodno"));
+    fuera.push(emote("Emote: Stand At Attention", "player_standidle"));
+  }
+  fuera.push({ titulo: "Item Desc", tipo: "itemdesc", datos: "", porque: "", id: "itemdesc" });
+  fuera.push({ titulo: "Forgive Last PK", tipo: "forgive", datos: "", porque: "", id: "forgive" });
+  return fuera;
+}
+
+/**
+ * El menú de OTRO JUGADOR, que está vacío — y no por nuestra culpa.
+ *
+ * `menu_other` existe, recibe el id de quien mira y **no registra ni una
+ * opción**: las cuatro que tenía —Give <arma>, Trade, Invite to Party,
+ * Challenge to Duel— están comentadas en el propio archivo
+ * (`player_sv_menu.script:74-91` y `:160-186`), con el cuerpo entero dentro de
+ * los `//`. O sea que en Master Sword hoy, apuntar a otro jugador y pulsar la F
+ * abre un menú con el Cancel y nada más.
+ *
+ * Se porta así, vacío, porque es lo que hace el juego. Y va en una función
+ * propia en vez de un `return []` suelto para que el día que alguien descomente
+ * aquello haya un sitio donde ponerlo.
+ */
+export function opcionesDeOtroJugador() {
+  return [];
 }

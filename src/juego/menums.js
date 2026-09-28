@@ -35,7 +35,7 @@ const CSS = `
 /* El logotipo va UNA vez y arriba: es «MASTER SWORD / art by Anders Finér»,
    no la placa de un botón. Se pixela a propósito: son 240x32 de verdad y
    estirarlos con suavizado los deja borrosos. */
-.ms-menu-titulo { image-rendering: pixelated; margin-bottom: 18px;
+.ms-menu-titulo { image-rendering: pixelated; margin-top: 26px;
   filter: drop-shadow(0 2px 6px #000); }
 .ms-menu-op { position: relative; display: block; border: 0; background: transparent;
   padding: 4px 18px; text-align: left; cursor: pointer; letter-spacing: 0.04em;
@@ -85,11 +85,17 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
     titulo.src = `${base}${ficha.titulo.archivo}`;
     titulo.alt = "Master Sword — art by Anders Finér";
     titulo.width = ficha.titulo.ancho * 2;
-    columna.appendChild(titulo);
   }
   const lista = el("div", "ms-menu-lista");
   lista.style.marginLeft = "0";
   columna.appendChild(lista);
+  // EL LOGOTIPO VA DEBAJO DE LA LISTA, no encima.
+  //
+  // En la captura del juego «MASTER SWORD / art by Anders Finér» está abajo del
+  // todo, por debajo de «Quit». Lo teníamos arriba y no se notaba porque al menú
+  // sólo se llegaba con la Escape, con el juego detrás; desde el experimento 36
+  // el menú es la primera pantalla y el logotipo se comía «Visit a Kingdom».
+  if (titulo) columna.appendChild(titulo);
   const pie = el("div", "ms-menu-pie");
   nodo.appendChild(pie);
   raiz.appendChild(nodo);

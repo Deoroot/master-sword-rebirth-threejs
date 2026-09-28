@@ -1025,8 +1025,21 @@ export function leerFichaObjeto(raiz, ruta) {
   const ficha = {
     id: ruta.replace(/^.*\//, ""),
     ruta,
-    nombre: acc.ficha.get("nombre") ?? null,
-    descripcion: acc.ficha.get("descripcion") ?? null,
+    // ── LAS COMILLAS NO SON PARTE DEL NOMBRE ────────────────────────────
+    //
+    // `name "Back Sword Sheath"` y `name Small Sack` son la misma cosa escrita
+    // de dos formas: en el lenguaje de scripts las comillas AGRUPAN y no se
+    // guardan. El repartidor del motor se las salta con un `continue`:
+    //
+    //     if (ch == '"') { ...inQuote = !inQuote... continue; }
+    //                                     script.cpp:5049-5064 (`GetParams`)
+    //
+    // Sin quitarlas, la funda de espalda se llama «"Back Sword Sheath"» con
+    // comillas en la pantalla y el hechizo de partida, «"Erratic Lightning"».
+    // Los dos se ven: uno en el inventario y el otro en la pantalla de crear
+    // personaje. `texto()` ya sabía hacerlo y no se estaba usando aquí.
+    nombre: texto(acc.ficha.get("nombre")),
+    descripcion: texto(acc.ficha.get("descripcion")),
     peso: numeroDe(acc.ficha.get("peso")),
     tamano: numeroDe(acc.ficha.get("tamano")),
     valor: numeroDe(acc.ficha.get("valor")),

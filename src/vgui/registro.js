@@ -123,11 +123,12 @@ export class PanelConNombre {
  * el inventario con la hoja abierta cierra la hoja; no se apilan.
  */
 export class Registro {
-  constructor({ esquema, raiz = null, reloj = () => 0, sonar = null } = {}) {
+  constructor({ esquema, raiz = null, reloj = () => 0, sonar = null, cursor = null } = {}) {
     this.esquema = esquema;
     this.raiz = raiz;                  // el nodo del DOM donde se cuelgan
     this.reloj = reloj;                // segundos, del reloj del juego
     this.sonar = sonar;                // los tres sonidos de `sound/ui/`
+    this.cursor = cursor;              // `UpdateCursorState`, ver `cursorCambio`
     this.paneles = new Map();
     this.actual = null;
     /** `g_fMenuLastClosed` (vgui_menubase.cpp:61). */
@@ -166,6 +167,38 @@ export class Registro {
    */
   get atrapaElRaton() { return !!(this.actual && !this.actual.sinRaton); }
 
+  /**
+   * `UpdateCursorState()`, que es lo que le faltaba a esto y por eso el
+   * inventario se abría **sin poder pulsar nada**.
+   *
+   * El motor no deja esa decisión al panel: la toma el viewport, y la toma en
+   * TRES sitios —al enseñar un menú, al esconderlo y al quitar el de encima—,
+   * nunca en el cuerpo del panel:
+   *
+   *     m_pCurrentMenu = pNewMenu; m_pCurrentMenu->Open();
+   *     UpdateCursorState();            vgui_teamfortressviewport.cpp:1489-1493
+   *     VGUI::HideMenu(...) { pPanel->Close(); ... UpdateCursorState(); }
+   *                                    vgui_global.cpp:67-72
+   *     HideTopMenu() { ... UpdateCursorState(); }
+   *                                    vgui_teamfortressviewport.cpp:1523
+   *
+   * Y lo que hace, delegado al panel para respetar su `m_NoMouse`:
+   *
+   *     if (m_NoMouse) { g_iVisibleMouse = false; ...scu_none; return false; }
+   *     g_iVisibleMouse = true; ...scu_arrow;      vgui_global.cpp:99-114
+   *
+   * `g_iVisibleMouse` **es el puntero atrapado del navegador, al revés**. Con él
+   * en alto el motor apaga las tres cosas que aquí apaga `pointerLockElement`:
+   * los botones del ratón dejan de ser botones de juego (`if (iMouseInUse ||
+   * g_iVisibleMouse) return;`, inputw32.cpp:387), el movimiento deja de girar la
+   * vista (:477) y deja de acumularse (:600). O sea que **soltar el puntero es la
+   * traducción exacta**, no una aproximación: una sola llamada compra las tres.
+   *
+   * Aquí sólo se avisa; quién llama a `exitPointerLock` es `src/main.js`, porque
+   * el `canvas` es suyo y este archivo no toca el DOM del juego.
+   */
+  cursorCambio() { this.cursor?.(this.atrapaElRaton, this.actual); }
+
   abrir(nombre) {
     const p = this.buscar(nombre);
     if (!p || !p.puedeAbrir()) return null;
@@ -174,6 +207,7 @@ export class Registro {
     p.abrir(this.reloj());
     p.refrescar();
     p.colocar(this.ancho, this.alto, this.esquema);
+    this.cursorCambio();
     return p;
   }
 
@@ -184,6 +218,7 @@ export class Registro {
     p.cerrar();
     // `g_fMenuLastClosed = gEngfuncs.GetClientTime();`  vgui_menu_interact.h:177
     this.cerradoEn = this.reloj();
+    this.cursorCambio();
     return p;
   }
 

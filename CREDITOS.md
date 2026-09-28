@@ -82,11 +82,18 @@ Está en <https://github.com/Deoroot/master-sword-rebirth-threejs>, con el tag `
 [Deoroot/MasterSwordRebirth-Xash3D](https://github.com/Deoroot/MasterSwordRebirth-Xash3D),
 que es el fork del mod del que este port lee.
 
-**Qué hay dentro, comprobado desde GitHub y no de memoria:** 226 archivos —101
-`.mjs`, 77 `.js`, 39 `.md`, 5 `.html`, 2 `.json` y los dos de `git`—. **Ni un
-binario.** El historial lleva los treinta y dos experimentos enteros; los `.glb`
-y los `.png` que aparecen en los commits antiguos son del kit CC0 y de las
-capturas del laboratorio web, y salieron del árbol en la mudanza.
+**Qué hay dentro en el tag `v0.1.0-alpha`, comprobado desde GitHub y no de
+memoria:** 226 archivos —101 `.mjs`, 77 `.js`, 39 `.md`, 5 `.html`, 2 `.json` y
+los dos de `git`—. **Ni un binario.** El historial lleva los experimentos
+enteros; los `.glb` y los `.png` que aparecen en los commits antiguos son del
+kit CC0 y de las capturas del laboratorio web, y salieron del árbol en la
+mudanza.
+
+La cuenta va atada al tag a propósito: cada experimento añade archivos, así que
+un número suelto aquí envejece sin que nadie se entere. Lo que **no** envejece
+es lo de «ni un binario», y eso no depende de que alguien lo recuerde — lo
+comprueba [test/procedencia.test.mjs](test/procedencia.test.mjs) en cada
+`npm test`.
 
 Queda una tercera cosa que **no** está resuelta por esto y conviene no
 confundir: **servir el mapa horneado desde un servidor web sí es
@@ -110,10 +117,12 @@ src/play/     la física del jugador y la manada de bichos, sin DOM
 src/red/      el WebSocket, el protocolo, el servidor de partida y su fauna
 src/juego/    personaje, estadísticas, inventario, almacén, sesión, interfaz
 tools/        extracción, medida y control
-test/         819 comprobaciones
+test/         1 000 comprobaciones
 src/vgui/     el kit de VGUI portado y los paneles del juego
-sondas/       48 sondas de navegador, que arrancan un Chromium de verdad
-doc/          los treinta informes, uno por experimento
+sondas/       53 guiones de medida; 22 de ellos son las sondas `npm run sonda:*`,
+              que arrancan un Chromium de verdad. El resto son de una vez
+doc/          41 documentos: los informes de los experimentos, los encargos
+              (PROMPT_*.md) y las notas sueltas
 ```
 
 Nada de eso contiene contenido de Master Sword, y el lector vale para

@@ -27,19 +27,34 @@ All game content is theirs; see [CREDITOS.md](CREDITOS.md).
 | **The 69 NPCs** | model, skin and animation from the `.mdl`; `npcatk_hunt`, wandering, hit reaction, monster parry, corpses that fade over 3.64 s — all simulated **on the server** |
 | **The character** | attributes, the six skill schools, experience, levels, inventory, weight, gold, quickslots, saving |
 | **Multiplayer** | a Node WebSocket server, 100 Hz ticks, delta snapshots, `ex_interp` interpolation, lag compensation with rewind |
-| **The interface** | the HUD, the event console, the main menu, and all four character panels — create a character, inventory, Character Info and the NPC interaction menu — ported from the game's own VGUI widgets and text schemes |
+| **The interface** | the HUD, the event console, the main menu, and all four character panels — create a character, inventory, Character Info and the NPC interaction menu — ported from the game's own VGUI widgets and text schemes. The inventory has the real gear column (your hands and the four containers a new character is given) and the game's Tiled / Small / Descriptions views; the F menu on yourself offers the six options the player script registers, and drops to three while you are sitting |
+| **Starting a game** | the game opens where the game opens: at the main menu. «Establish a Kingdom» brings up Valve's own Create Server window with its two tabs and its cvars, and «Start» is the door into Gate City; «Visit a Kingdom» opens Valve's server browser, which here finds the local `npm run servidor` in its **Lan** tab — there is no Steam master server behind the other five. `?map=gatecity` skips straight in, which is what `hl.exe +map` does |
+| **Settings** | Valve's own Options dialog, and nine of its thirty controls reach the game: mouse sensitivity, filtering and inversion use the mod's own formula (`sensitivity × m_yaw`, not a constant), sound and music are two separate gains as in the engine, the player name is what the character screen proposes, and brightness and gamma rebuild the 25 lightmap atlases — which is the one thing `R_GammaChanged` does. The other twenty-one are shown disabled and each says why |
+| **One quest** | the Gate City mayor's. His menu options come from *running* his `.script`, and handing him the goblin chief's head really does take it out of your pack and pay you. Quest state saves with the character |
 
-Roughly 30 000 lines of JavaScript, **819 Node checks** and 18 browser probes that
+Roughly 31 000 lines of JavaScript, **1 000 Node checks** and 22 browser probes that
 drive a real Chromium and measure what is on screen. Every ported rule cites the
 engine or mod source it came from, file and line.
 
 ## What does not work yet
 
-Quests. The NPC interaction menu reads its options from the game's own scripts — the
-mayor really does offer «Give Goblin's Head» — but choosing one does nothing yet:
-there is no quest state, no payment, no script callbacks. Also missing: shops, item
-containers, the NPC navigation graph, monster respawn, lighting on remote players,
-`wss://` and accounts.
+**Most quests.** Master Sword has no quest system: it has two script commands and a
+dictionary saved with the character, and the rest is the script interpreter — 14 000
+lines and 223 commands. 22 of those commands are ported, which is enough for the
+mayor of Gate City and not much else. Measured over the 139 scripts with an
+interaction menu: **65** build their whole menu correctly, **73** have at least one
+option you can see through to the end, and **7** work in full. `npm run guiones`
+prints the count and what is missing most — see [doc/MISIONES_33.md](doc/MISIONES_33.md).
+
+Also missing: shops, item containers, the NPC navigation graph, monster respawn,
+lighting on remote players, `wss://` and accounts.
+
+**One thing the browser takes away.** Duck is Ctrl, because `config.cfg` says so —
+but duck-and-forward is Ctrl+W, and in a browser tab that closes the tab. No amount of
+`preventDefault()` fixes it: window shortcuts are not cancelable. Press **B** to go
+fullscreen and the game gets every key, Ctrl+W included, through the Keyboard Lock API.
+Outside fullscreen, or in a browser without that API, the game warns you once and you
+can rebind Duck. See [doc/NAVEGADOR_35.md](doc/NAVEGADOR_35.md).
 
 ---
 
@@ -56,7 +71,7 @@ cd -
 
 # 2. this
 npm install
-npm test                  # 819 checks, no browser needed
+npm test                  # 1 000 checks, no browser needed
 
 # 3. extract what the browser needs into build/ (never committed)
 npm run gatecity          # the map, its textures and its lightmap
@@ -66,6 +81,7 @@ npm run sonido            # the sounds
 npm run objetos           # the item catalogue from the scripts
 npm run hud && npm run menu
 npm run vgui && npm run menus   # the VGUI text schemes and the NPC menu options
+npm run guiones                 # the NPC scripts, parsed — and the coverage census
 npm run iconos                  # the item icons for the weapon choice screen
 
 # 4. play

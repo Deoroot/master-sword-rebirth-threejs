@@ -421,6 +421,29 @@ describe("el catálogo de objetos (sólo con los scripts de MSR al lado)", { ski
   test("un script que no existe devuelve null, que no es lo mismo que vacío", () => {
     assert.equal(leerFichaObjeto(SCRIPTS, "items/no_existe_esto"), null);
   });
+
+  test("las comillas del `name` NO son parte del nombre", () => {
+    // `name "Back Sword Sheath"` y `name Small Sack` son la misma cosa: en el
+    // lenguaje de scripts las comillas agrupan y no se guardan (`GetParams`,
+    // script.cpp:5049-5064). Sin quitarlas, 125 de los 861 scripts de `items/`
+    // enseñaban su nombre entre comillas — entre ellos una funda con la que
+    // nace todo el mundo y un arma de partida, o sea las dos pantallas que ve
+    // un jugador nuevo. Ninguna prueba lo miraba.
+    const conComillas = leerFichaObjeto(SCRIPTS, "items/sheath_back");
+    assert.equal(conComillas.nombre, "Back Sword Sheath");
+    // El control por el otro lado: uno SIN comillas en el script tiene que
+    // salir igual de limpio. Si `texto()` se pasara de listo y recortara un
+    // carácter, este de aquí lo cazaría y el de arriba no.
+    const sinComillas = leerFichaObjeto(SCRIPTS, "items/pack_sack");
+    assert.equal(sinComillas.nombre, "Small Sack");
+    // Y la descripción va por el mismo camino.
+    const arma = leerFichaObjeto(SCRIPTS, "items/magic_hand_lightning_weak");
+    assert.equal(arma.nombre, "Erratic Lightning");
+    for (const f of [conComillas, sinComillas, arma]) {
+      assert.doesNotMatch(f.nombre, /"/, `${f.id} conserva una comilla`);
+      if (f.descripcion) assert.doesNotMatch(f.descripcion, /^"|"$/, `${f.id}: descripción entre comillas`);
+    }
+  });
 });
 
 describe("con qué crece cada habilidad — la hoja lo CALCULA, no lo copia", () => {

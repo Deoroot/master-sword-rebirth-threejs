@@ -52,6 +52,109 @@ export const AJUSTES = {
 const acota = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /**
+ * Los topes del motor, de `V_ValidateGammaCvars()` en `gamma.c:90-104`.
+ *
+ * Los mismos que enseñan los dos deslizadores de la pestaña Video: 1,8 a 3 el
+ * uno y 0 a 3 el otro. Que el deslizador y el motor recorten igual es la
+ * comprobación de que la escala de la ventana no es inventada.
+ */
+export const LIMITES = Object.freeze({ gamma: [1.8, 3], brillo: [0, 3] });
+
+/** Los ajustes con `gamma` y `brillo` recortados como los recorta el motor. */
+export function validar({ gamma, brillo }, base = AJUSTES) {
+  return {
+    ...base,
+    gamma: acota(Number(gamma ?? base.gamma), ...LIMITES.gamma),
+    brightness: acota(Number(brillo ?? base.brightness), ...LIMITES.brillo),
+  };
+}
+
+/**
+ * LA TABLA QUE LLEVA UN ATLAS YA HORNEADO AL QUE SALDRÍA CON OTRA GAMMA.
+ *
+ * ── Por qué hace falta, y por qué sólo el mapa de luz ──────────────────────
+ *
+ * Mover el brillo o la gamma en el motor no es un filtro encima de la pantalla:
+ * `V_CheckGamma()` reconstruye estas tablas y llama a `R_GammaChanged(false)`,
+ * que hace exactamente una cosa —
+ *
+ *     glConfig.softwareGammaUpdate = true;
+ *     GL_RebuildLightmaps();
+ *                                          ref/gl/gl_rmain.c:1017-1021
+ *
+ * — **rehacer los mapas de luz**. Las texturas del mundo NO se vuelven a subir:
+ * se quedan con la `texgamma` que tenían al cargarse, y por eso la pestaña Video
+ * lleva su nota de «hay que reiniciar». O sea que aquí basta con rehacer el
+ * atlas, y que las texturas no cambien no es un recorte nuestro: es el motor.
+ *
+ * ── Y por qué es una tabla y no un horneado ────────────────────────────────
+ *
+ * El motor rehornea desde el lump de luz crudo. Nosotros en el navegador no lo
+ * tenemos: tenemos el atlas ya horneado, que guarda `luz[i] >> 2`. Así que se
+ * deshace y se vuelve a hacer:
+ *
+ *     byte del atlas ──(inversa de la tabla vieja)──► i ──(tabla nueva)──► byte
+ *
+ * La inversa no es exacta porque 1024 índices caben en 256 bytes, y eso se mide
+ * en vez de darse por bueno: `error()` compara esta tabla con el horneado de
+ * verdad. Con las dos iguales tiene que salir la identidad, y ése es el control.
+ *
+ * Los bytes que ningún `i` produce se rellenan interpolando entre los vecinos
+ * que sí: dejarlos a cero abriría rayas negras en el atlas justo donde el
+ * remapeo no tiene nada que decir.
+ */
+export function remapearLuz(viejos, nuevos) {
+  const A = tablasDeGamma(viejos).luz;
+  const B = tablasDeGamma(nuevos).luz;
+  const suma = new Float64Array(256);
+  const cuantos = new Uint32Array(256);
+  for (let i = 0; i < 1024; i++) {
+    const v = A[i] >> 2;
+    suma[v] += B[i] >> 2;
+    cuantos[v]++;
+  }
+  const lut = new Uint8Array(256);
+  const sabidos = [];
+  for (let v = 0; v < 256; v++) {
+    if (!cuantos[v]) continue;
+    lut[v] = Math.round(suma[v] / cuantos[v]);
+    sabidos.push(v);
+  }
+  if (!sabidos.length) return lut;
+  let k = 0;
+  for (let v = 0; v < 256; v++) {
+    if (cuantos[v]) continue;
+    while (k + 1 < sabidos.length && sabidos[k + 1] <= v) k++;
+    const a = sabidos[k] < v ? sabidos[k] : null;      // el sabido de la izquierda
+    const b = sabidos[k] > v ? sabidos[k] : sabidos[k + 1] ?? null;
+    if (a === null) { lut[v] = lut[b]; continue; }     // antes del primero
+    if (b === null) { lut[v] = lut[a]; continue; }     // después del último
+    lut[v] = Math.round(lut[a] + (lut[b] - lut[a]) * ((v - a) / (b - a)));
+  }
+  return lut;
+}
+
+/**
+ * Cuánto se equivoca `remapearLuz` contra volver a hornear de verdad.
+ *
+ * Recorre los 1024 índices del motor —que es por donde pasa cada luxel— y mide
+ * la diferencia en bytes de 0 a 255 entre lo que da la tabla y lo que daría
+ * `pintarAtlas()` con la gamma nueva. Va al informe; no se adivina.
+ */
+export function errorDeRemapeo(viejos, nuevos) {
+  const A = tablasDeGamma(viejos).luz;
+  const B = tablasDeGamma(nuevos).luz;
+  const lut = remapearLuz(viejos, nuevos);
+  let peor = 0, suma = 0;
+  for (let i = 0; i < 1024; i++) {
+    const d = Math.abs(lut[A[i] >> 2] - (B[i] >> 2));
+    if (d > peor) peor = d;
+    suma += d;
+  }
+  return { peor, medio: suma / 1024 };
+}
+
+/**
  * `BuildGammaTable()` de `engine/client/gamma.c`, tal cual.
  *
  * Devuelve las dos tablas que hacen falta:

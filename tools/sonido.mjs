@@ -192,10 +192,13 @@ function wav8(muestras) {
 }
 
 /**
- * Un paso. Un paso es un GOLPE, no un tono: ruido con una envolvente muy corta.
- * Lo que distingue la piedra de la tierra es el filtro y la cola —la piedra es
- * un chasquido con un poco de cuerpo y la tierra es sorda y más larga— y eso se
- * hace con un paso bajo de un polo y otro de paso alto, sin bibliotecas.
+ * Un paso. Un paso es un GOLPE, no un tono: ruido con una envolvente muy corta,
+ * hecho con un paso bajo de un polo y otro de paso alto, sin bibliotecas.
+ *
+ * Los parámetros siguen aquí aunque hoy sólo haya una receta: el día que
+ * aparezca un mapa con madera o metal —que ésos el mod SÍ los tiene— hará falta
+ * distinguir, y entonces la distinción vendrá de que hay archivos distintos, no
+ * de que nosotros decidamos que la tierra suena más sorda.
  *
  *   `caida`  segundos a los que la envolvente cae a 1/e
  *   `bajo`   0..1: cuánto paso bajo (grave, cuerpo)
@@ -228,41 +231,84 @@ function paso({ semilla, dur, caida, bajo, alto, golpe = 0 }) {
   return out;
 }
 
-/** Las dos recetas, una por material que el mapa pisa y el juego no trae. */
-const RECETAS = {
-  piedra: { dur: 0.16, caida: 0.030, bajo: 0.40, alto: 0.30, golpe: 0.018 },
-  tierra: { dur: 0.20, caida: 0.055, bajo: 0.22, alto: 0.55, golpe: 0.022 },
-};
+// ── UNA SOLA RECETA, Y ANTES HABÍA DOS ────────────────────────────────────
+//
+// Aquí había dos, una para la piedra y otra para la tierra, elegidas para que
+// sonaran distinto: «la piedra es un chasquido con un poco de cuerpo y la
+// tierra es sorda y más larga». Sonaba bien y **era una distinción que Master
+// Sword no hace**.
+//
+// El motor sí pide un archivo distinto por material —`pl_step*` para la
+// piedra, `pl_dirt*` para la tierra, `PM_PlayStepSound`,
+// pm_shared.cpp:405-650—, pero el mod **no trae ninguno de los dos**. De los
+// `pl_*.wav` de `sound/player/` sólo están duct, ladder, snow y tile; ni
+// `pl_step*`, ni `pl_dirt*`, ni `pl_metal*`, ni `pl_slosh*`. Así que en el
+// juego de verdad la piedra y la tierra no suenan distinto: suenan igual,
+// porque a las dos les falta su archivo.
+//
+// Y en Gate City eso es casi todo el mapa. Medido sobre la superficie que se
+// pisa: **91,4 % piedra, 8,2 % tierra, 0,5 % hierba** — y de las 92 texturas
+// del mapa sólo DOS están etiquetadas en `materials.txt` (`ms_dirt01` y
+// `medgrass2_ewok`). Las otras noventa caen al `default` de
+// `PM_FindTextureType`, que es `CHAR_TEX_CONCRETE` (pm_shared.cpp:400-403), y
+// el propio archivo lo dice en su cabecera: «Stone is the default material
+// sound».
+//
+// O sea que **un juego de cuatro muestras para todos**, que es lo que hace el
+// original. Lo que sí sigue variando por material es el VOLUMEN y el intervalo,
+// y ése no es un invento nuestro: está en la tabla de `PM_UpdateStepSound`
+// (pm_shared.cpp:786-834) y vive en `MATERIALES`, de `src/play/sonido.js`.
+//
+// La hierba es el caso aparte y se queda como está: sus cuatro archivos SÍ
+// están en el mod. Lo que pasa es que son los del conducto de ventilación —ver
+// más abajo—, y eso es del original, no nuestro.
+const RECETA = { dur: 0.16, caida: 0.030, bajo: 0.40, alto: 0.30, golpe: 0.018 };
+
+// Los cuatro archivos se generan UNA VEZ y los comparten todos los materiales
+// a los que les falta el suyo. Compartir el archivo y no sólo el sonido es
+// deliberado: así el catálogo enseña la decisión en vez de esconderla detrás de
+// dos rutas distintas con el mismo contenido.
 const generados = [];
-for (const [mat, receta] of Object.entries(RECETAS)) {
-  if (!pisados.has(mat)) continue;
-  if (catalogo.pasos[mat]?.length) continue;   // si algún día SÍ están, mandan ellos
-  catalogo.pasos[mat] = [];
-  for (let i = 0; i < 4; i++) {
-    // Los cuatro no son el mismo archivo cuatro veces: cada pie lleva su
-    // semilla y un 12 % de variación en la cola, que es lo que hace que correr
-    // no suene a metrónomo.
-    const datos = wav8(paso({
-      ...receta,
-      semilla: 1000 + i * 7 + mat.length * 131,
-      caida: receta.caida * (1 + (i - 1.5) * 0.08),
-    }));
-    const rel = `gen/pl_${mat}${i + 1}.wav`;
-    mkdirSync(dirname(`${DESTINO}/${rel}`), { recursive: true });
-    writeFileSync(`${DESTINO}/${rel}`, datos);
-    bytes += datos.length;
-    catalogo.pasos[mat].push({
-      archivo: `snd/${rel}`, bytes: datos.length,
-      segundos: (datos.length - 44) / HZ, generado: true,
-    });
-    generados.push(rel);
-  }
+const PASOS_COMUNES = [];
+for (let i = 0; i < 4; i++) {
+  // Los cuatro no son el mismo archivo cuatro veces: cada pie lleva su semilla
+  // y un 12 % de variación en la cola, que es lo que hace que correr no suene a
+  // metrónomo. Eso tampoco es nuestro — el motor rota cuatro muestras.
+  const datos = wav8(paso({
+    ...RECETA,
+    semilla: 1000 + i * 7,
+    caida: RECETA.caida * (1 + (i - 1.5) * 0.08),
+  }));
+  const rel = `gen/pl_paso${i + 1}.wav`;
+  mkdirSync(dirname(`${DESTINO}/${rel}`), { recursive: true });
+  writeFileSync(`${DESTINO}/${rel}`, datos);
+  bytes += datos.length;
+  PASOS_COMUNES.push({
+    archivo: `snd/${rel}`, bytes: datos.length,
+    segundos: (datos.length - 44) / HZ, generado: true,
+  });
+  generados.push(rel);
 }
-if (generados.length) {
-  console.log(`  GENERADOS       ${generados.length} pasos nuestros para ` +
-    `${Object.keys(RECETAS).filter((m) => catalogo.pasos[m]?.[0]?.generado).join(" y ")}: ` +
-    `el mod no trae los de Valve y sin ellos correr es mudo`);
+
+// ── Y NO se le dan al agua, a propósito ───────────────────────────────────
+//
+// El recorrido es sobre `porMaterial`, que es **la superficie de suelo medida
+// en este mapa**, y no sobre `pisados`, que incluye además el chapoteo y el
+// vadeo. Al agua le falta su archivo igual que a la piedra (`pl_slosh*` y
+// `pl_wade*` tampoco están en el mod), pero darle la muestra genérica no sería
+// «el mismo sonido para todos los materiales»: sería meter un taconazo de
+// piedra en un charco, que es un ruido que ni el juego hace ni nadie ha pedido.
+// Se queda muda, como estaba, y queda dicho para que sea una decisión y no un
+// olvido.
+const sinArchivo = [];
+for (const mat of porMaterial.keys()) {
+  if (catalogo.pasos[mat]?.length) continue;   // si el mod SÍ los trae, mandan ellos
+  catalogo.pasos[mat] = PASOS_COMUNES.map((s) => ({ ...s }));
+  sinArchivo.push(mat);
 }
+console.log(`  GENERADOS       ${generados.length} pasos nuestros, los MISMOS para ` +
+  `${sinArchivo.join(", ") || "ninguno"}: el mod no trae los de Valve, así que en el ` +
+  `juego esos materiales tampoco suenan distinto`);
 
 // --- 4c. los sonidos del jugador que SÍ están --------------------------------
 //
@@ -343,6 +389,41 @@ if (faltan.length) {
   console.log(`  NO ESTÁN        ${faltan.length}: ${[...new Set(faltan.map((f) => f.replace(/\d+\.wav$/, "*.wav")))].join(", ")}`);
   console.log(`                  son de la carpeta 'valve' de Half-Life, y Rebirth es standalone`);
   console.log(`                  (gameinfo.txt: basedir "msr"). No los tiene el juego tampoco.`);
+}
+
+// ── EL CONTROL DE QUE TODOS SUENAN IGUAL, con su contrario al lado ────────
+//
+// El primero solo no valdría: saldría verde igual si el catálogo dejara los dos
+// materiales mudos, o si no hubiera materiales. El segundo es el que lo sujeta
+// —la hierba SÍ tiene sus archivos en el mod y por eso suena distinto—, y entre
+// los dos dicen lo que de verdad se quería decir: **lo que decide si dos
+// materiales suenan distinto es si el mod trae sus archivos, no nosotros.**
+{
+  const archivosDe = (m) => (catalogo.pasos[m] ?? []).map((s) => s.archivo).join("|");
+  const generados = [...porMaterial.keys()].filter((m) => catalogo.pasos[m]?.[0]?.generado);
+  const distintos = new Set(generados.map(archivosDe));
+  if (generados.length < 2) {
+    console.error(`  FALLO: sólo ${generados.length} material generado. Con menos de dos, «todos`);
+    console.error(`         suenan igual» no dice nada: no hay dos que comparar.`);
+    process.exit(1);
+  }
+  if (distintos.size !== 1) {
+    console.error(`  FALLO: ${generados.join(", ")} tendrían que compartir las MISMAS muestras`);
+    console.error(`         y hay ${distintos.size} juegos distintos. El mod no trae pl_step* ni`);
+    console.error(`         pl_dirt*, así que en el juego tampoco suenan distinto.`);
+    process.exit(1);
+  }
+  const conArchivo = [...porMaterial.keys()].filter((m) => catalogo.pasos[m]?.length && !catalogo.pasos[m][0].generado);
+  if (!conArchivo.some((m) => archivosDe(m) !== archivosDe(generados[0]))) {
+    console.error(`  FALLO: ningún material del mapa suena distinto a los generados. Entonces`);
+    console.error(`         el control de arriba no puede fallar: revisa que la hierba siga`);
+    console.error(`         cogiendo sus pl_duct*.wav del mod.`);
+    process.exit(1);
+  }
+  console.log(`\n  control         ${generados.join(" y ")} comparten las mismas 4 muestras ` +
+    `(${(100 * [...porMaterial].filter(([m]) => generados.includes(m)).reduce((a, [, n]) => a + n, 0) /
+        [...porMaterial.values()].reduce((a, b) => a + b, 0)).toFixed(1)} % del suelo), ` +
+    `y ${conArchivo.join(", ")} no, porque el mod sí trae sus archivos`);
 }
 
 // EL CONTROL, y es un control de control: si un día no faltara ninguno,

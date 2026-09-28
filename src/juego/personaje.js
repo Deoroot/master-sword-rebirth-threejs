@@ -37,6 +37,11 @@ const CONOCIDOS = new Set([
   "version", "id", "creado", "actualizado", "nombre", "genero", "oro",
   "habilidades", "objetos", "manos", "hechizos", "mapasVisitados",
   "mapa", "vida", "mana", "ranuras",
+  // Desde el 33. Ver `src/play/misiones.js`: es `m_Quests`, una lista de pares
+  // `{n, d}`, y en el fichero del motor es su propio trozo con etiqueta
+  // (`CHARDATA_QUESTS1`, sv_character.cpp:687). Un personaje de antes no lo
+  // trae y se abre con la lista vacía; lo comprueba `juego_misiones.test.mjs`.
+  "misiones",
 ]);
 
 /**
@@ -89,6 +94,9 @@ export function crearPersonaje({ nombre, genero = "male", arma, nuevoPersonaje =
     // Las 36 ranuras, vacías. Un personaje nuevo no trae ninguna puesta: en MSR
     // se graban aguantando una tecla, y `CreateChar` no toca `m_QuickSlots`.
     ranuras: new Array(RANURAS_DEL_PERSONAJE).fill(null),
+    // `m_Quests` de un personaje recién creado está vacío: `CreateChar` no lo
+    // toca. Va explícito para que el documento tenga siempre la misma forma.
+    misiones: [],
     mapasVisitados: [],
     mapa: null,
     // Empieza lleno. Los máximos no se guardan porque se derivan: guardarlos
@@ -156,6 +164,24 @@ export function abrirPersonaje(doc) {
   }
   p.mapasVisitados = Array.isArray(p.mapasVisitados) ? p.mapasVisitados : [];
   if (typeof p.oro !== "number") p.oro = 0;
+
+  // LAS MISIONES, y el motivo por el que esto es TRES líneas y no una
+  // migración: el fichero de Master Sword son trozos con etiqueta y el último
+  // valor del enum es `CHARDATA_UNKNOWN` con el comentario «If >=
+  // CHARDATA_UNKNOWN, then skip it?». Añadir un trozo no rompe lo guardado, y
+  // no encontrarlo no es un error: es un personaje de antes.
+  //
+  // Se rellena con la lista vacía y **no se sube la versión**, porque la forma
+  // no ha cambiado de manera incompatible: un personaje del 33 abierto por el
+  // código del 32 pierde las misiones al releerlo… no, tampoco: el 32 lo
+  // conserva como «campo que no conozco». Las dos direcciones funcionan, que
+  // es lo que la regla de la cabecera promete y lo que una prueba comprueba.
+  if (!Array.isArray(p.misiones)) {
+    if (p.misiones !== undefined) avisos.push("las misiones venían con otra forma: se empieza de cero");
+    p.misiones = [];
+  }
+  // Una entrada suelta rota no puede tirar el personaje entero: se tira ella.
+  p.misiones = p.misiones.filter((q) => q && typeof q.n === "string").map((q) => ({ n: q.n, d: String(q.d ?? "") }));
 
   const extra = Object.keys(p).filter((k) => !CONOCIDOS.has(k));
   if (extra.length) avisos.push(`campos que este código no conoce y se conservan: ${extra.join(", ")}`);

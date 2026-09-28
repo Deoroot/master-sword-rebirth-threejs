@@ -65,7 +65,26 @@ export const MEDIDAS = {
   filaAlto: 18,                       // lo que ocupa un objeto en la lista
   etiquetaAlto: 12,
   infoPrimera: 20,                    // INFOPANEL_LABEL_SPACER1_Y
+  // `VGUI_InvTypePanel`, vgui_container.cpp:517-524. MiB FEB2015_07 los tres
+  // botones de vista, y FEB2019_25 la casilla de ordenar.
+  vistaY: 10,                         // INVTYPE_PANEL_Y, bajo el contenedor
+  vistaAlto: 64,
+  vistaBotonAncho: 80, vistaBotonAlto: 15,
+  vistaSepX: 12, vistaSepY: 12,
 };
+
+/**
+ * Los tres modos de lista y la casilla de ordenar.
+ *
+ *     const char ButtonText[INVTYPE_BUTTONS_TOTAL][16] =
+ *         {"Tiled", "Small", "Descriptions"};        vgui_container.cpp:531
+ *
+ * El orden es el del array y no se toca: es el que se ve en pantalla. La
+ * casilla va DEBAJO del primero, no al lado (`INVTYPE_BUTTON_SIZE_Y +
+ * INVTYPE_BUTTON_Y_SPACER` como `y`, vgui_container.cpp:533), y guarda su valor
+ * en una cvar —`ms_alpha_inventory`— o sea que sobrevive a cerrar el panel.
+ */
+export const VISTAS = ["Tiled", "Small", "Descriptions"];
 
 /** Los colores, de `vgui_container.cpp:36-40` y del constructor del panel. */
 export const COLORES = {
@@ -107,6 +126,9 @@ export const CSS = `
 .vg-inv-fila[data-elegida="si"] { color: rgb(255, 0, 0); }
 .vg-inv-icono { image-rendering: pixelated; flex: none; }
 .vg-inv-nada { opacity: 0.55; }
+/* «Descriptions» parte la fila en dos líneas, así que deja de ser una fila. */
+.vg-inv-descriptions { flex-wrap: wrap; white-space: normal; }
+.vg-inv-desc { flex-basis: 100%; opacity: 0.7; font-size: 0.9em; }
 `;
 
 /**
@@ -188,7 +210,11 @@ export class PanelDeInventario extends PanelConNombre {
     });
     this.raiz.anadir(this.panelInfo);
     this.info = {};
-    for (const [i, clave] of ["nombre", "peso", "cantidad", "calidad"].entries()) {
+    // `carga` es la quinta y es NUESTRA: el peso que llevas encima frente al
+    // que puedes. MSR no la enseña en este panel —va en Character Info—, pero
+    // el `Volume()` es del juego y sin verlo aquí no hay forma de saber por qué
+    // un objeto no cabe. Se pone la última y se dice que es añadida.
+    for (const [i, clave] of ["nombre", "peso", "cantidad", "calidad", "carga"].entries()) {
       const l = new MSLabel({
         texto: "", x: 0, y: MEDIDAS.infoPrimera + i * MEDIDAS.etiquetaAlto,
         w: MEDIDAS.equipoAncho, h: MEDIDAS.etiquetaAlto, alineacion: "center",
@@ -220,15 +246,97 @@ export class PanelDeInventario extends PanelConNombre {
     });
     this.raiz.anadir(this.cancelar);
 
+    // ── LOS TRES BOTONES DE VISTA Y LA CASILLA ──────────────────────────
+    //
+    // `VGUI_InvTypePanel`, debajo del contenedor y a la izquierda del botón de
+    // acción (`INVTYPE_PANEL_SIZE_X = ITEM_CONTAINER_SIZE_X - ACTBTN_SIZE_X`).
+    // Los tres van en fila; la casilla, debajo del primero.
+    this.vista = 0;
+    this.alfabetico = false;
+    this.botonesVista = [];
+    for (const [i, texto] of VISTAS.entries()) {
+      const b = new MSButton({
+        texto,
+        x: contenedorX() + MEDIDAS.vistaSepX + i * (MEDIDAS.vistaBotonAncho + MEDIDAS.vistaSepX),
+        y: MEDIDAS.contenedorY + MEDIDAS.contenedorAlto + MEDIDAS.vistaY,
+        w: MEDIDAS.vistaBotonAncho, h: MEDIDAS.vistaBotonAlto,
+        armado: [...COLORES.rojo], desarmado: [...COLORES.blanco],
+        alineacion: "center", esquema: "ID Text",
+        alPulsar: () => { this.vista = i; this.refrescar(); },
+      });
+      this.raiz.anadir(b);
+      this.botonesVista.push(b);
+    }
+    this.casillaAlfabetico = new MSButton({
+      texto: "Alphabetic",
+      x: contenedorX() + MEDIDAS.vistaSepX,
+      y: MEDIDAS.contenedorY + MEDIDAS.contenedorAlto + MEDIDAS.vistaY
+         + MEDIDAS.vistaBotonAlto + MEDIDAS.vistaSepY,
+      w: MEDIDAS.vistaBotonAncho, h: MEDIDAS.vistaBotonAlto,
+      armado: [...COLORES.rojo], desarmado: [...COLORES.blanco],
+      alineacion: "west", esquema: "ID Text",
+      alPulsar: () => { this.alfabetico = !this.alfabetico; this.refrescar(); },
+    });
+    this.raiz.anadir(this.casillaAlfabetico);
+
     /** Para `SlotInput` y para la sonda. */
-    this.botones = [this.accion, this.cancelar];
+    this.botones = [this.accion, this.cancelar, ...this.botonesVista, this.casillaAlfabetico];
   }
 
-  /** Lo que hay dentro del contenedor elegido ahora. */
+  /** Lo que hay dentro del contenedor elegido ahora, en el orden que toque. */
   get objetos() {
     const e = this.equipo?.() ?? [];
     const cual = e[this.elegidoEquipo] ?? null;
-    return cual ? (this.dentro?.(cual.id) ?? []) : [];
+    const lista = cual ? (this.dentro?.(cual.id) ?? []) : [];
+    // `IsAlphabetical()` ordena por el nombre que se ve, no por la clave del
+    // script: en pantalla «Rusty Short Sword» va antes que «Small Sack» aunque
+    // sus ids sean `swords_rsword` y `pack_sack`.
+    return this.alfabetico
+      ? [...lista].sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)))
+      : lista;
+  }
+
+  /**
+   * El título y el subtítulo, que en el original son TRES estados y no uno.
+   *
+   *     if (!m_GearPanel->m_Selected || SelectedItems.size() > 0)
+   *         "Click container to move selected item, or click again to equip"
+   *         ...y el botón: oculto con las manos, «Drop Selected» si no
+   *     else
+   *         "Double click to use item or click Remove to unequip container.
+   *          Right click to split a stack."
+   *         ...y si lo elegido NO es un contenedor: "Remove wearable item"
+   *                                     vgui_containerlist.cpp:135-167
+   *
+   * `m_Selected == 0` son **las manos**, que es la primera entrada de la
+   * columna y no un «nada elegido». Por eso con las manos delante el botón de
+   * acción desaparece: no hay nada que quitarse.
+   *
+   * Y el título es el nombre del contenedor elegido, no «Inventory» — eso sólo
+   * sale si el id no resuelve (`vgui_containerlist.cpp:272-283`). Con las manos
+   * pone **«Player hands»**, con hache minúscula, mientras que la columna de la
+   * izquierda las llama «Player Hands». Son dos cadenas distintas en el
+   * original y se copian las dos como están.
+   */
+  textos() {
+    const e = this.equipo?.() ?? [];
+    const cual = e[this.elegidoEquipo] ?? null;
+    const enManos = this.elegidoEquipo === 0;
+    const titulo = enManos ? "Player hands" : (cual?.nombre ?? "Inventory");
+    if (enManos || this.elegidoObjeto !== null) {
+      return {
+        titulo,
+        subtitulo: "Click container to move selected item, or click again to equip",
+        accion: enManos ? null : "Drop Selected",
+      };
+    }
+    return {
+      titulo,
+      subtitulo: cual?.esContenedor === false
+        ? "Remove wearable item"
+        : "Double click to use item or click Remove to unequip container. Right click to split a stack.",
+      accion: "Remove",
+    };
   }
 
   hacer() {
@@ -296,9 +404,11 @@ export class PanelDeInventario extends PanelConNombre {
     const objs = this.objetos;
     this.listaObjetos.replaceChildren();
     for (const o of objs) {
-      const fila = el("div", "vg-inv-fila");
+      const fila = el("div", `vg-inv-fila vg-inv-${VISTAS[this.vista].toLowerCase()}`);
       fila.dataset.elegida = o.id === this.elegidoObjeto ? "si" : "no";
-      if (o.icono) {
+      // «Small» es la lista sin iconos: es para lo que está, para que quepan
+      // más objetos de los que caben con el icono de 128 al lado.
+      if (o.icono && this.vista !== 1) {
         const img = el("img", "vg-inv-icono");
         img.src = o.icono; img.alt = "";
         fila.appendChild(img);
@@ -308,12 +418,24 @@ export class PanelDeInventario extends PanelConNombre {
       // cuando el objeto es agrupable.
       t.textContent = o.cantidad > 1 ? `${o.cantidad} ${o.nombre}` : o.nombre;
       fila.appendChild(t);
+      // «Descriptions»: la misma línea que el juego enseña abajo a la izquierda
+      // al señalar un objeto («The rusted metal is light and easy to swing…»),
+      // aquí debajo del nombre.
+      if (this.vista === 2 && o.descripcion) {
+        const d = el("div", "vg-inv-desc");
+        d.textContent = o.descripcion;
+        fila.appendChild(d);
+      }
       fila.addEventListener("click", () => { this.elegidoObjeto = o.id; this.refrescar(); });
       this.listaObjetos.appendChild(fila);
     }
     if (!objs.length) {
+      // `m_NoItems = new MSLabel(..., "No items", ...)`, vgui_mscontrols.cpp:642.
+      // Decía «empty», que es nuestro. Un contenedor vacío es lo que ve un
+      // personaje recién creado en sus cuatro fundas, así que es de las cadenas
+      // que más se leen en el juego.
       const vacio = el("div", "vg-inv-fila vg-inv-nada");
-      vacio.textContent = "empty";
+      vacio.textContent = "No items";
       this.listaObjetos.appendChild(vacio);
     }
 
@@ -323,12 +445,29 @@ export class PanelDeInventario extends PanelConNombre {
     this.info.peso.ponTexto(sel ? `Weight: ${Number(sel.peso ?? 0).toFixed(2)}` : "");
     this.info.cantidad.ponTexto(sel && sel.cantidad > 1 ? `Quantity: ${sel.cantidad}` : "");
     this.info.calidad.ponTexto(sel?.calidad != null ? `Quality: ${sel.calidad}` : "");
-    this.accion.habilitar(Boolean(sel));
+    // El título, el subtítulo y el botón, con sus tres estados.
+    const t = this.textos();
+    this.titulo.ponTexto(t.titulo);
+    this.accion.ponTexto(t.accion ?? "Remove");
+    // `m_ActButton->setVisible(false)` con las manos: no se OCULTA a medias ni
+    // se apaga, desaparece.
+    this.accion.ver(t.accion !== null);
+    this.accion.habilitar(Boolean(sel) || t.accion === "Remove");
+
+    // Los tres botones de vista: el elegido se ve ARMADO, no apagado. Apagarlo
+    // lo dejaría gris y sin poder pulsarse, que es lo contrario de «éste es el
+    // que está puesto».
+    for (const [i, b] of this.botonesVista.entries()) b.armar(i === this.vista);
+    this.casillaAlfabetico.ponTexto?.(this.alfabetico ? "[x] Alphabetic" : "[ ] Alphabetic");
 
     const c = this.carga?.() ?? null;
     this.etiquetaOro.ponTexto(`Gold: ${this.oro?.() ?? 0}`);
-    this.subtitulo.ponTexto(this.aviso
-      || (c ? `${c.lleva.toFixed(1)} / ${c.puede} weight` : ""));
+    // El aviso manda sobre el texto de ayuda, y cuando no hay aviso el
+    // subtítulo es el del original. El peso baja al panel de información, que
+    // es donde MSR pone lo que pesa: en el subtítulo era una añadidura nuestra
+    // ocupando el sitio de la línea que explica cómo se usa el panel.
+    this.subtitulo.ponTexto(this.aviso || t.subtitulo);
+    if (c) this.info.carga?.ponTexto(`${c.lleva.toFixed(1)} / ${c.puede} weight`);
 
     if (this._ancho) this.colocar(this._ancho, this._alto, this.esquema);
     return this;
@@ -346,6 +485,12 @@ export class PanelDeInventario extends PanelConNombre {
     this.panelContenedor.pon({ x: cx, w: cw });
     this.accion.pon({ x: cx + cw - MEDIDAS.accionAncho });
     this.cancelar.pon({ x: cx + cw - MEDIDAS.cancelarAncho });
+    // Los de vista cuelgan de `INVTYPE_PANEL_X = ITEM_CONTAINER_X`, o sea que
+    // se mueven con el contenedor igual que todo lo demás de la derecha.
+    for (const [i, b] of this.botonesVista.entries()) {
+      b.pon({ x: cx + MEDIDAS.vistaSepX + i * (MEDIDAS.vistaBotonAncho + MEDIDAS.vistaSepX) });
+    }
+    this.casillaAlfabetico.pon({ x: cx + MEDIDAS.vistaSepX });
     super.colocar(ancho, alto, esquema);
     // Las dos listas son hijas de sus paneles y ocupan lo que ellos: se les da
     // el tamaño aquí porque el `Panel` no sabe de scroll.

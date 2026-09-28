@@ -18,7 +18,8 @@ import { Esquema, pilaDe } from "../src/vgui/esquema.js";
 import { flexDe, ALINEACION, opacidadDeFondo } from "../src/vgui/widgets.js";
 import { centrado, centradoConFallo, COLORES, MEDIDAS } from "../src/vgui/menubase.js";
 import { Registro, PanelConNombre, ATRAPA_NUMEROS, CERRAR_CON_ESC, ATRAPA_RUEDA, DESVANECIDO, TRAGA_USAR, RUEDA } from "../src/vgui/registro.js";
-import { opcionesDe, llevaObjeto, costeDe, puedePagar, opcionesDelJugador } from "../src/play/opciones.js";
+import { opcionesDe, llevaObjeto, costeDe, puedePagar, opcionesDelJugador,
+  opcionesDeOtroJugador, TIPOS } from "../src/play/opciones.js";
 import { ACCIONES, porDefecto } from "../src/juego/teclas.js";
 import { deVgui } from "../src/juego/paleta.js";
 
@@ -332,6 +333,63 @@ test("el reparto de teclas lo hace el registro, no el panel", async (t) => {
   });
 });
 
+// ── 3b. EL PUNTERO, que es lo que hacía los paneles inservibles ─────────────
+//
+// El fallo: `atrapaElRaton` estaba escrito desde el 29 y nadie lo conectaba, así
+// que el inventario y el menú de la F se abrían con el puntero atrapado en el
+// `canvas` y **no se podía pulsar ni un botón**. El motor no deja esa decisión al
+// panel: la toma el viewport en `UpdateCursorState`, al abrir y al cerrar
+// (vgui_teamfortressviewport.cpp:1489-1493, vgui_global.cpp:67-72).
+
+test("el registro avisa de quién manda el puntero", async (t) => {
+  const esquema = new Esquema(null, 640);
+  const hacer = () => {
+    const avisos = [];
+    const r = new Registro({ esquema, cursor: (atrapa) => avisos.push(atrapa) });
+    return { r, avisos };
+  };
+
+  await t.test("abrir un panel normal pide soltar el puntero, y cerrarlo devolverlo", () => {
+    const { r, avisos } = hacer();
+    r.poner(new Espia("inventory", ATRAPA_NUMEROS | CERRAR_CON_ESC));
+    r.abrir("inventory");
+    assert.deepEqual(avisos, [true], "al abrir: el ratón es del panel");
+    r.cerrar();
+    assert.deepEqual(avisos, [true, false], "al cerrar: el ratón vuelve al juego");
+  });
+
+  await t.test("pero la hoja NO lo suelta, porque es `m_NoMouse`", () => {
+    // El control opuesto, y no es un detalle: `CStatPanel` se lee sin perder la
+    // cámara (`m_NoMouse = true`, vgui_stats.cpp:75 → vgui_global.cpp:103-108).
+    // Portarlo al revés daría una hoja de personaje que te suelta el ratón.
+    const { r, avisos } = hacer();
+    r.poner(new Espia("stats", CERRAR_CON_ESC, true));
+    r.abrir("stats");
+    assert.deepEqual(avisos, [false], "abierta y con el puntero todavía atrapado");
+    assert.equal(r.atrapaElRaton, false);
+  });
+
+  await t.test("y cambiar de panel avisa de los dos, en orden", () => {
+    // No se apilan: abrir el inventario con la hoja delante cierra la hoja
+    // (`CanOpen`, vgui_global.cpp:92-96). O sea que el aviso tiene que pasar por
+    // el `false` del cierre antes del `true` del nuevo, y no saltárselo.
+    const { r, avisos } = hacer();
+    r.poner(new Espia("stats", CERRAR_CON_ESC, true));
+    r.poner(new Espia("inventory", CERRAR_CON_ESC));
+    r.abrir("stats");
+    r.abrir("inventory");
+    assert.deepEqual(avisos, [false, false, true]);
+  });
+
+  await t.test("sin `cursor` no se cae: el registro corre igual en Node", () => {
+    // Las pruebas y el servidor montan registros sin DOM. Si `cursorCambio`
+    // exigiera el callback, esto sería un `TypeError` en cada prueba de arriba.
+    const r = new Registro({ esquema });
+    r.poner(new Espia("x", 0));
+    assert.doesNotThrow(() => { r.abrir("x"); r.cerrar(); });
+  });
+});
+
 // ── 4. LAS OPCIONES, QUE SON DEL SERVIDOR ───────────────────────────────────
 
 test("las opciones de un NPC salen de su script", async (t) => {
@@ -374,9 +432,15 @@ test("las opciones de un NPC salen de su script", async (t) => {
     assert.deepEqual(ops[0].condiciones, ["QUEST_X == 0", "$item_exists(PARAM1,item_letter_almund)"]);
   });
 
-  await t.test("EL FALLO DEL SCRIPT: un `if` sin llaves guarda sólo la línea siguiente", () => {
-    // `menuitem.register` no limpia `reg.mitem.*` (npcscript.cpp:940-1000), así
-    // que sin el objeto la opción se registra igual con el título ANTERIOR.
+  await t.test("un `if` VIEJO gobierna todo lo que viene detrás, no una línea", () => {
+    // Esta prueba fijaba un hallazgo FALSO: decía que sin el mineral salía
+    // «Ask about broken axe» dos veces, porque `menuitem.register` no limpia
+    // `reg.mitem.*` (npcscript.cpp:940-1000) — cierto— y el `if` guardaba sólo
+    // el título —también cierto—. Lo que faltaba es que hay DOS condicionales:
+    // `if ( X )` se salta sus hijos y sigue, `if X` **abandona el evento**
+    // (`break; //Old if command`, script.cpp:5754-5758; la distinción se hace
+    // en :5310-5317 por el paréntesis). Sin el mineral no se registra nada
+    // más, así que no hay duplicado: hay una opción que desaparece.
     const ops = leerOpciones(bloqueDe(`
 { game_menu_getoptions
 	local reg.mitem.title 	"Ask about broken axe"
@@ -391,8 +455,36 @@ test("las opciones de un NPC salen de su script", async (t) => {
 }
 `, "game_menu_getoptions"));
     assert.equal(ops.length, 2);
-    assert.deepEqual(ops[1].condiciones, [], "el registro NO está guardado por el if");
-    assert.equal(ops[1].guardaSoloElTitulo, "$item_exists(PARAM1,item_ore_lorel)");
+    // La primera va ANTES del `if` viejo, así que no la toca.
+    assert.deepEqual(ops[0].condiciones, [], "la de antes del if no está guardada");
+    assert.equal(ops[0].cortes, 0);
+    // Y la segunda sí: si el `if` falla, el evento se abandona y ésta no llega
+    // a registrarse. O sea que la condición SÍ la gobierna, al revés de lo que
+    // decía esta prueba.
+    assert.deepEqual(ops[1].condiciones, ["$item_exists(PARAM1,item_ore_lorel)"]);
+    assert.equal(ops[1].cortes, 1);
+  });
+
+  await t.test("y el `if` NUEVO, con paréntesis, no se lleva a las de detrás", () => {
+    // El control que sujeta al de arriba: si los dos `if` se trataran igual,
+    // los dos saldrían con `cortes` y el de arriba estaría verde por casualidad.
+    const ops = leerOpciones(bloqueDe(`
+{ game_menu_getoptions
+	if ( $item_exists(PARAM1,item_x) )
+	{
+		local reg.mitem.title 	"Con el objeto"
+		local reg.mitem.type 	callback
+		menuitem.register
+	}
+	local reg.mitem.title 	"Siempre"
+	local reg.mitem.type 	callback
+	menuitem.register
+}
+`, "game_menu_getoptions"));
+    assert.equal(ops.length, 2);
+    assert.deepEqual(ops[0].condiciones, ["$item_exists(PARAM1,item_x)"]);
+    assert.equal(ops[0].cortes, 0, "el nuevo no es un corte");
+    assert.deepEqual(ops[1].condiciones, [], "y la de detrás se registra igual");
   });
 
   await t.test("`stradd` concatena, que es como se compone «Pay N gold»", () => {
@@ -478,14 +570,39 @@ test("las opciones de un NPC salen de su script", async (t) => {
     assert.deepEqual(opcionesDe({ opciones: {} }, "no/existe", PERSONAJE), []);
   });
 
-  await t.test("el menú del propio jugador: describir lo que llevas en la mano", () => {
-    // `else pMonster = pPlayer;` (client.cpp:679-682) y `MOT_DESC` ->
-    // `ShowWeaponDesc(player.ActiveItem())`. Con la mano vacía no hay nada que
-    // describir y el menú se queda con el Cancel, que es lo que hace el juego.
-    assert.deepEqual(opcionesDelJugador(PERSONAJE).map((o) => o.tipo), ["itemdesc"]);
-    assert.match(opcionesDelJugador(PERSONAJE)[0].titulo, /Rusty Short Sword/);
-    assert.deepEqual(opcionesDelJugador({ manos: {} }), []);
-    assert.deepEqual(opcionesDelJugador(null), []);
+  await t.test("el menú del propio jugador son las SEIS de player_sv_menu.script", () => {
+    // Antes aquí había una sola entrada, «Describe <lo de la mano>», deducida
+    // del C++. El menú del jugador no lo decide el C++: lo decide un script,
+    // igual que el de cualquier NPC (player_sv_menu.script:11-15). Los títulos
+    // se comprueban LITERALES porque son los que se ven en la pantalla del
+    // juego, y una errata aquí es una errata en la interfaz.
+    assert.deepEqual(opcionesDelJugador(PERSONAJE).map((o) => o.titulo), [
+      "Sit Down (Rest)",
+      "Emote: Nod Yes",
+      "Emote: Nod No",
+      "Emote: Stand At Attention",
+      "Item Desc",
+      "Forgive Last PK",
+    ]);
+    assert.deepEqual(opcionesDelJugador(PERSONAJE).map((o) => o.tipo),
+      ["callback", "callback", "callback", "callback", "itemdesc", "forgive"]);
+    // Los ocho tipos del motor mandan: ninguno puede ser inventado.
+    for (const o of opcionesDelJugador(PERSONAJE)) assert.ok(TIPOS.includes(o.tipo), o.tipo);
+  });
+
+  await t.test("y sentado el menú ENCOGE, que es la única condición que tiene", () => {
+    // `if ( !$get(ent_me,sitting) )` gobierna la primera y envuelve las tres
+    // emociones: de pie seis, sentado tres. Sin este control lo de arriba
+    // pasaría igual con la condición sin portar.
+    const sentado = opcionesDelJugador(PERSONAJE, { sentado: true });
+    assert.deepEqual(sentado.map((o) => o.titulo), ["Stand Up", "Item Desc", "Forgive Last PK"]);
+    assert.equal(opcionesDelJugador(PERSONAJE, { sentado: false }).length, 6);
+  });
+
+  await t.test("el menú de OTRO jugador está vacío, y es del original", () => {
+    // `menu_other` existe y no registra nada: Give/Trade/Party/Duel están
+    // comentadas enteras en player_sv_menu.script:74-91 y :160-186.
+    assert.deepEqual(opcionesDeOtroJugador(), []);
   });
 
   if (existsSync("build/gatecity/menus.json")) {

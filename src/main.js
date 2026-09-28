@@ -12,7 +12,9 @@ import {
   regeneracionDeAguante,
   aguanteDeSalto,
 } from "./play/movimiento.js";
-import { Teclas, RANURAS } from "./juego/teclas.js";
+import { Teclas, RANURAS, ACCIONES, nombreDeTecla } from "./juego/teclas.js";
+import { atraparTeclado, avisoDeReservadas, tecladoAtrapado, soltarTeclado, enPantallaCompleta }
+  from "./juego/navegador.js";
 import {
   atributosDe, derivadas, habilidadDeArma, propiedadesDe, valorDeHabilidad,
 } from "./juego/stats.js";
@@ -47,7 +49,19 @@ import { Volumenes } from "./play/volumenes.js";
 import { solidosDeAdornos, solidosDeBichos } from "./play/solidos.js";
 import { Pasos, materialDe, sonidoDeCaida } from "./play/sonido.js";
 import { Audio } from "./play/audio.js";
+// LO QUE HACE CADA AJUSTE (experimento 37): la fórmula del ratón del mod, la
+// ganancia del volumen y la tabla que lleva el atlas de una gamma a otra.
+import { Raton, ganancia, PITCH_MAX } from "./play/aplicar.js";
+import { porDefecto as ajustesPorDefecto } from "./play/ajustes.js";
+import { rehacerMapaDeLuz } from "./render/regamma.js";
+import { AJUSTES as GAMMA_HORNEADA, validar as validarGamma } from "./bsp/gamma.js";
 import { montarInterfaz } from "./juego/interfaz.js";
+// LAS VENTANAS DE VALVE (VGUI2, experimento 34): «Options» y «Servers».
+//
+// Son OTRO sistema de interfaz, no los paneles del mod: otra letra, otros
+// colores y el alfa al revés. Por eso viven en `src/vgui2/` y no en `src/vgui/`.
+// Ver `doc/VGUI2_34.md` §1.
+import { montarVgui2 } from "./vgui2/montar.js";
 import { montarHud, cargaDelTiro } from "./juego/hudms.js";
 import { montarMenu } from "./juego/menums.js";
 import { cargarEsquema } from "./vgui/esquema.js";
@@ -59,6 +73,8 @@ import { PanelDeInventario, CSS as CSS_INVENTARIO } from "./vgui/contenedor.js";
 import { PanelDeHoja } from "./vgui/estadisticas.js";
 import { Retratos } from "./render/retratos.js";
 import { opcionesDe as opcionesDeNpc, opcionesDelJugador } from "./play/opciones.js";
+import { GuionDeNpc, RelojDeGuiones } from "./play/npcguion.js";
+import { nombreVisibleDe } from "./play/usaropcion.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
 import { AlmacenLocal, AlmacenMemoria } from "./juego/almacen.js";
 import { Sesion, ESTADO, guardarAlCerrar } from "./juego/sesion.js";
@@ -71,14 +87,19 @@ import {
   experienciaDelBicho,
 } from "./juego/servidor.js";
 import { ClienteDeRed, AlmacenRemoto } from "./red/cliente.js";
-import { enlaceDeNavegador, urlPorDefecto } from "./red/navegador.js";
+import { enlaceDeNavegador, urlPorDefecto, listarPartidas } from "./red/navegador.js";
 import { BOTON } from "./red/protocolo.js";
 import { cargarOtros } from "./render/otros.js";
 // La sonda: dos mil líneas que no son el juego y que hasta el 28 vivían aquí.
 import { montarSonda } from "./dev/sonda.js";
 
 const DT = 1 / 60;
-const MOUSE = 0.0022;
+// EL RATÓN. Aquí había `const MOUSE = 0.0022` —radianes por cuenta, elegidos a
+// ojo—, y era lo que hacía imposible que el deslizador de sensibilidad sirviera
+// para nada. Ahora es la fórmula del mod con sus tres cvars; ver
+// `src/play/aplicar.js`. Con los valores del `config.cfg` gira 0,22 grados por
+// cuenta, que es casi el doble de lo que giraba.
+const raton = new Raton();
 
 // Los BOTONES DE JUEGO —los que cuentan como `pev->button`— y sus teclas por
 // defecto viven ahora en `src/juego/teclas.js`, sacados del `config.cfg` de la
@@ -128,6 +149,19 @@ let retratosDelPanel = null;
 let esquemaVgui = null;
 /** Las opciones de menú de los NPC, de `build/gatecity/menus.json`. */
 let fichaDeMenus = null;
+/**
+ * Los GUIONES de los NPC, de `build/gatecity/guiones.json` (`npm run guiones`).
+ *
+ * Desde el 33 las opciones no se leen de una ficha: se sacan de EJECUTAR el
+ * `game_menu_getoptions` del NPC, que es lo que hace el servidor
+ * (msmonsterserver.cpp:2890). `fichaDeMenus` se queda de respaldo para el NPC
+ * cuyo guion no esté horneado.
+ */
+let fichaDeGuiones = null;
+/** El reloj de los `calleventtimed`. Lo mueve `pasoDelHud`, como todo lo demás. */
+const relojDeGuiones = new RelojDeGuiones();
+/** Un `GuionDeNpc` por bicho, creado la primera vez que se le habla. */
+const guionesVivos = new Map();
 /**
  * La munición que el jugador ha elegido a mano con el ciclador, o `null` para
  * la que el motor da de balde. Vive aquí y no en el personaje porque en el
@@ -235,6 +269,17 @@ async function mainGateCity() {
   const elMapa = new Promise((ok) => { mapaListo = ok; });
 
   let interfaz = null;
+  let vgui2 = null;                  // las ventanas de Valve: Options y Servers
+  // Lo que la ventana de Options deja puesto al pulsar «Apply», y lo que hace.
+  //
+  // `ajustesDelJugador` es lo aplicado; `aplicarAjustes` es quien lo reparte, y
+  // se rellena más abajo, cuando existen el atlas de luz y el audio. Hasta
+  // entonces «Apply» guarda y no rompe: es la misma idea que `mapaListo`.
+  // Ver `doc/AJUSTES_37.md`.
+  let ajustesDelJugador = ajustesPorDefecto();
+  let aplicarAjustes = null;
+  // Si se entra por el menú, el juego espera ahí en vez de ir a elegir personaje.
+  let entrarPorElMenu = false;
   let sesion = null;
   let aparicion = null;
   let catalogoDeObjetos = null;
@@ -248,6 +293,10 @@ async function mainGateCity() {
   //
   // Si no hay servidor al otro lado, se sigue en local y se dice. Un juego que
   // no arranca porque la partida está apagada sería peor que uno de un jugador.
+  // `?map=` es la línea de comandos del juego (`hl.exe +map <mapa>`): entra sin
+  // pasar por el menú. Sin ella se entra por el menú, que es lo que hace Master
+  // Sword. Ver el bloque «POR DÓNDE SE ENTRA», más abajo.
+  const mapaPedido = new URLSearchParams(location.search).get("map");
   const pedida = new URLSearchParams(location.search).get("red");
   let red = null;
   let enlaceDeRed = null;
@@ -306,7 +355,56 @@ async function mainGateCity() {
       panelDePersonajes: () => (vgui?.buscar("newchar") ? (vgui.abrir("newchar"), true) : false),
       panelDeInventario: () => (vgui?.buscar("inventory") ? (vgui.abrir("inventory"), true) : false),
       panelDeHoja: () => (vgui?.buscar("stats") ? (vgui.abrir("stats"), true) : false),
+      panelDeOpciones: () => (vgui2 ? (vgui2.abrirOpciones(), true) : false),
     });
+
+    // ── LAS VENTANAS DE VALVE ──────────────────────────────────────────────
+    //
+    // No esperan al mapa: su esquema es un `.json` aparte y sin él se dibujan
+    // igual con lo que `src/vgui2/esquema.js` trae escrito. Así la G funciona
+    // desde el primer momento.
+    //
+    // `puedeCapturar` es el reparto del ratón entre las DOS capas de interfaz,
+    // y son dos condiciones, no una:
+    //
+    //   `vgui?.atrapaElRaton`  hay un panel de VGUI1 abierto que se queda el
+    //                          ratón. `stats` NO cuenta, y es correcto: tiene
+    //                          `m_NoMouse`, así que con la hoja delante el
+    //                          puntero es del juego y devolvérselo no se lo
+    //                          quita a nadie.
+    //   `interfaz?.abierta`    eligiendo personaje o muerto. Sin esto, cerrar
+    //                          una ventana durante la pantalla de muerte le
+    //                          quita el ratón a quien necesita pulsar un botón.
+    montarVgui2({
+      teclas, acciones: ACCIONES,
+      puedeCapturar: () => !vgui?.atrapaElRaton && !interfaz?.abierta,
+      alAplicar: (valores) => { ajustesDelJugador = valores; aplicarAjustes?.(valores); },
+      // LA LISTA, y sólo la pestaña **Lan** devuelve algo.
+      //
+      // No hay maestro de Steam y no lo va a haber: esto es una pestaña de
+      // navegador. Lo que sí hay es el servidor del experimento 27
+      // —`npm run servidor`, que publica su resumen en `/partidas`—, y eso es
+      // exactamente lo que en Master Sword es un servidor de LAN: uno que está
+      // en tu máquina y que el maestro no conoce. Así que va en «Lan» y no en
+      // «Internet», que sería mentir de otra forma.
+      //
+      // `resumen` ya trae `nombre`, `mapa`, `jugadores` y `max`, que son cuatro
+      // de las cinco columnas del navegador. La latencia se deja en blanco en
+      // vez de inventarse un número: medirla de verdad es abrir el socket.
+      buscarServidores: async (pestana) => {
+        if (pestana !== "Lan") return [];
+        const partidas = await listarPartidas().catch(() => []);
+        return partidas.map((p) => ({
+          candado: "", favorito: "",
+          nombre: p.nombre ?? "Master Sword: Rebirth",
+          juego: "MS:R", mapa: p.mapa ?? "gatecity",
+          jugadores: `${p.jugadores ?? 0} / ${p.max ?? 0}`,
+          ping: "", url: p.url,
+        }));
+      },
+      alConectar: (fila) => { if (fila?.url) location.search = `?red=${encodeURIComponent(fila.url)}`; },
+      porQueVacio: "No Steam master server here. Run `npm run servidor` and look in the Lan tab.",
+    }).then((v) => { vgui2 = v; }).catch((e) => console.warn("sin las ventanas de VGUI2:", e));
     retratosDelPanel = new Retratos(losCuerpos);
     // ── LOS PANELES DE VGUI ───────────────────────────────────────────────
     //
@@ -331,6 +429,13 @@ async function mainGateCity() {
     } catch (e) {
       console.warn("las opciones de los NPC no están extraídas (`npm run menus`):", e);
     }
+    try {
+      const g = await fetch("build/gatecity/guiones.json").then((r) => (r.ok ? r.json() : null));
+      if (g) fichaDeGuiones = g;
+    } catch (e) {
+      console.warn("los guiones de los NPC no están extraídos (`npm run guiones`): " +
+        "el menú se queda con la ficha del 29 y elegir una opción no hará nada.", e);
+    }
     esquemaVgui = await cargarEsquema("build/gatecity/", innerWidth);
     if (!document.getElementById("vg-css")) {
       const s = document.createElement("style");
@@ -346,6 +451,35 @@ async function mainGateCity() {
       raiz: capaVgui,
       reloj: () => reloj,
       sonar: (cual) => menuMs?.sonar?.(cual),
+      // EL PUNTERO. Ver `cursorCambio` en `src/vgui/registro.js` para las citas:
+      // esto es la mitad del motor que toca el DOM, y por eso vive aquí.
+      //
+      // Faltaba, y el fallo era de los que no se ven leyendo el panel: el
+      // inventario y el menú de la F abrían perfectos —con sus botones, sus
+      // textos y su ratón encima— y no se podía pulsar **ni uno**, porque el
+      // puntero seguía atrapado en el `canvas` y los clics no llegaban al DOM.
+      // `atrapaElRaton` estaba escrito desde el 29 y nadie lo conectaba.
+      cursor: (atrapa) => {
+        if (atrapa) { document.exitPointerLock?.(); return; }
+        // Y AL CERRAR SE VUELVE A ATRAPAR, que es lo que hace el motor: sin
+        // menú, `UpdateCursorState` llama a `IN_ResetMouse()` y baja
+        // `g_iVisibleMouse`, o sea que el ratón es del juego otra vez en el
+        // mismo fotograma (vgui_teamfortressviewport.cpp:1741-1750).
+        //
+        // Aquí hay una diferencia del navegador que conviene dejar escrita:
+        // `requestPointerLock` exige un gesto del usuario. Cerrar un panel
+        // siempre es uno —la Escape, un número, un clic en un botón—, así que
+        // dentro de ese manejador se concede. Si algún día se cierra solo (un
+        // temporizador, el servidor), no se concederá y **no pasa nada**: el
+        // clic en el `canvas` de más abajo lo recupera. Por eso esto no
+        // comprueba el resultado ni avisa de nada.
+        if (interfaz?.abierta) return;    // eligiendo personaje o muerto: no
+        // Chrome devuelve una promesa desde la 111 y las versiones viejas no
+        // devuelven nada. Sin este `if` una negativa sale por la consola como
+        // un error sin atrapar, que es ruido justo donde se mira si hay fallos.
+        const pedido = canvas.requestPointerLock?.();
+        if (pedido?.catch) pedido.catch(() => {});
+      },
     });
     vgui.medir(innerWidth, innerHeight);
 
@@ -380,6 +514,8 @@ async function mainGateCity() {
       esquema: esquemaVgui,
       retratos: retratosDelPanel,
       armas: armasDePartida,
+      // El cvar `name`, que es de dónde saca el mod el nombre que propone.
+      nombrePropuesto: ajustesDelJugador?.nombre ?? "",
       // `listar()` es sincrono porque el panel se redibuja en cada fotograma del
       // desvanecido; la lista se refresca aparte y se queda cacheada.
       listar: () => censoDePersonajes,
@@ -404,28 +540,83 @@ async function mainGateCity() {
     // `VGUI_ContainerPanel`. Retira la rejilla inventada de
     // `src/juego/inventario.js`. Ver `doc/INVENTARIO_31.md`.
     //
-    // El «equipo» son los contenedores que llevas encima. Master Sword tiene
-    // cuatro de partida (`reg.newchar.freeitems`: dos vainas, una funda de daga
-    // y un zurrón) y aquí todavía no hay contenedores de verdad —está en el
-    // pendiente desde el 25—, así que la columna tiene una sola entrada, «Pack»,
-    // que es todo lo que llevas. Se dice y no se disimula: el panel está y la
-    // cosa que va dentro, no.
+    // ── LA COLUMNA DEL EQUIPO, QUE ESTABA INVENTADA ─────────────────────
+    //
+    // Aquí había UNA entrada, «Pack», y todo lo que llevas dentro. La columna
+    // de Master Sword son **las manos y luego tus contenedores**, y un
+    // personaje nuevo nace con cuatro:
+    //
+    //     local reg.newchar.freeitems
+    //         sheath_belt_holster;sheath_back;sheath_dagger;pack_sack
+    //                                     global.script:29
+    //
+    // O sea Heavy Weapon Holster, Back Sword Sheath, Dagger Sheath y Small
+    // Sack, que son exactamente los cuatro de una captura del juego. No hacía
+    // falta nada nuevo: `crearPersonaje()` ya se los daba y el catálogo ya los
+    // lee con `tipo: "contenedor"`. Lo que faltaba era enseñarlos.
+    //
+    // `m_Selected == 0` son **las manos** (`vgui_containerlist.cpp:275-282`),
+    // así que van las primeras y no son un contenedor más.
     const fichaDeObjeto = (id) => catalogoDeObjetos?.porId?.get(id) ?? null;
     const iconoDe = (id) => {
       const ic = iconosDeArma?.objetos?.[id] ?? null;
       return ic ? `${iconosDeArma.base}${ic.archivo}` : null;
     };
+    const MANOS = "hands";
+    /** El id del contenedor por defecto: el primero que el personaje lleve. */
+    const contenedoresDe = (p) => (p?.objetos ?? [])
+      .filter((o) => fichaDeObjeto(o.id)?.tipo === "contenedor");
+    const enMano = (p) => [p?.manos?.derecha, p?.manos?.izquierda]
+      .filter(Boolean)
+      .map((m) => (typeof m === "string" ? m : (m.clave ?? m.id)));
+    const verObjeto = (o) => {
+      const f = fichaDeObjeto(o.id);
+      return {
+        id: o.uid ?? o.id, nombre: f?.nombre ?? o.id,
+        peso: f?.peso ?? 0, cantidad: o.n ?? 1, calidad: o.calidad ?? null,
+        icono: iconoDe(o.id),
+        // Para el botón «Descriptions», que es una de las tres vistas del
+        // original (`vgui_container.cpp:531`).
+        descripcion: f?.descripcion ?? null,
+      };
+    };
     vgui.poner(new PanelDeInventario({
       esquema: esquemaVgui,
-      equipo: () => [{ id: "pack", nombre: "Pack", esContenedor: true }],
-      dentro: () => (sesion?.personaje?.objetos ?? []).map((o) => {
-        const f = fichaDeObjeto(o.id);
-        return {
-          id: o.uid ?? o.id, nombre: f?.nombre ?? o.id,
-          peso: f?.peso ?? 0, cantidad: o.n ?? 1, calidad: o.calidad ?? null,
-          icono: iconoDe(o.id),
-        };
-      }),
+      equipo: () => {
+        const p = sesion?.personaje ?? null;
+        return [
+          { id: MANOS, nombre: "Player Hands", esContenedor: true },
+          ...contenedoresDe(p).map((o) => ({
+            id: o.uid ?? o.id,
+            nombre: fichaDeObjeto(o.id)?.nombre ?? o.id,
+            esContenedor: true,
+          })),
+        ];
+      },
+      // ── Y QUÉ HAY DENTRO DE CADA UNO ──────────────────────────────────
+      //
+      // En las manos, lo que llevas en ellas. En los contenedores, nada —
+      // **que es lo que ve un personaje recién creado en el juego**: sus cuatro
+      // fundas vacías y «No items».
+      //
+      // La excepción es NUESTRA y se dice: lo que recoges del suelo no tiene
+      // todavía un contenedor al que ir, porque el reparto de verdad
+      // (`ITEM_CONTAINER`, capacidad por volumen, mover de uno a otro) sigue en
+      // el pendiente. Va al PRIMER contenedor que lleves, que en un personaje
+      // nuevo es el Heavy Weapon Holster. Es visible y se puede sacar; lo que
+      // no es todavía es correcto.
+      dentro: (cual) => {
+        const p = sesion?.personaje ?? null;
+        if (!p) return [];
+        const manos = new Set(enMano(p));
+        if (cual === MANOS) return (p.objetos ?? []).filter((o) => manos.has(o.id)).map(verObjeto);
+        const cajas = contenedoresDe(p).map((o) => o.uid ?? o.id);
+        // Sólo el primero recibe lo suelto; los demás salen vacíos.
+        if (cual !== cajas[0]) return [];
+        return (p.objetos ?? [])
+          .filter((o) => !manos.has(o.id) && fichaDeObjeto(o.id)?.tipo !== "contenedor")
+          .map(verObjeto);
+      },
       oro: () => sesion?.personaje?.oro ?? 0,
       carga: () => {
         const p = sesion?.personaje;
@@ -434,10 +625,12 @@ async function mainGateCity() {
         const c = cargaDe(p.objetos.map((o) => ({ ...o, ficha: fichaDeObjeto(o.id) })), r.derivadas.carga);
         return { lleva: c.peso, puede: c.capacidad };
       },
-      // Todavía no hay a dónde sacar ni de dónde meter: un solo contenedor. El
-      // botón dice lo que pasa en vez de no hacer nada, que es lo que se hizo
-      // con las entradas apagadas del menú principal.
-      actuar: () => "Containers are not in this port yet: everything is in one pack.",
+      // El botón de acción. En el original «Remove» se quita el contenedor
+      // (`ServerCmd("remove <id>")`, vgui_containerlist.cpp:169-174) y para eso
+      // hace falta poder llevar cosas de un contenedor a otro, que es lo que no
+      // está. Dice lo que pasa en vez de no hacer nada, igual que las entradas
+      // apagadas del menú principal.
+      actuar: () => "Moving items between containers is not in this port yet.",
     }));
 
     // ── CHARACTER INFO ──────────────────────────────────────────────────
@@ -465,9 +658,26 @@ async function mainGateCity() {
 
 
     guardarAlCerrar(sesion);
-    // La pantalla de personajes, YA. El mapa viene detras.
     document.getElementById("intro").hidden = true;
-    await sesion.arrancar();
+
+    // ── POR DÓNDE SE ENTRA ────────────────────────────────────────────────
+    //
+    // En Master Sword no se entra a jugar: se entra al MENÚ, y desde ahí o
+    // montas una partida local («Establish a Kingdom») o te conectas a una
+    // ajena («Visit a Kingdom»). Hasta el experimento 36 este port arrancaba
+    // directo en la pantalla de personajes, o sea que hacía «Establish a
+    // Kingdom» **sola, en silencio y sin que nadie la pidiera**.
+    //
+    // Y saltarse el menú también es del juego: `hl.exe -game msc +map <mapa>`
+    // entra sin pasar por él. Aquí eso es `?map=`, que es lo que llevan puesto
+    // las veinte sondas desde siempre —y por eso ninguna se entera de este
+    // cambio—. El parámetro existía y no hacía nada; ahora es la línea de
+    // comandos.
+    // El menú se monta más abajo —necesita su ficha horneada—, así que aquí
+    // sólo se apunta por dónde hay que entrar y se abre cuando exista. Llamarlo
+    // ahora abriría un menú que todavía es `null`.
+    if (mapaPedido) await sesion.arrancar();
+    else entrarPorElMenu = true;
   } catch (e) {
     console.warn("el ciclo de sesion no se ha podido montar:", e);
   }
@@ -574,6 +784,39 @@ async function mainGateCity() {
   // en el primer clic o tecla y no al cargar. Sin esto «no suena» y no hay error.
   const audio = new Audio({ base: "build/gatecity", unidadesPorMetro: level.unitsPerMetre });
   const catalogoSonido = await audio.cargar();
+
+  // ── LO QUE HACE «APPLY» ─────────────────────────────────────────────────
+  //
+  // Los nueve ajustes sin `porQueNo` de `src/play/ajustes.js`, repartidos desde
+  // un solo sitio. Aquí y no en la ventana: `src/vgui2/` no sabe que hay un
+  // juego debajo, igual que un `Frame` no sabe qué hay detrás.
+  //
+  // La gamma con la que se horneó el atlas la dice el MANIFIESTO, no una
+  // constante: `npm run gatecity` la escribe al hornear, y si algún día se
+  // hornea con otra, el remapeo tiene que salir de la que hay en el archivo.
+  const gammaDelAtlas = {
+    ...GAMMA_HORNEADA,
+    gamma: level.manifiesto.luz?.gamma ?? GAMMA_HORNEADA.gamma,
+    brightness: level.manifiesto.luz?.brillo ?? GAMMA_HORNEADA.brightness,
+    texgamma: level.manifiesto.luz?.gammaTextura ?? GAMMA_HORNEADA.texgamma,
+    overbright: level.manifiesto.luz?.overbright ?? GAMMA_HORNEADA.overbright,
+  };
+  let ultimaLuz = null;
+  aplicarAjustes = (v = ajustesDelJugador) => {
+    raton.poner({ sensibilidad: v.sensibilidad, invertido: v.ratonInvertido, filtro: v.filtro });
+    audio.volumenes({ efectos: v.volumen, musica: v.volumenMp3 });
+    // El cvar `name`: lo que propone la pantalla de crear personaje.
+    vgui?.buscar("newchar")?.proponerNombre(v.nombre ?? "");
+    // Y el mapa de luz, que es lo único que rehace el motor al mover la gamma.
+    ultimaLuz = rehacerMapaDeLuz(
+      atlas, gammaDelAtlas, validarGamma({ gamma: v.gamma, brillo: v.brillo }, gammaDelAtlas)
+    );
+    return ultimaLuz;
+  };
+  // Y se aplican YA, sin esperar a que nadie pulse «Apply»: los valores por
+  // defecto son los del `config.cfg`, o sea los que tenía puestos quien jugaba.
+  aplicarAjustes();
+
   const pasos = new Pasos({ multijugador: true });
   let ambienteMontado = false;
   // Cuantas veces una puerta ha PEDIDO su sonido. Se cuenta aparte de si suena
@@ -883,6 +1126,41 @@ async function mainGateCity() {
         else interfaz?.opciones?.();
         return true;
       }
+      if (que === "servidores") {
+        // El navegador de servidores del 34. El menú se queda detrás, como en
+        // el juego: en la captura del menú principal se ven las dos cosas.
+        vgui2?.abrirServidores();
+        return true;
+      }
+      if (que === "crearPartida") {
+        // «Establish a Kingdom», y es por donde se entra a jugar desde el 36.
+        // El menú se queda detrás igual que con el navegador de servidores.
+        vgui2?.abrirCrearServidor({
+          alEmpezar: ({ valores }) => {
+            // LA PANTALLA COMPLETA VA PRIMERA Y SIN `await` DELANTE. Pedir el
+            // teclado sólo vale dentro del gesto del usuario que lo disparó, y
+            // este manejador sigue dentro del clic en «Start». Un `await` antes
+            // —cargar el mapa, arrancar la sesión— pierde el gesto y el
+            // navegador la rechaza sin decir por qué.
+            if (valores.pantallaCompleta) {
+              // Se cuenta con el mismo `suceso()` que la tecla de pantalla
+              // completa, para que el jugador lea lo mismo venga por donde
+              // venga.
+              atraparTeclado(document.documentElement).then((r) => {
+                if (r.teclado) suceso("bueno", "Fullscreen: the game now gets every key, Ctrl+W included.");
+                else if (r.pantallaCompleta) suceso("nopuedes", `Fullscreen, but the browser keeps its shortcuts (${r.porque}).`);
+                else suceso("nopuedes", `Could not go fullscreen (${r.porque}).`);
+              });
+            }
+            // Sólo hay un mapa portado, así que `mapa` todavía no elige nada:
+            // está para no mentir en la lista. Ver `src/play/crearpartida.js`.
+            menuMs.cerrar();
+            entrarPorElMenu = false;
+            sesion?.arrancar();
+          },
+        });
+        return true;
+      }
       if (que === "desconectar") {
         menuMs.cerrar();
         sesion?.guardar({ forzar: true });
@@ -892,6 +1170,52 @@ async function mainGateCity() {
       return false;
     },
   });
+
+  // Y si se entra por el menú —o sea, sin `?map=`—, ahora que existe, se abre.
+  // El mapa se sigue cargando por detrás mientras tanto, igual que antes se
+  // cargaba mientras se elegía personaje: el menú no es una pausa.
+  if (entrarPorElMenu) menuMs.abrir();
+
+  // ── LOS GUIONES DE LOS NPC ────────────────────────────────────────────────
+  //
+  // Uno por bicho y **vivo mientras el mapa lo esté**: en Master Sword el
+  // `CScript` cuelga de la entidad, así que `QUEST_GOBLINCHIEF` y
+  // `ZOMBIE_COUNT` del alcalde duran lo que dure la partida. Aquí igual: el
+  // guion se crea la primera vez que se le habla y se queda en `guionesVivos`.
+  //
+  // Lo que NO dura es lo que vive en el jugador: las misiones, el oro y los
+  // objetos van en el personaje y se guardan con él (`src/play/misiones.js`).
+  // Ésa es la línea que separa lo que se pierde al reiniciar el mapa de lo que
+  // no, y es la misma que traza el motor.
+
+  /** El identificador con el que los scripts se refieren al jugador. */
+  const refDelJugador = () => sesion?.personaje?.id ?? "player";
+
+  function guionDe(instancia) {
+    if (!instancia || !fichaDeGuiones) return null;
+    const clave = instancia.id;
+    if (guionesVivos.has(clave)) return guionesVivos.get(clave);
+    const ficha = fichaDeGuiones.guiones?.[instancia.ficha?.script ?? ""] ?? null;
+    if (!ficha) { guionesVivos.set(clave, null); return null; }
+    const g = new GuionDeNpc({
+      ficha,
+      npc: {
+        nombre: instancia.ficha?.nombre ?? "Someone",
+        script: instancia.ficha?.script ?? "",
+        get origen() { return (instancia.donde ?? []).join(" "); },
+      },
+      catalogo: catalogoDeObjetos?.porId ?? null,
+      suceso,
+      // `playanim once nod` — npcscript.cpp:1487. Es `deUnaVez`, que es la
+      // misma puerta que usan la esquiva y la muerte: una vez y sin que la
+      // interrumpa nada. Un modelo sin esa secuencia devuelve `false` y no
+      // pasa nada, que es lo que hace el motor con `LookupSequence` a −1.
+      animar: (nombre) => { try { bichos.deUnaVez?.(instancia, nombre); } catch { /* el modelo no la tiene */ } },
+      programar: (s, que) => relojDeGuiones.programar(s, que),
+    });
+    guionesVivos.set(clave, g);
+    return g;
+  }
 
   // ── EL MENÚ DE INTERACCIÓN, que necesita a los bichos y al jugador ────────
   vgui.poner(new MenuInteractuar({
@@ -926,14 +1250,43 @@ async function mainGateCity() {
       if (!quien) {
         return { nombre: "You", opciones: opcionesDelJugador(sesion?.personaje ?? null) };
       }
+      const nombre = quien.ficha?.nombre ?? "Someone";
+      // EL CAMINO BUENO: se ejecuta su `game_menu_getoptions` de verdad.
+      const guion = guionDe(quien);
+      if (guion) {
+        return {
+          nombre,
+          opciones: guion.pedirOpciones({
+            personaje: sesion?.personaje ?? null,
+            ref: refDelJugador(),
+          }).map((o) => ({ titulo: o.titulo, tipo: o.tipo, datos: o.datos, porque: "" })),
+        };
+      }
+      // El respaldo del 29, para un NPC sin guion horneado: la ficha, con lo
+      // que no se pueda decidir apagado y con su motivo.
       return {
-        nombre: quien.ficha?.nombre ?? "Someone",
+        nombre,
         opciones: opcionesDeNpc(fichaDeMenus, quien.ficha?.script ?? "", sesion?.personaje ?? null),
       };
     },
     elegido(id, indice) {
-      if (indice === null) return;                 // cancelar: el −1 del original
-      suceso("aviso", "That is not implemented yet: quests are not in this port.");
+      if (indice === null) {
+        // Cancelar. En el motor es el −1, y **sí llama a `game_menu_cancel`**
+        // (msmonsterserver.cpp:2920-2926), que algún script usa.
+        const quien = id === null ? null : bichos.manada?.de?.(id);
+        guionDe(quien)?.elegir(-1, { personaje: sesion?.personaje ?? null, ref: refDelJugador() });
+        return;
+      }
+      const quien = id === null ? null : bichos.manada?.de?.(id);
+      const guion = guionDe(quien);
+      if (!guion) {
+        suceso("nopuedes", "That is not implemented yet: this NPC has no ported script.");
+        return;
+      }
+      guion.elegir(indice, { personaje: sesion?.personaje ?? null, ref: refDelJugador() });
+      // El personaje ha podido cambiar de oro, de objetos y de misiones: se
+      // guarda como después de cualquier otra cosa que lo cambie.
+      sesion?.guardar?.();
     },
   }));
 
@@ -1102,6 +1455,9 @@ async function mainGateCity() {
       (n instanceof HTMLElement && n.isContentEditable);
   };
 
+  // Una sola vez por partida: el aviso de que el navegador se queda con Ctrl+W.
+  // Repetirlo en cada agachada sería peor que no decirlo.
+  let avisado = false;
   addEventListener("keydown", (e) => {
     // Escribiendo no pasa NADA al juego: ni acciones ni perillas. Y la Escape
     // si pasa, porque es la que cierra el panel donde se esta escribiendo.
@@ -1121,6 +1477,34 @@ async function mainGateCity() {
     // numeros. Y con la hoja de personaje abierta es justo cuando uno quiere
     // mirarlos.
     if (e.code === "F3") { hud.hidden = !hud.hidden; e.preventDefault(); return; }
+    // ── LAS TECLAS QUE SON DEL NAVEGADOR ──────────────────────────────────
+    //
+    // Va aquí arriba, antes de todo, porque no es una acción del juego: es la
+    // frontera con el sitio donde se juega. Ver `src/juego/navegador.js`, que
+    // es nuestro entero y explica por qué esto no se arregla con
+    // `preventDefault()` — los atajos de la ventana no son cancelables.
+    if (teclas.accionDe(e.code) === "pantallaCompleta") {
+      // Dentro del manejador de la tecla, que es el gesto que las dos APIs
+      // exigen. Si el navegador no trae Keyboard Lock se queda en pantalla
+      // completa y se dice: media solución es mejor que un botón mudo.
+      atraparTeclado(document.documentElement).then((r) => {
+        if (r.teclado) suceso("bueno", "Fullscreen: the game now gets every key, Ctrl+W included.");
+        else if (r.pantallaCompleta) suceso("nopuedes", `Fullscreen, but the browser keeps its shortcuts (${r.porque}).`);
+        else suceso("nopuedes", `Could not go fullscreen (${r.porque}).`);
+      });
+      e.preventDefault();
+      return;
+    }
+    // EL AVISO, al pulsar el modificador y no al completar el atajo: con Ctrl+W
+    // no hay segunda oportunidad, el `keydown` llega y la pestaña se cierra. Así
+    // que se avisa cuando el Ctrl baja, que es antes.
+    if (!avisado && !tecladoAtrapado() && /^(Control|Alt)(Left|Right)$/.test(e.code)) {
+      const aviso = avisoDeReservadas({ mapa: teclas.mapa, acciones: ACCIONES, yaAvisado: avisado });
+      if (aviso) {
+        avisado = true;
+        suceso("nopuedes", `${aviso} Press ${nombreDeTecla(teclas.mapa.pantallaCompleta)}.`);
+      }
+    }
     // RePÁG Y AVPÁG recorren la consola de sucesos, igual que en el juego:
     // `HUD_StepInput(HUDSCROLL_UP/DOWN)` → `VGUI_EventConsole::StepInput`. Van
     // antes del `conPanel` por lo mismo que la F3 — mirar lo que pasó no es
@@ -1321,6 +1705,12 @@ async function mainGateCity() {
     teclas.arriba(e.code);
   });
   addEventListener("blur", () => { keys.clear(); teclas.soltarTodo(); });
+  // Salir de pantalla completa suelta el teclado SOLO, sin avisarnos: sin esto
+  // `tecladoAtrapado()` se quedaría diciendo que sí y el aviso de Ctrl+W no
+  // volvería a salir nunca, que es justo cuando hace falta otra vez.
+  addEventListener("fullscreenchange", () => {
+    if (!enPantallaCompleta()) { soltarTeclado(); avisado = false; }
+  });
   // El raton tambien da botones de juego: MOUSE1 es `+attack` y MOUSE2
   // `+attack2` en el `config.cfg`. Se registran con los mismos nombres que
   // usan las asignaciones.
@@ -1357,11 +1747,15 @@ async function mainGateCity() {
   }, { passive: false });
   addEventListener("mousemove", (e) => {
     if (document.pointerLockElement !== canvas) return;
-    player.yaw -= e.movementX * MOUSE;
-    player.pitch = Math.max(
-      -Math.PI / 2 + 0.01,
-      Math.min(Math.PI / 2 - 0.01, player.pitch - e.movementY * MOUSE)
-    );
+    const g = raton.mover(e.movementX, e.movementY);
+    player.yaw += g.yaw;
+    // `cl_pitchup`/`cl_pitchdown`, 89 grados, en vez del ±(90 − 0,57) de antes.
+    player.pitch = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, player.pitch + g.pitch));
+  });
+  // Al soltar el puntero se olvida la muestra vieja del filtro: si no, el primer
+  // movimiento después de volver al juego se promedia con uno de hace un minuto.
+  document.addEventListener("pointerlockchange", () => {
+    if (document.pointerLockElement !== canvas) raton.olvidar();
   });
 
   const counters = {
@@ -2880,6 +3274,10 @@ async function mainGateCity() {
   const velocidadParaLosPasos = () => [...player.vel];
 
   function pasoDelHud(dt) {
+    // Los `calleventtimed` de los guiones, con el MISMO reloj que todo lo
+    // demás. Va antes del `if (!hudMs)` a propósito: una conversación no se
+    // puede quedar parada porque el HUD no esté montado.
+    relojDeGuiones.paso(dt);
     if (!hudMs) return;
     const p = sesion?.personaje ?? null;
     const lim = sesion?.limites ?? null;
@@ -3038,6 +3436,12 @@ async function mainGateCity() {
     get golpesDados() { return golpesDados; },
     get golpesRecibidos() { return golpesRecibidos; },
     get grupos() { return grupos; },
+    // Lo del 33. `guionDe` va entero porque la sonda necesita el MISMO objeto
+    // que usa el menú: si mirara otro, mediría otro alcalde.
+    get guionDe() { return guionDe; },
+    get guionesVivos() { return guionesVivos; },
+    get relojDeGuiones() { return relojDeGuiones; },
+    get fichaDeGuiones() { return fichaDeGuiones; },
     get gruposDetalle() { return gruposDetalle; },
     get vgui() { return vgui; },
     get retratosDelPanel() { return retratosDelPanel; },
@@ -3045,6 +3449,21 @@ async function mainGateCity() {
     get huidas() { return huidas; },
     get impactos() { return impactos; },
     get interfaz() { return interfaz; },
+    // Las ventanas de Valve. Se devuelve el mando entero y no un resumen porque
+    // la sonda necesita `estado()`, pero OJO: la sonda no tiene que abrir con
+    // esto la primera vez —para eso está la G—, sólo leer y encadenar.
+    vgui2: () => vgui2,
+    // LOS AJUSTES APLICADOS (experimento 37). Lo que se expone es el EFECTO y
+    // no lo que dice la ventana: el ratón devuelve los grados con los que gira
+    // de verdad y el audio la ganancia de sus dos canales, porque «la ventana
+    // dice 5» y «el juego gira a 5» son dos afirmaciones distintas y la que
+    // importa es la segunda.
+    get ajustesAplicados() { return { ...ajustesDelJugador }; },
+    get raton() { return raton; },
+    get luzRehecha() { return ultimaLuz; },
+    // El atlas QUIETO, que es el que mira `ajustes.brilloDelAtlas()`.
+    atlasDeLuz: () => atlas?.quieta ?? null,
+    get gammaDelAtlas() { return gammaDelAtlas; },
     get keys() { return keys; },
     get level() { return level; },
     get loQueVale() { return loQueVale; },

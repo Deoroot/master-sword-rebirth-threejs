@@ -106,6 +106,20 @@ export const ACCIONES = [
   { clave: "opciones", nombre: "Options", cfg: "g", boton: false },
   { clave: "menu", nombre: "Main Menu", cfg: "ESCAPE", boton: false },
   { clave: "marcador", nombre: "Scoreboard", cfg: "TAB", boton: false },
+  // PANTALLA COMPLETA, que **no existe en Master Sword** y no podría: un juego de
+  // escritorio ya tiene la ventana entera y ya tiene el teclado entero. Ésta es
+  // NUESTRA, como ALT y ALT GR de arriba, y se dice.
+  //
+  // No es un adorno. Es la única manera de que el navegador ceda Ctrl+W, o sea
+  // la única manera de poder agacharse y avanzar a la vez —que es cómo se sube a
+  // los sitios estrechos desde Half-Life— sin que se cierre la pestaña. El por
+  // qué, con lo que se puede y lo que no, está en `src/juego/navegador.js`.
+  //
+  // La `b` es elección nuestra: no la usa ningún `bind` del `config.cfg` y no es
+  // atajo de ningún navegador. La F11, que sería la obvia, no sirve —se la queda
+  // el navegador y no llega nunca—, y ésa es justo la clase de cosa que hay que
+  // escribir para que nadie la «arregle» poniéndola ahí.
+  { clave: "pantallaCompleta", nombre: "Fullscreen (web port only)", cfg: "b", boton: false },
 ];
 
 /** Las doce ranuras rápidas, en orden. */

@@ -186,7 +186,11 @@ const GRUPOS = [
  */
 export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos = null,
                                  raiz = document.body, panelDePersonajes = null,
-                                 panelDeInventario = null, panelDeHoja = null }) {
+                                 panelDeInventario = null, panelDeHoja = null,
+                                 // La ventana «Options» de VGUI2 (experimento
+                                 // 34). Mismo trato que las tres de arriba: si
+                                 // existe, la pantalla suplente de aquí no sale.
+                                 panelDeOpciones = null }) {
   if (!sesion) throw new Error("la interfaz cuelga de una sesión");
   const almacen = sesion.almacen;
   if (!document.getElementById("mx-css")) {
@@ -715,6 +719,12 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   // `config.cfg` de la instalación de Master Sword, y por eso la hoja de
   // personaje es la **P** y no la C.
   function pantallaOpciones() {
+    // La ventana de verdad es la de VGUI2: siete pestañas con la letra y los
+    // colores del juego (`src/vgui2/opciones.js`). Lo de aquí abajo es la
+    // pantalla suplente —una sola pestaña, la de las teclas, con letra de
+    // navegador— y se queda por la misma razón que las otras tres: se monta a
+    // los 231 ms y la ventana buena necesita el esquema horneado. Si está, gana.
+    if (panelDeOpciones?.()) { cerrar(); return; }
     if (!teclas) return;
     let esperando = null;   // la acción a la que se le está buscando tecla
 
@@ -827,6 +837,8 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     if (accion === "inventario" && !panelDeInventario) {
       e.preventDefault(); activo() ? pantallaInventario() : pantallaElegir();
     }
+    // La G. Si hay ventana de VGUI2 el dueño de la tecla es ella, y si no, la
+    // pantalla suplente: `pantallaOpciones` decide, no esta línea.
     if (accion === "opciones") { e.preventDefault(); pantallaOpciones(); }
   });
 

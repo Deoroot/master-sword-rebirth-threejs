@@ -157,7 +157,8 @@ export class PanelDePersonaje extends PanelConNombre {
    * @param armas     `[{id, nombre, habilidad, icono}]`, de `reg.newchar.weaponlist`
    * @param retratos  `Retratos` de `src/render/retratos.js`, o `null`
    */
-  constructor({ esquema, listar, crear, jugar, borrar, armas = [], retratos = null }) {
+  constructor({ esquema, listar, crear, jugar, borrar, armas = [], retratos = null,
+                nombrePropuesto = "" }) {
     super({
       nombre: NOMBRE,
       // `SetBits(m_Flags, MENUFLAG_TRAPNUMINPUT)` — vgui_choosecharacter.cpp:409.
@@ -183,7 +184,15 @@ export class PanelDePersonaje extends PanelConNombre {
     this.botones = [];
 
     this.etapa = ETAPA.ELEGIR;
-    this.nuevo = { nombre: "", genero: "male", arma: armas[0]?.id ?? null };
+    // EL NOMBRE VIENE PUESTO, y viene del cvar `name`:
+    //
+    //     Gender_Name = gEngfuncs.pfnGetCvarString("name");
+    //                                 vgui_choosecharacter.cpp:411
+    //     Gender_NameTextPanel->SetText( Gender_Name );            :545
+    //
+    // O sea que el cuadro «Player name» de «Options» no es decorativo: es lo
+    // que te propone esta pantalla. Aquí arrancaba vacío.
+    this.nuevo = { nombre: String(nombrePropuesto ?? ""), genero: "male", arma: armas[0]?.id ?? null };
     this.ranuraElegida = null;
 
     this.raiz = new Panel({ x: 0, y: 0, w: 640, h: 480, transparencia: 255, clase: "vg-char" });
@@ -323,6 +332,21 @@ export class PanelDePersonaje extends PanelConNombre {
 
   irA(etapa) { this.etapa = etapa; this.refrescar(); return this; }
 
+  /**
+   * El nombre que propone la pantalla, cuando cambia el cvar.
+   *
+   * En el mod el cvar se lee UNA vez, al construir el panel
+   * (`vgui_choosecharacter.cpp:411`), así que el que está escribiendo su nombre
+   * no ve cómo se lo cambian por debajo: si la etapa es la del nombre, esto no
+   * toca nada. Aplicar «Options» con la pantalla delante no borra lo tecleado.
+   */
+  proponerNombre(nombre) {
+    if (this.etapa === ETAPA.QUIEN) return this;
+    this.nuevo.nombre = String(nombre ?? "");
+    this.refrescar();
+    return this;
+  }
+
   atrasDeEtapa() {
     if (this.etapa === ETAPA.ELEGIR) return this;
     return this.irA(this.etapa - 1);
@@ -410,6 +434,10 @@ export class PanelDePersonaje extends PanelConNombre {
     this.aceptar.ver(enQuien);
     this.generoEtiqueta.ver(enQuien);
     this.campo.hidden = !enQuien;
+    // El cuadro enseña lo que hay en `nuevo.nombre`, que empieza siendo el del
+    // cvar `name`. Se comprueba antes de escribir para no mover el cursor de
+    // quien está tecleando: asignar `value` al mismo texto lo manda al final.
+    if (this.campo.value !== this.nuevo.nombre) this.campo.value = this.nuevo.nombre;
     this.aceptar.habilitar(this.puedeSeguir());
     for (const g of this.generos) {
       g.caja.ver(enQuien); g.boton.ver(enQuien);
