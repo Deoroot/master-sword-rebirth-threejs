@@ -82,7 +82,7 @@ decisión y no un olvido: las que sí escalan están todas envueltas.
 
 ---
 
-## 3. Cinco de las siete armas no tienen icono, y es del juego
+## 3. Los iconos, y una corrección
 
 El icono sale de `sprites/items/640_allitems.spr`, 244 cuadros de 128×128, y el
 cuadro lo dice el script del objeto:
@@ -95,20 +95,29 @@ if (SpriteIndex != -1) SpriteFrame = SpriteIndex; else SpriteFrame = atoi(Params
                                      genericitem.cpp:1765-1782
 ```
 
-**`SpriteFrame` se pone siempre, pero `TradeSpriteName` sólo si el primer
-parámetro es `trade`.** Y de las siete armas de partida de Gate City:
+**Aquí hubo un hallazgo que resultó ser mío y no del juego, y queda escrito
+porque es la clase de error que más cuesta ver: un dato falso, bien citado.**
+
+La primera versión de `tools/iconos.mjs` leía **la primera** línea
+`sethudsprite` de cada archivo. Con eso salía que cinco de las siete armas de
+partida no tenían icono, y así se escribió. Pero los scripts declaran **las
+dos**, en líneas seguidas:
 
 ```
-swords_rsword              sethudsprite hand  sword       -> sin icono
-bows_treebow               sethudsprite trade 47          -> cuadro 47
-smallarms_rknife           sethudsprite hand  merldagger  -> sin icono
-axes_rsmallaxe             sethudsprite hand  176         -> sin icono
-blunt_hammer1              sethudsprite hand  item        -> sin icono
-magic_hand_lightning_weak  (ninguna)                      -> sin icono
-polearms_qs                sethudsprite trade 139         -> cuadro 139
+sethudsprite hand  sword          items/swords_rsword.script:52
+sethudsprite trade 168                                      :53
 ```
 
-Cinco dicen `hand`. Y el panel de elegir personaje no lo comprueba:
+`hand` es el icono del HUD y `trade` el de la pantalla de comercio y el
+inventario, y la de `hand` va antes en casi todos. Quedarse con la primera es
+quedarse justo con la que no sirve. Corregido: **seis de las siete armas tienen
+icono**, y el catálogo entero pasa de 222 objetos a **367**, que se reparten 212
+cuadros distintos.
+
+Lo que sí es del juego y se queda: `magic_hand_lightning_weak` —la mano que
+lanza un rayo— no declara `sethudsprite` ninguno, así que su `TradeSpriteName`
+es nulo. Y el panel de elegir personaje **no lo comprueba**, donde el del
+inventario sí:
 
 ```cpp
 msstring("items/640_") + ptmpItem->TradeSpriteName     choosecharacter.cpp:617
@@ -117,18 +126,14 @@ SpriteName = pItem->TradeSpriteName
                                                        mscontrols.cpp:285
 ```
 
-La segunda línea sí lo comprueba; la primera no. O sea que **en el Master Sword de
-verdad cinco de las siete armas de partida salen con el cuadro vacío**, y sólo el
-arco y el bastón tienen dibujo. Se porta así, y `npm run iconos` hornea sólo los
-dos cuadros que alguien pide — 11 KB en vez de los 244.
+O sea que **una de las siete sale con el cuadro vacío en el juego de verdad**, y
+es ésa.
 
-El alfa de esos dos es **una decisión nuestra** y se dice: la hoja es
+El alfa de los iconos es **una decisión nuestra** y se dice: la hoja es
 `SPR_ADDITIVE`, y copiarlo literalmente (`alfa = max(r,g,b)`) deja el arco de
 Treebow al 17 % de opacidad porque está pintado en marrones de 44,12,4. En el
 juego se ve porque VGUI lo suma sobre un panel oscuro; sobre una página no hay
 nada que sumar. Así que el negro puro es transparente y lo demás opaco.
-
----
 
 ## 4. Lo que se rompió por el camino
 

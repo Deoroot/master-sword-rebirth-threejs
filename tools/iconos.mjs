@@ -30,33 +30,37 @@
 // existen en los scripts de verdad: `sethudsprite hand sword` y
 // `sethudsprite trade 47`.
 //
-// ── Y AQUÍ HAY UN FALLO DE LOS DATOS DEL JUEGO QUE SE VE EN PANTALLA ───────
+// ── UN HALLAZGO QUE ERA MÍO Y NO DEL JUEGO, y queda escrito ───────────────
 //
-// Mira otra vez las tres líneas de arriba: **`SpriteFrame` se pone siempre, pero
-// `TradeSpriteName` sólo si el primer parámetro es `trade`.** De las siete armas
-// de partida de Gate City:
+// La primera versión de este extractor leía **la primera** línea
+// `sethudsprite` de cada archivo y se quedaba con ella. Con eso salía que cinco
+// de las siete armas de partida no tenían icono, y se escribió así en el informe
+// del experimento 30 y en su commit, con su cita y todo.
 //
-//     swords_rsword              sethudsprite hand  sword
-//     bows_treebow               sethudsprite trade 47
-//     smallarms_rknife           sethudsprite hand  merldagger
-//     axes_rsmallaxe             sethudsprite hand  176
-//     blunt_hammer1              sethudsprite hand  item
-//     magic_hand_lightning_weak  (ninguna)
-//     polearms_qs                sethudsprite trade 139
+// Era mentira, y la culpa era de esta función. Los scripts declaran **las dos**,
+// en líneas seguidas (`items/swords_rsword.script:52-53`):
 //
-// **Cinco de las siete dicen `hand`**, así que se quedan sin `TradeSpriteName` y
-// la pantalla de elegir arma les pide `items/640_` a secas. Y ahí el panel de
-// elegir personaje NO comprueba nada:
+//     sethudsprite hand sword
+//     sethudsprite trade 168
+//
+// `hand` es el icono del HUD y `trade` el de la pantalla de comercio y el
+// inventario. La primera línea es la de `hand` en casi todos, así que quedarse
+// con la primera es quedarse justo con la que no sirve. Ahora se busca la de
+// `trade` primero, y el recuento cambia de 222 objetos a **367** y de dos armas
+// de partida a **seis**.
+//
+// Lo que sí es verdad y se queda: `magic_hand_lightning_weak` no declara
+// `sethudsprite` ninguno —es una mano que lanza un rayo, no un arma— así que su
+// `TradeSpriteName` es nulo. Y el panel de elegir personaje **no lo comprueba**,
+// donde el del inventario sí:
 //
 //     msstring("items/640_") + ptmpItem->TradeSpriteName     choosecharacter:617
 //     SpriteName = pItem->TradeSpriteName
 //                  ? msstring("items/640_") + pItem->TradeSpriteName : "";
 //                                                            mscontrols.cpp:285
 //
-// La segunda línea sí lo comprueba; la primera no. O sea que en el Master Sword
-// de verdad **cinco de las siete armas de partida salen sin icono**, con su
-// cuadro vacío y su nombre debajo. Se porta así, y por eso este extractor saca
-// sólo los cuadros que alguien pide de verdad con `trade` — que son dos.
+// O sea que en el Master Sword de verdad **una de las siete sale con el cuadro
+// vacío**, y es ésa. Se porta así.
 //
 // Misma regla de siempre: **el lector es nuestro, el contenido no se copia.**
 
@@ -104,7 +108,13 @@ export function cuadroDe(cual) {
  * arriba: sin él el objeto no tiene icono en la pantalla de elegir arma.
  */
 export function spriteDe(texto) {
-  const m = /^\s*sethudsprite\s+(\S+)\s+(\S+)/mi.exec(texto ?? "");
+  // Un script puede declarar las DOS: `hand` para el HUD y `trade` para la
+  // pantalla de comercio y el inventario. La que importa para un icono es la de
+  // `trade`, así que se busca esa primero. Coger la primera que apareciera
+  // dejaba fuera 146 objetos que sí tienen icono, porque su línea de `hand` va
+  // antes en el archivo.
+  const m = /^\s*sethudsprite\s+(trade)\s+(\S+)/mi.exec(texto ?? "")
+    ?? /^\s*sethudsprite\s+(\S+)\s+(\S+)/mi.exec(texto ?? "");
   if (!m) return null;
   const donde = m[1].toLowerCase();
   const cual = m[2].replace(/^['"]|['"]$/g, "");
@@ -152,40 +162,57 @@ if (process.argv[1]?.endsWith("iconos.mjs")) {
       `${s && !s.tieneTrade ? "   SIN ICONO en elegir arma (dice `hand`)" : ""}`);
   }
 
-  // Sólo se hornean los cuadros que alguien pide con `trade`: los demás no se
-  // enseñan en ningún sitio de este juego todavía.
+  // TODO EL CATÁLOGO, no sólo las siete armas. El inventario enseña un icono por
+  // objeto y usa el MISMO campo (`containeritem_t::init`, mscontrols.cpp:285),
+  // así que hace falta el cuadro de cada cosa que se pueda llevar encima. De los
+  // 519 objetos que dicen `sethudsprite`, **368 dicen `trade` y 151 dicen
+  // `hand`** — o sea que la mayoría sí tiene icono, y las armas de partida son
+  // justo las que tuvieron mala suerte.
+  const todos = {};
+  (function recorrer(dir) {
+    for (const n of readdirSync(dir)) {
+      const r = join(dir, n);
+      if (statSync(r).isDirectory()) { recorrer(r); continue; }
+      if (!n.endsWith(".script")) continue;
+      const sp = spriteDe(readFileSync(r, "utf8"));
+      if (sp?.tieneTrade) todos[n.replace(/\.script$/, "")] = sp;
+    }
+  })(SCRIPTS);
+  const cuadrosPedidos = [...new Set(Object.values(todos).map((x) => x.cuadro))]
+    .filter((c) => cuadros[c]).sort((a, b) => a - b);
+  console.log(`
+    ${Object.keys(todos).length} objetos con icono, ${cuadrosPedidos.length} cuadros distintos`);
+
   const escritos = {};
   let bytes = 0;
-  for (const [arma, s] of Object.entries(fichas)) {
-    if (!s?.tieneTrade) continue;
-    const c = cuadros[s.cuadro];
-    if (!c) { console.log(`    ¡el cuadro ${s.cuadro} no existe!`); continue; }
+  const horneados = new Set();
+  const hornear = (cuadro) => {
+    if (horneados.has(cuadro)) return true;
+    const c = cuadros[cuadro];
+    if (!c) return false;
+    horneados.add(cuadro);
+    return c;
+  };
+  for (const cuadro of cuadrosPedidos) {
+    const c = hornear(cuadro);
+    if (!c) continue;
     const rgba = new Uint8Array(c.ancho * c.alto * 4);
     for (let i = 0; i < c.ancho * c.alto; i++) {
       const p = c.indices[i] * 3;
       rgba[i * 4] = hoja.paleta[p];
       rgba[i * 4 + 1] = hoja.paleta[p + 1];
       rgba[i * 4 + 2] = hoja.paleta[p + 2];
-      // EL ALFA, y aquí hay una decisión NUESTRA que conviene decir.
-      //
-      // La hoja es `SPR_ADDITIVE` (`formato 1`), o sea que el motor la SUMA al
-      // fotograma: el negro no aporta nada y por eso el fondo desaparece. Copiar
-      // eso literalmente sería poner `alfa = max(r,g,b)`, y se probó: el arco de
-      // Treebow está pintado en marrones de 44,12,4, así que sale al 17 % de
-      // opacidad — un fantasma. En el juego no se ve así porque VGUI lo dibuja
-      // sobre un panel oscuro y lo suma; sobre una página web no hay nada que
-      // sumar.
-      //
-      // Así que el fondo —el negro puro, que son 11 180 de los 16 384 píxeles—
-      // se hace transparente y lo demás opaco. El color no cambia; cambia que se
-      // vea. Es la misma decisión que ya se tomó con el fondo de los paneles en
-      // `paleta.js`, y por el mismo motivo.
       const negro = !hoja.paleta[p] && !hoja.paleta[p + 1] && !hoja.paleta[p + 2];
       rgba[i * 4 + 3] = negro ? 0 : 255;
     }
-    const nombre = `${s.cuadro}.png`;
-    bytes += escribirPng(join(SALIDA, nombre), rgba, c.ancho, c.alto);
-    escritos[arma] = { archivo: `iconos/${nombre}`, cuadro: s.cuadro, ancho: c.ancho, alto: c.alto };
+    bytes += escribirPng(join(SALIDA, `${cuadro}.png`), rgba, c.ancho, c.alto);
+  }
+
+  for (const [arma, s] of Object.entries(fichas)) {
+    if (!s?.tieneTrade) continue;
+    const c = cuadros[s.cuadro];
+    if (!c) { console.log(`    ¡el cuadro ${s.cuadro} no existe!`); continue; }
+    escritos[arma] = { archivo: `iconos/${s.cuadro}.png`, cuadro: s.cuadro, ancho: c.ancho, alto: c.alto };
   }
 
   control("el `.spr` de los objetos tiene sus 244 cuadros", cuadros.length === 244, `${cuadros.length}`);
@@ -196,10 +223,20 @@ if (process.argv[1]?.endsWith("iconos.mjs")) {
     cuadroDe("apple") === 0 && cuadroDe("xbow") === 76 && cuadroDe("sword") === -1 + 1,
     `apple=0 xbow=76`);
   control("un número a pelo se usa tal cual", cuadroDe("139") === 139);
-  control("EL FALLO DE LOS DATOS: sólo 2 de las 7 armas de partida tienen icono",
-    conTrade === 2, `${conTrade} con \`trade\`, ${ARMAS.length - conTrade} con \`hand\``);
+  control("seis de las siete armas de partida tienen icono",
+    conTrade === 6, `${conTrade} de ${ARMAS.length}`);
+  // Y la séptima no, y eso sí es del juego: la mano del rayo no declara
+  // `sethudsprite` ninguno, y `choosecharacter.cpp:617` no lo comprueba.
+  control("y la que no lo tiene es la mano del rayo, que no declara ninguno",
+    fichas.magic_hand_lightning_weak === null,
+    `${Object.entries(fichas).filter(([, x]) => !x?.tieneTrade).map(([a]) => a).join(", ") || "ninguna"}`);
   control("y los dos cuadros que sí se piden existen y se hornean",
     Object.keys(escritos).length === conTrade, Object.keys(escritos).join(", "));
+  control("el catálogo entero: la mayoría de los objetos SÍ tiene icono",
+    Object.keys(todos).length > 300, `${Object.keys(todos).length} objetos con `+"`trade`"+``);
+  control("y se hornea un cuadro por cada uno distinto, no uno por objeto",
+    horneados.size === cuadrosPedidos.length && horneados.size < Object.keys(todos).length,
+    `${horneados.size} cuadros para ${Object.keys(todos).length} objetos`);
 
   console.log("");
   for (const c of controles) console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(64)} ${c.detalle}`);
@@ -219,8 +256,12 @@ if (process.argv[1]?.endsWith("iconos.mjs")) {
     },
     base: "build/gatecity/",
     cuadros: cuadros.length,
-    /** Por arma: el icono si lo tiene, y `null` si su script dice `hand`. */
+    /** Por arma de partida: el icono si lo tiene, y `null` si su script dice `hand`. */
     armas: Object.fromEntries(ARMAS.map((a) => [a, escritos[a] ?? null])),
+    /** Y TODO el catálogo, para el inventario: nombre de objeto -> cuadro. */
+    objetos: Object.fromEntries(Object.entries(todos)
+      .filter(([, x]) => cuadros[x.cuadro])
+      .map(([n, x]) => [n, { archivo: `iconos/${x.cuadro}.png`, cuadro: x.cuadro }])),
     /** Y el porqué, para que el hueco vacío del panel no parezca un fallo nuestro. */
     sinIcono: Object.entries(fichas)
       .filter(([, s]) => !s?.tieneTrade)

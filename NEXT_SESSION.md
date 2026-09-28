@@ -8,9 +8,10 @@
 > Dos fallos de medida del original, portados con el fallo y **multiplicándose
 > entre sí**: `XRES(16) * XRES(1)` convierte dos veces, y la función de centrar
 > tiene el `−1` fuera del paréntesis. A 640 son siete píxeles; a 1920 la rejilla
-> de armas se va **167** a la izquierda. Y uno de los datos: **cinco de las siete
-> armas de partida no tienen icono**, porque sus scripts dicen `sethudsprite
-> hand` y no `trade`.
+> de armas se va **167** a la izquierda. Y una corrección: lo de que **cinco de las siete
+> armas no tenían icono** era un fallo de nuestro extractor, no de los datos —
+> leía la primera línea `sethudsprite` y los scripts declaran las dos. Son
+> **seis de siete**; la séptima, la mano del rayo, no declara ninguno.
 >
 > **Lo siguiente son los dos paneles que quedan**: 31 el inventario de verdad —se
 > retira la rejilla inventada de `src/juego/inventario.js`— y 32 Character Info.

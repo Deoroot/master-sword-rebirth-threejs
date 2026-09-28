@@ -161,8 +161,17 @@ try {
   control("el Enter del campo pasa a elegir arma", armas.etapa === 2, `etapa ${armas.etapa}`);
   control("hay siete armas, que son las de `reg.newchar.weaponlist`",
     armas.todos === 7, `${armas.todos}`);
-  control("EL FALLO DE LOS DATOS: sólo DOS tienen icono, y es del juego",
-    armas.iconos === 2, `${armas.iconos} de ${armas.todos}: las otras cinco dicen \`hand\` y no \`trade\``);
+  // SEIS de las siete. La séptima es la mano del rayo, que no declara
+  // `sethudsprite` ninguno, y el panel de elegir personaje no lo comprueba
+  // (`choosecharacter.cpp:617` contra `mscontrols.cpp:285`): sale con el cuadro
+  // vacío en el juego de verdad también.
+  //
+  // La primera versión de este control decía DOS, y estaba mal: el extractor
+  // leía la primera línea `sethudsprite` de cada script y los scripts declaran
+  // las dos, `hand` y `trade`, en líneas seguidas. El control estaba en verde
+  // sobre una cuenta equivocada.
+  control("seis de las siete armas tienen icono, y la séptima no declara ninguno",
+    armas.iconos === 6, `${armas.iconos} de ${armas.todos}`);
 
   await pag.screenshot({ path: "build/gatecity/vistas/personaje30-arma.png" });
 
