@@ -19,7 +19,7 @@ import {
 import { entrenar } from "./juego/personaje.js";
 import { carga as cargaDe } from "./juego/inventario.js";
 import { buildView } from "./render/scene.js";
-import { atlasDe } from "./kit/studio.js";
+import { atlasDe } from "./render/studio.js";
 import { gatecityLevel } from "./bsp/nivel.js";
 import {
   escenaGateCity,
@@ -68,7 +68,6 @@ import { cargarOtros } from "./render/otros.js";
 // La sonda: dos mil líneas que no son el juego y que hasta el 28 vivían aquí.
 import { montarSonda } from "./dev/sonda.js";
 
-const MAP = new URLSearchParams(location.search).get("map") ?? "pueblo";
 const DT = 1 / 60;
 const MOUSE = 0.0022;
 
@@ -115,40 +114,21 @@ function suceso(tipo, texto) {
   hudMs.suceso(tipo, texto);
 }
 
-// 'colina' no es un .map: el suelo es una malla de altura calculada en el
-// momento. Es la tercera forma de relieve, la del artefacto de referencia, y
-// la unica en la que qbsp no tiene nada que juzgar. Ver src/map/terrain.js.
-const MESH_LEVEL = MAP === "colina";
-
-// 'corinth' es la cuarta forma, y la primera en que el mundo NO sale de un solo
-// sitio: el suelo y la muralla son un `.map` que juzga qbsp, y encima van las
-// mallas glTF del kit y la roca generada del socavon, que juzga el arnes de
-// tools/andar.mjs. Aqui se juntan las dos para dibujar y para chocar.
-const KIT_LEVEL = MAP === "corinth";
-
-// 'jharro' es la quinta, y la primera que NO tiene `.map` ni cielo: una ciudad
-// excavada en la roca, de ocho plantas, donde todo —suelo, bóveda, paredes,
-// túneles— es malla generada. `qbsp` no juzga nada aquí, igual que en el valle
-// de malla; lo que hay son 329 comprobaciones en Node y el arnés que se escriba.
+// GATE CITY, y ya no hay otro mundo aqui.
 //
-// Y una diferencia que se ve nada más entrar: bajo tierra no hay sol. Lo que
-// está iluminado es lo que existe, y los 58 faroles se repartieron con las dos
-// densidades que se midieron de Gate City.
-const JHARRO_LEVEL = MAP === "jharro";
-
-// 'gatecity' es la sexta, y la unica que no es nuestra: es `gatecity.bsp` de
-// DrKill leido con el lector de `src/bsp/`. No esta aqui para jugarlo, esta para
-// contestar una pregunta -puede esta pila poner en pantalla lo que ese archivo
-// pone?- y para eso hace falta tenerlo AL LADO de lo nuestro.
+// Hasta la mudanza este archivo servia seis mundos: cinco del laboratorio web
+// -la plaza, el pueblo, la colina de malla, Corinth y el jharro- y este. Los
+// cinco primeros se quedaron en «Mydra Web Lab» con su mirador, su kit CC0 y
+// su generador de terreno, que son el banco de pruebas de los experimentos 01
+// a 09 y no el juego. Ver ESTRUCTURA.md.
 //
-// El `.bsp` no se copia: se queda en ../MSC/ y lo extraido vive en build/, que no
-// se publica. Ver `tools/gatecity.mjs` y build/gatecity/PROCEDENCIA.md.
+// El `.bsp` no se copia: se queda en ../MSC/ y lo extraido vive en build/, que
+// no se publica. Ver `tools/gatecity.mjs` y build/gatecity/PROCEDENCIA.md.
 //
-// Y su camino es aparte de principio a fin, porque su iluminacion esta HORNEADA:
-// `buildScene()` montaria sol, hemisferico y 118 luces puntuales encima del mapa
-// de luz, o sea sumaria dos veces la misma luz y lavaria justo el contraste que se
-// viene a buscar.
-const GATECITY_LEVEL = MAP === "gatecity";
+// Y su camino es aparte de principio a fin porque su iluminacion esta HORNEADA:
+// `buildScene()` montaria sol, hemisferico y 118 luces puntuales encima del
+// mapa de luz, o sea sumaria dos veces la misma luz y lavaria justo el
+// contraste que se viene a buscar.
 
 /**
  * Gate City, de principio a fin y por su cuenta.
@@ -2854,24 +2834,7 @@ async function mainGateCity() {
   mapaListo();
 }
 
-async function main() {
-  if (GATECITY_LEVEL) return mainGateCity();
-  // EL MIRADOR, que es el OTRO programa de este archivo y ya no está aquí.
-  //
-  // `?map=pueblo`, `corinth`, `colina` y `jharro` no son Gate City: son el banco
-  // de pruebas de los experimentos 01 a 09 —el terreno, el kit CC0, el jharro— y
-  // tienen su propio bucle, su propia escena y su propio `window.probe`. Eran
-  // 470 líneas debajo de las 2 600 del juego, en el mismo archivo y sin nada en
-  // común salvo estas nueve constantes.
-  //
-  // Y se carga BAJO DEMANDA: con `?map=gatecity` este módulo no se descarga
-  // siquiera, que son el kit, el GLTFLoader y el generador de terreno que el
-  // juego no usa.
-  const { mirarMapa } = await import("./mirador.js");
-  return mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, KIT_LEVEL, JHARRO_LEVEL });
-}
-
-main().catch((error) => {
+mainGateCity().catch((error) => {
   console.error(error);
   document.getElementById("intro").hidden = false;
   say(`FAILED: ${error.message}`);

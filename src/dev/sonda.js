@@ -32,7 +32,7 @@ import { PARTIDA, jugadoresActivos, nivelDeAjuste, vidaTotal } from "../juego/se
 import { Pasos } from "../play/sonido.js";
 import { ajustarVelocidad, danoDeCaida as danoDeCaidaU, velocidadAndando, velocidadCorriendo } from "../play/movimiento.js";
 import { animacionDeParado } from "../play/actividad.js";
-import { atlasDe } from "../kit/studio.js";
+import { atlasDe } from "../render/studio.js";
 import { defensaDelJugador, dentroDelCono2D } from "../play/escudo.js";
 import { listarPartidas } from "../red/navegador.js";
 import { nombreDeTecla } from "../juego/teclas.js";

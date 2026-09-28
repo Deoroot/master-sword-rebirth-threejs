@@ -1,0 +1,4 @@
+# Todo el proyecto se guarda con finales de linea LF, que es como esta escrito.
+# Sin esto, un clon en Windows los convierte a CRLF y el primer commit de quien
+# lo toque son treinta mil lineas cambiadas sin que haya cambiado nada.
+* text=auto eol=lf

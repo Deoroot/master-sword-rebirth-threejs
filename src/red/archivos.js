@@ -78,7 +78,31 @@ export class AlmacenArchivos {
     try { await copyFile(ruta, ruta.replace(/\.json$/, ".bak.json")); } catch { /* la primera vez no hay */ }
     const temporal = `${ruta}.tmp`;
     await writeFile(temporal, JSON.stringify(doc, null, 1), "utf8");
-    await rename(temporal, ruta);
+    // EN WINDOWS EL RENOMBRADO PUEDE FALLAR, y no por nada que haga este código.
+    //
+    // `rename` sobre un archivo que existe es atómico y es lo que hace que un
+    // corte de luz a mitad de guardar no deje un personaje a medias. Pero en
+    // Windows el sistema de archivos no permite renombrar encima de un archivo
+    // que alguien tiene abierto, aunque sea sólo para leerlo: el antivirus, el
+    // indizador o la copia de seguridad valen. Da `EPERM` y se pierde el
+    // guardado — que es la única cosa de este servidor que no se puede perder.
+    //
+    // Apareció así, y merece quedar escrito porque es exactamente la clase de
+    // fallo que no da la cara cuando se busca: **una de cada ocho vueltas de
+    // `sonda:red`**, y no la del control del guardado, sino la del control que
+    // dice «el servidor no ha escupido ningún error». Sin ese control esto
+    // habría llegado al alfa sin que nadie lo supiera.
+    //
+    // Tres intentos con espera creciente, porque quien tenga el archivo abierto
+    // lo suelta en milisegundos. Si a la tercera sigue sin poder, el error sube:
+    // un guardado que no se puede hacer tiene que decirse, no taparse.
+    let ultimo = null;
+    for (const espera of [0, 30, 120]) {
+      if (espera) await new Promise((r) => setTimeout(r, espera));
+      try { await rename(temporal, ruta); ultimo = null; break; }
+      catch (e) { ultimo = e; }
+    }
+    if (ultimo) throw ultimo;
     return doc;
   }
 

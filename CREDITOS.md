@@ -12,7 +12,17 @@ El mod, su código, sus mapas, sus modelos, sus texturas, sus sonidos y sus
 2 884 scripts son **del equipo de Master Sword Rebirth** y de los autores de
 Master Sword Continued y Master Sword del que desciende.
 
-- Equipo de MSR — _pendiente: enlace a la web de msrebirth y a su GitHub_
+- **Equipo de MSR** — <https://github.com/MSRevive>, que es la organización desde
+  la que publican. De ahí salen las tres cosas que este proyecto lee:
+  [MasterSwordRebirth](https://github.com/MSRevive/MasterSwordRebirth) (el código
+  del mod), [MSCScripts](https://github.com/MSRevive/MSCScripts) (los 2 884
+  scripts) y [assets](https://github.com/MSRevive/assets) (los mapas, modelos,
+  sonidos y texturas). Su Discord: <https://discord.gg/nwJB9EhAN6>.
+- **Valve**, por el SDK de Half-Life 1, y **FWGS**, por
+  [xash3d-fwgs](https://github.com/FWGS/xash3d-fwgs), que es el motor que se leyó
+  para entender qué hace el original. El servidor se leyó de
+  [ReHLDS](https://github.com/dreamstalker/rehlds) y de
+  [MSR-ReHLDS](https://github.com/MSRevive/MSR-ReHLDS).
 - **DrKill** — autor de `gatecity.bsp`, que es el mapa que este proyecto
   reproduce y mide.
 - **Anders Finér** — autor del cuadro de la torre que es el fondo del menú
@@ -57,11 +67,16 @@ recibe un lector y un juego, y necesita su propia copia del mod para que
 `?map=gatecity` enseñe algo. Publicar el código y publicar el contenido son
 dos cosas distintas, y aquí sólo se hace la primera.
 
-## Por qué este repositorio es público
+## El repositorio, y por qué empieza privado
 
 El líder del equipo de MSR, hablando del port de MSR a Xash3D, pidió dos
 cosas: **crédito** y que **lo que se haga tenga un repositorio público**.
 Este archivo es lo primero y el repositorio es lo segundo.
+
+Y empieza **privado** de todas formas, con el alfa etiquetado, por una razón que
+no es legal sino de cortesía: el repositorio lleva el nombre del juego, y se
+prefiere que el equipo lo vea antes de que lo vea todo el mundo. Pasarlo a
+público es un clic, y es a lo que esto va — no es un almacén privado.
 
 Queda una tercera cosa que **no** está resuelta por esto y conviene no
 confundir: **servir el mapa horneado desde un servidor web sí es
@@ -84,9 +99,10 @@ src/dev/      la sonda: por donde se mide el juego desde fuera
 src/play/     la física del jugador y la manada de bichos, sin DOM
 src/red/      el WebSocket, el protocolo, el servidor de partida y su fauna
 src/juego/    personaje, estadísticas, inventario, almacén, sesión, interfaz
-src/kit/      el jharro: una ciudad propia con proporciones medidas
 tools/        extracción, medida y control
-test/         1 070 comprobaciones
+test/         762 comprobaciones
+sondas/       44 sondas de navegador, que arrancan un Chromium de verdad
+doc/          los treinta informes, uno por experimento
 ```
 
 Nada de eso contiene contenido de Master Sword, y el lector vale para

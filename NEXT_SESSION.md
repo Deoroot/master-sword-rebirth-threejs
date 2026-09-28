@@ -1,6 +1,6 @@
 # Dónde se quedó esto
 
-> **El 28 está hecho: [IA_28.md](IA_28.md).** El paso 5 de PROYECTO_10.md
+> **El 28 está hecho: [IA_28.md](doc/IA_28.md).** El paso 5 de PROYECTO_10.md
 > empezado por donde tocaba: **los 69 bichos de Gate City los decide el
 > servidor**. **1 059 pruebas y 15 de 15 controles con dos navegadores.**
 > `npm run sonda:ia28`.
@@ -43,7 +43,7 @@
 > desplegado—, las flechas no pasan por la comprobación de distancia, los bichos
 > no se pelean entre ellos y no hay reaparición de monstruos.
 
-> **Y detrás, el orden y el idioma: [ORDEN_28.md](ORDEN_28.md).**
+> **Y detrás, el orden y el idioma: [ORDEN_28.md](doc/ORDEN_28.md).**
 >
 > **Este proyecto YA TIENE `git`**, que llevaba veintiocho experimentos sin él y
 > era lo primero: sin control de versiones, un refactor mecánico de dos mil
@@ -159,7 +159,7 @@ la pantalla.
 
 ## LO QUE QUEDA ABIERTO, por orden
 
-1. ~~**EL PARPADEO**~~ — **HECHO**, ver [PARPADEO_08.md](PARPADEO_08.md). Y su
+1. ~~**EL PARPADEO**~~ — **HECHO**, ver [PARPADEO_08.md](doc/PARPADEO_08.md). Y su
    control salió como se pidió: con los tres atlas al valor medio la pantalla
    sale IDÉNTICA, luxel a luxel, 0 de 462 915.
 2. **Una captura del juego con el `glow` APAGADO, del mismo sitio y la misma
@@ -169,7 +169,7 @@ la pantalla.
    propio registro, «Glow: Maximum charge reached».
 3. **Las `dlight` de las antorchas** (`R_AddDynamicLights`). Con el parpadeo
    hecho, el mecanismo es el mismo.
-4. **La propuesta de [PROPUESTA_06.md](PROPUESTA_06.md), que hay que DECIDIR**:
+4. **La propuesta de [PROPUESTA_06.md](doc/PROPUESTA_06.md), que hay que DECIDIR**:
    si esto se separa de `Mydra Web Lab`, si va antes la fidelidad o la
    jugabilidad, y si lo siguiente grande es la animación de `.mdl` o un segundo
    mapa con su transición.
@@ -184,7 +184,7 @@ la pantalla.
 
 ---
 
-> El encargo del 06 —[PROMPT_06.md](PROMPT_06.md)— está hecho: partes 1, 2, 3 y
+> El encargo del 06 —[PROMPT_06.md](doc/PROMPT_06.md)— está hecho: partes 1, 2, 3 y
 > la medida de la 4, más la propuesta. Lo que sigue debajo es el estado del 05,
 > que queda como referencia; **sus cifras de iluminación están corregidas
 > arriba**.
@@ -194,7 +194,7 @@ los lectores de `.bsp`, `.spr` y `.mdl` y de la gamma del motor). Corinth y el j
 `?map=corinth` y `?map=jharro`. Y lo nuevo es que **`?map=gatecity` también se
 abre, se ve y se anda**: el experimento 05 reprodujo `gatecity.bsp` con Three.js.
 
-## LA PREGUNTA DEL 05 ESTÁ CONTESTADA: [CAPACIDAD_05.md](CAPACIDAD_05.md)
+## LA PREGUNTA DEL 05 ESTÁ CONTESTADA: [CAPACIDAD_05.md](doc/CAPACIDAD_05.md)
 
 > ¿Es capaz nuestra pila —Three.js, Rapier, Node— de poner en pantalla lo que ese
 > `.bsp` pone en pantalla?
@@ -776,7 +776,9 @@ npm run dev                               # ?map=corinth
 | Fotogramas | **9 medidos por luminancia**, 6 por encima del 85 % de pantalla visible |
 | Control de las capturas | con todo apagado, **0,00 %** |
 
-Los archivos nuevos: [src/kit/zonas.js](src/kit/zonas.js) (el plano de juego),
+**Los archivos de este experimento se quedaron en el laboratorio web** al mudar
+el port (ver [ESTRUCTURA.md](ESTRUCTURA.md)); los enlaces de aquí abajo no
+resuelven en este repositorio. Los archivos nuevos: [src/kit/zonas.js](src/kit/zonas.js) (el plano de juego),
 [src/kit/luz.js](src/kit/luz.js) (los faroles y su reparto),
 [src/kit/jharro.js](src/kit/jharro.js) (el plano en 3D),
 [src/kit/roca.js](src/kit/roca.js) (suelo, bóveda, paredes, túneles y repisas),
@@ -813,9 +815,9 @@ más de 3,3 m, así que **la altura libre decide dónde está el pueblo**.
 `npm run jharro:semillas`. Cambiarla es legítimo; cambiarla sin mirar el barrido,
 no.
 
-## LA SESIÓN QUE CAMBIÓ DE PREGUNTA — [PROMPT_05.md](PROMPT_05.md), YA HECHA
+## LA SESIÓN QUE CAMBIÓ DE PREGUNTA — [PROMPT_05.md](doc/PROMPT_05.md), YA HECHA
 
-**Hecho, y contestado en [CAPACIDAD_05.md](CAPACIDAD_05.md): la pila llega.** Lo
+**Hecho, y contestado en [CAPACIDAD_05.md](doc/CAPACIDAD_05.md): la pila llega.** Lo
 que sigue debajo es el planteamiento de entonces, que se cumplió en las partes 1 a
 5; queda como referencia de por qué se hizo, no como trabajo pendiente.
 

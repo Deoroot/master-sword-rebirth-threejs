@@ -8,7 +8,24 @@
 
 import * as THREE from "three";
 
-import { meshBounds } from "../map/geometry.js";
+/**
+ * La caja de una malla emitida. Doce lineas, y estaban en `src/map/geometry.js`
+ * hasta la mudanza: era la UNICA cosa que este archivo le pedia al lector de
+ * `.map`, que se quedo en el laboratorio web. La gemela sigue alli, porque alli
+ * la usan el emisor y sus pruebas. Ver ESTRUCTURA.md.
+ */
+function meshBounds(mesh) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < mesh.positions.length; i += 3) {
+    for (let a = 0; a < 3; a++) {
+      const v = mesh.positions[i + a];
+      if (v < min[a]) min[a] = v;
+      if (v > max[a]) max[a] = v;
+    }
+  }
+  return { min, max };
+}
 
 // Paleta. La niebla es el color de la referencia; el resto son colores planos
 // por textura, a la espera de las texturas de verdad del experimento 02.
