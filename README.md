@@ -130,11 +130,18 @@ the interface.
 ## The documents
 
 **The documents are in Spanish** — they are the working notebook, and there are
-thirty of them in [doc/](doc/), one per experiment, each with what was measured and
+thirty-four of them in [doc/](doc/), most one per experiment, each with what was measured and
 what was got wrong. If you only read one, read [doc/IA_28.md](doc/IA_28.md): moving
 69 monsters to a server, and the reason two players were seeing two different towns.
 [PROYECTO_10.md](PROYECTO_10.md) is the plan; [NEXT_SESSION.md](NEXT_SESSION.md) is
 where the work is now.
+
+**If you are about to change something here, read [CLAUDE.md](CLAUDE.md) first.**
+It is the short version: where the game content lives and why none of it is in
+this repository, how a change is proven — Node checks for the rules, a real
+Chromium for anything you can see — and the one mistake this project has made
+four times, a check that passes because the thing it was meant to test never ran
+at all.
 
 ## Licence
 

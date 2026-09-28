@@ -9,7 +9,7 @@ corresponde.**
 La estructura no se ha inventado para la ocasión ni se ha copiado la de MSR al pie
 de la letra. Lo que hay es lo que ya había, porque `src/` llevaba veinte
 experimentos partiéndose por el mismo sitio por el que se parte un mod de
-Half-Life, y porque los treinta documentos de `doc/` citan estas rutas por su
+Half-Life, y porque los documentos de `doc/` citan estas rutas por su
 nombre. Mover carpetas habría invalidado esas citas sin arreglar nada.
 
 ---

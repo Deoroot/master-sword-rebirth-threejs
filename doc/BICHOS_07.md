@@ -1,9 +1,9 @@
 # Los bichos de Gate City: 69 NPC con su modelo, su piel y su animación
 
 Informe del experimento 07. Contesta a «¿qué seguiría, reproducir los modelos de
-NPC y su IA?» — y por el camino cambia el plan que decía
-[PROPUESTA_06.md](PROPUESTA_06.md), porque dos suposiciones de esa propuesta
-eran falsas.
+NPC y su IA?» — y por el camino cambia el plan que decía la propuesta del 06
+([HISTORIA_05_09.md](HISTORIA_05_09.md#parte-2)), porque dos suposiciones de esa
+propuesta eran falsas.
 
 ## Lo que hay hoy en pantalla
 

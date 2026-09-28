@@ -1,7 +1,7 @@
 # El mapa de luz no llegaba a la pantalla
 
-Informe del experimento 06. Cierra las partes 1 a 4 de [PROMPT_06.md](PROMPT_06.md)
-y encuentra, por el camino, el fallo más caro de los seis experimentos.
+Informe del experimento 06. Cierra las partes 1 a 4 de su encargo y encuentra,
+por el camino, el fallo más caro de los seis experimentos.
 
 ## La respuesta corta
 
