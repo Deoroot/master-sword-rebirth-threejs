@@ -194,8 +194,18 @@ await pag.keyboard.press("Escape");
 await pag.waitForTimeout(400);
 await foto("4-inventario");
 
-// ── 5b. la hoja: maestro-detalle, y sólo una desplegada ───────────────────
-await pag.keyboard.press("KeyP");
+// ── 5b. la hoja SUPLENTE: maestro-detalle, y sólo una desplegada ──────────
+//
+// La `p` abre Character Info, el panel portado del experimento 32
+// (`sondas/hoja32.mjs`). Lo que se mide aquí es la hoja **suplente** de
+// `src/juego/interfaz.js`, que sigue existiendo por si el panel no está
+// montado, y lo que de verdad comprueba es el MODELO DE DATOS: que las
+// habilidades sean nueve, que la magia tenga cinco escuelas y no tres
+// propiedades, que `parry` tenga una sola. Eso es `src/juego/stats.js` y no
+// cambia con el panel.
+//
+// Se abre llamándola, y no con la tecla, porque la tecla ya no es suya.
+await pag.evaluate(() => window.probe.interfaz.hoja());
 await pag.waitForSelector(".mx-hoja", { timeout: 20000 });
 await pag.waitForTimeout(900);
 const hoja = await pag.evaluate(() => ({
@@ -257,18 +267,19 @@ await foto("5-hoja");
 // que ya no está en la página. No da error: da una pantalla que va cada vez más
 // despacio, y eso no se nota hasta la décima vuelta.
 const cuenta = [];
+// Se abre y se cierra LA HOJA SUPLENTE, que es la que trae retrato: los paneles
+// de VGUI no tienen ninguno fuera de la pantalla de personajes, así que con
+// ellos el contador sería cero siempre y el control no mediría nada.
 for (let i = 0; i < 4; i++) {
-  await pag.keyboard.press("KeyP");
-  await pag.waitForTimeout(250);
-  await pag.keyboard.press("KeyI");
-  await pag.waitForTimeout(350);
+  await pag.evaluate(() => window.probe.interfaz.hoja());
+  await pag.waitForTimeout(400);
   cuenta.push(await pag.evaluate(() => window.probe.vgui.retratosVivos()));
-  await pag.keyboard.press("Escape");
-  await pag.waitForTimeout(150);
+  await pag.evaluate(() => window.probe.interfaz.cerrar());
+  await pag.waitForTimeout(200);
 }
 console.log(`  retratos vivos tras 4 vueltas: ${cuenta.join(" → ")}`);
 control("las ranuras no se acumulan al cambiar de pantalla",
-  cuenta.every((n) => n === cuenta[0]), cuenta.join(" → "));
+  cuenta.every((n) => n <= cuenta[0]) && cuenta[0] >= 1, cuenta.join(" → "));
 
 // ── el veredicto ───────────────────────────────────────────────────────────
 console.log("\n  CONTROLES");

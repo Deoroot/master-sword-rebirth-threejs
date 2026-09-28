@@ -186,7 +186,7 @@ const GRUPOS = [
  */
 export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos = null,
                                  raiz = document.body, panelDePersonajes = null,
-                                 panelDeInventario = null }) {
+                                 panelDeInventario = null, panelDeHoja = null }) {
   if (!sesion) throw new Error("la interfaz cuelga de una sesión");
   const almacen = sesion.almacen;
   if (!document.getElementById("mx-css")) {
@@ -808,7 +808,11 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     // asignaciones, que salen del `config.cfg` del juego y el jugador puede
     // cambiar. Por defecto son la **P** (`bind "p" "playerinfo"`) y la **I**.
     const accion = teclas?.accionDe(e.code);
-    if (accion === "hoja") { e.preventDefault(); activo() ? pantallaHoja() : pantallaElegir(); }
+    // La `p` es del registro cuando el panel está montado. Una tecla, un dueño:
+    // ver el comentario de la `i` aquí debajo, que costó cinco controles.
+    if (accion === "hoja" && !panelDeHoja) {
+      e.preventDefault(); activo() ? pantallaHoja() : pantallaElegir();
+    }
     // LA `i` ES DEL REGISTRO DE VGUI cuando el panel está montado, y este
     // escuchador NO la toca.
     //

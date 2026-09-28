@@ -102,7 +102,7 @@ src/juego/    personaje, estadísticas, inventario, almacén, sesión, interfaz
 tools/        extracción, medida y control
 test/         819 comprobaciones
 src/vgui/     el kit de VGUI portado y los paneles del juego
-sondas/       47 sondas de navegador, que arrancan un Chromium de verdad
+sondas/       48 sondas de navegador, que arrancan un Chromium de verdad
 doc/          los treinta informes, uno por experimento
 ```
 

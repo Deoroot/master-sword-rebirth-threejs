@@ -25,19 +25,18 @@ All game content is theirs; see [CREDITOS.md](CREDITOS.md).
 | **The 69 NPCs** | model, skin and animation from the `.mdl`; `npcatk_hunt`, wandering, hit reaction, monster parry, corpses that fade over 3.64 s — all simulated **on the server** |
 | **The character** | attributes, the six skill schools, experience, levels, inventory, weight, gold, quickslots, saving |
 | **Multiplayer** | a Node WebSocket server, 100 Hz ticks, delta snapshots, `ex_interp` interpolation, lag compensation with rewind |
-| **The interface** | the HUD, the event console, the main menu and the NPC interaction menu, ported from the game's own VGUI widgets and text schemes |
+| **The interface** | the HUD, the event console, the main menu, and all four character panels — create a character, inventory, Character Info and the NPC interaction menu — ported from the game's own VGUI widgets and text schemes |
 
-Roughly 30 000 lines of JavaScript, **819 Node checks** and 17 browser probes that
+Roughly 30 000 lines of JavaScript, **819 Node checks** and 18 browser probes that
 drive a real Chromium and measure what is on screen. Every ported rule cites the
 engine or mod source it came from, file and line.
 
 ## What does not work yet
 
-One of the four character panels — Character Info — is still a from-scratch screen that
-does not match the game. The other three, the NPC interaction menu, the character
-creation screen and the inventory, have been redone on a ported VGUI widget kit
-([doc/VGUI_29.md](doc/VGUI_29.md), [doc/PERSONAJE_30.md](doc/PERSONAJE_30.md),
-[doc/INVENTARIO_31.md](doc/INVENTARIO_31.md)). Quests are not implemented,
+Quests. The NPC interaction menu reads its options from the game's own scripts, but
+choosing one does nothing yet: there is no quest state, no payment, no script
+callbacks. Also missing: shops, the NPC navigation graph, monster respawn, lighting on
+remote players, `wss://` and accounts. Quests are not implemented,
 so the NPC options you see are read from the game's scripts but do nothing yet. Also
 missing: shops, the NPC navigation graph, monster respawn, `wss://` and accounts.
 

@@ -101,4 +101,9 @@ que se pueden comprobar, y la segunda es la que más pesa:
 - **31** ([doc/INVENTARIO_31.md](doc/INVENTARIO_31.md)) el inventario
   (`contenedor.js`), y la rejilla inventada retirada.
 
-**Pendiente:** 32 Character Info.
+- **32** ([doc/HOJA_32.md](doc/HOJA_32.md)) Character Info (`estadisticas.js`),
+  el único con `m_NoMouse`: se lee sin soltar el puntero.
+
+**Los cuatro están.** Lo que queda de `src/juego/interfaz.js` son los suplentes
+—por si los paneles no se montan— y lo que MSR no tiene: exportar el guardado,
+la lista de servidores y las opciones de teclas.

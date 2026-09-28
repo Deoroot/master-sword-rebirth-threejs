@@ -56,6 +56,7 @@ import { Registro, RUEDA } from "./vgui/registro.js";
 import { MenuInteractuar, ALCANCE as ALCANCE_INTERACTUAR } from "./vgui/interactuar.js";
 import { PanelDePersonaje, CSS as CSS_PERSONAJE } from "./vgui/personaje.js";
 import { PanelDeInventario, CSS as CSS_INVENTARIO } from "./vgui/contenedor.js";
+import { PanelDeHoja } from "./vgui/estadisticas.js";
 import { Retratos } from "./render/retratos.js";
 import { opcionesDe as opcionesDeNpc, opcionesDelJugador } from "./play/opciones.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
@@ -304,6 +305,7 @@ async function mainGateCity() {
       sesion, catalogo, teclas, cuerpos: losCuerpos,
       panelDePersonajes: () => (vgui?.buscar("newchar") ? (vgui.abrir("newchar"), true) : false),
       panelDeInventario: () => (vgui?.buscar("inventory") ? (vgui.abrir("inventory"), true) : false),
+      panelDeHoja: () => (vgui?.buscar("stats") ? (vgui.abrir("stats"), true) : false),
     });
     retratosDelPanel = new Retratos(losCuerpos);
     // ── LOS PANELES DE VGUI ───────────────────────────────────────────────
@@ -436,6 +438,17 @@ async function mainGateCity() {
       // botón dice lo que pasa en vez de no hacer nada, que es lo que se hizo
       // con las entradas apagadas del menú principal.
       actuar: () => "Containers are not in this port yet: everything is in one pack.",
+    }));
+
+    // ── CHARACTER INFO ──────────────────────────────────────────────────
+    //
+    // `CStatPanel`, el de la **P**. Y el único de los cuatro con
+    // `m_NoMouse = true`: se lee SIN soltar el puntero, así que puedes mirarte
+    // las habilidades mientras sigues girando la cámara. Ver
+    // `doc/HOJA_32.md`.
+    vgui.poner(new PanelDeHoja({
+      esquema: esquemaVgui,
+      hoja: () => (sesion?.personaje ? resumen(sesion.personaje) : null),
     }));
 
     // EL PANEL SIGUE AL ESTADO DE LA SESIÓN, y no al revés.
@@ -1113,6 +1126,22 @@ async function mainGateCity() {
     // antes del `conPanel` por lo mismo que la F3 — mirar lo que pasó no es
     // jugar, y con una ventana delante es justo cuando se quiere releer.
     if (e.code === "PageUp" || e.code === "PageDown") {
+      // CON UN PANEL DELANTE, RePÁG Y AVPÁG SON DEL PANEL.
+      //
+      // Es `MENUFLAG_TRAPSTEPINPUT`, y el motor lo reparte así:
+      //
+      //     if (m_pCurrentMenu && ...GetScrollForStepInput()) { ...la barra... }
+      //     else if (m_pCurrentMenu && m_Flags & MENUFLAG_TRAPSTEPINPUT) StepInput(...)
+      //     else if (!m_pCurrentMenu) HUD_StepInput(ScrollCmd);
+      //                             vgui_teamfortressviewport.cpp:2215-2236
+      //
+      // O sea que la consola de sucesos es **la última** de las tres, y sólo si
+      // no hay panel. Aquí estaba la primera, y por eso Character Info no
+      // cambiaba de habilidad: la tecla no le llegaba nunca.
+      if (vgui?.rueda(e.code === "PageUp" ? RUEDA.ARRIBA : RUEDA.ABAJO)) {
+        e.preventDefault();
+        return;
+      }
       hudMs?.desplazar(e.code === "PageDown");
       e.preventDefault();
       return;
@@ -1141,6 +1170,12 @@ async function mainGateCity() {
     // número que elige una opción, el Escape que cierra— y entonces el juego no
     // la ve.
     if (vgui?.tecla(e.code, true)) { e.preventDefault(); return; }
+    // LA HOJA, con la `p` de `config.cfg:24` — `bind "p" "playerinfo"`.
+    if (teclas.accionDe(e.code) === "hoja" && !conPanel) {
+      vgui?.alternar("stats");
+      e.preventDefault();
+      return;
+    }
     // EL INVENTARIO, con la `i` de `config.cfg:22`. Va antes que el menú de la
     // F por nada en particular: los dos son `alternar`, y el registro se
     // encarga de que sólo haya uno abierto.

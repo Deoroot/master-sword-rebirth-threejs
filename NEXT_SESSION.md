@@ -1,5 +1,24 @@
 # Dónde se quedó esto
 
+> **LOS CUATRO PANELES ESTÁN: [doc/HOJA_32.md](doc/HOJA_32.md) cierra la serie.**
+> El menú de interacción (F), crear personaje, el inventario (I) y Character
+> Info (P), los cuatro portados de VGUI sobre el kit del 29 y manejados por la
+> tabla de teclas del juego. **819 pruebas y las 18 sondas en verde, 487
+> controles.**
+>
+> De este último, lo que había que copiar bien: **`m_NoMouse = true`**. Es el
+> único de los cuatro que **no te quita el control del personaje** — la hoja se
+> lee andando. Y el control que lo mide lleva su contrario al lado: con la hoja
+> delante se andan 4,95 m, con el inventario 0,0 cm.
+>
+> Y dos fallos: RePág y AvPág iban a la consola de sucesos antes que al panel
+> (el motor la pone **la última** de tres), y la hoja decía «Health: 0» porque
+> las claves son `vidaMax`/`manaMax`/`aguanteMax`. Lo segundo no lo cazó ningún
+> control: se vio **mirando la captura**.
+>
+> **Lo siguiente es el repositorio**: privado, con el historial entero y el tag
+> `v0.1.0-alpha`, y público cuando el equipo de MSR lo haya visto.
+
 > **EL 31 ESTÁ HECHO: [doc/INVENTARIO_31.md](doc/INVENTARIO_31.md).** El
 > inventario portado —columna de equipo, contenedor con barra, panel de
 > información— y **la rejilla inventada retirada**: `src/juego/inventario.js`
