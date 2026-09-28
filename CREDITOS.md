@@ -78,6 +78,16 @@ no es legal sino de cortesía: el repositorio lleva el nombre del juego, y se
 prefiere que el equipo lo vea antes de que lo vea todo el mundo. Pasarlo a
 público es un clic, y es a lo que esto va — no es un almacén privado.
 
+Está en <https://github.com/Deoroot/master-sword-rebirth-threejs>, con el tag `v0.1.0-alpha`, al lado de
+[Deoroot/MasterSwordRebirth-Xash3D](https://github.com/Deoroot/MasterSwordRebirth-Xash3D),
+que es el fork del mod del que este port lee.
+
+**Qué hay dentro, comprobado desde GitHub y no de memoria:** 226 archivos —101
+`.mjs`, 77 `.js`, 39 `.md`, 5 `.html`, 2 `.json` y los dos de `git`—. **Ni un
+binario.** El historial lleva los treinta y dos experimentos enteros; los `.glb`
+y los `.png` que aparecen en los commits antiguos son del kit CC0 y de las
+capturas del laboratorio web, y salieron del árbol en la mudanza.
+
 Queda una tercera cosa que **no** está resuelta por esto y conviene no
 confundir: **servir el mapa horneado desde un servidor web sí es
 distribución**, y eso necesita permiso aparte — del equipo de MSR para sus

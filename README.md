@@ -1,5 +1,7 @@
 # Master Sword: Rebirth — Gate City in Three.js
 
+<https://github.com/Deoroot/master-sword-rebirth-threejs> · `v0.1.0-alpha`
+
 An **unofficial fan port** of Gate City from *Master Sword: Rebirth* to the browser.
 Three.js and Rapier, no engine in between. You walk the real `gatecity.bsp`, with its
 baked lightmap, its 69 NPCs, its combat, its inventory and a multiplayer server.

@@ -16,8 +16,15 @@
 > las claves son `vidaMax`/`manaMax`/`aguanteMax`. Lo segundo no lo cazó ningún
 > control: se vio **mirando la captura**.
 >
-> **Lo siguiente es el repositorio**: privado, con el historial entero y el tag
-> `v0.1.0-alpha`, y público cuando el equipo de MSR lo haya visto.
+> **Y EL REPOSITORIO ESTÁ**: <https://github.com/Deoroot/master-sword-rebirth-threejs>,
+> privado, con los treinta y dos experimentos de historial y el tag
+> `v0.1.0-alpha`. 226 archivos y **ni un binario**, comprobado contra la API de
+> GitHub y no de memoria.
+>
+> **Lo siguiente, cuando lo decidas**: enseñárselo al equipo de MSR y pasarlo a
+> público —que es lo que pidieron: crédito y repositorio público—, y de lo que
+> falta, lo que más se nota jugando son las **misiones**: el menú de la F ya lee
+> las opciones de los scripts, pero elegir una no hace nada.
 
 > **EL 31 ESTÁ HECHO: [doc/INVENTARIO_31.md](doc/INVENTARIO_31.md).** El
 > inventario portado —columna de equipo, contenedor con barra, panel de
