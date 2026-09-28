@@ -21,6 +21,7 @@ import { colocar, carga, huellaDe, ANCHO, ALTO } from "./inventario.js";
 import { ESTADO, IMPUESTO_DE_MUERTE } from "./sesion.js";
 import { ACCIONES, nombreDeTecla } from "./teclas.js";
 import { variablesCss } from "./paleta.js";
+import { Retratos } from "../render/retratos.js";
 
 // LOS COLORES SON LOS DE MASTER SWORD, leídos de su cliente. Ver
 // `src/juego/paleta.js`: salmón de título, tres niveles de gris para el texto,
@@ -183,7 +184,8 @@ const GRUPOS = [
  * funcionando con los identificadores a pelo — un personaje no depende del
  * catálogo para existir, y esa separación es a propósito.
  */
-export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos = null, raiz = document.body }) {
+export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos = null,
+                                 raiz = document.body, panelDePersonajes = null }) {
   if (!sesion) throw new Error("la interfaz cuelga de una sesión");
   const almacen = sesion.almacen;
   if (!document.getElementById("mx-css")) {
@@ -200,77 +202,34 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   // devolvería la pantalla al segundo y medio, que es justo lo que se quitó al
   // cargar el mapa después de elegir. Así que el hueco se abre vacío y la figura
   // entra cuando llegue.
-  let visor = null;
-  let vivas = new Set();
-
-  // EL RELOJ DE LOS RETRATOS ES SUYO, y aquí sí hace falta un segundo.
+  // LA MAQUINARIA DE LOS RETRATOS VIVE EN `src/render/retratos.js` desde el
+  // experimento 29. Estaba aquí dentro, en el cierre, y los paneles de VGUI la
+  // necesitan: la pantalla de crear personaje del original son TRES MODELOS en
+  // el mundo (`CRenderChar`, vgui_choosecharacter.h:29), no tres dibujos.
   //
-  // La tentación era engancharlo al bucle del mapa, que ya existe. No vale: el
-  // bucle del mapa arranca cuando el mapa termina de cargar —1,7 s— y la
-  // pantalla de personajes sale a los 231 ms. Colgado de él, la figura se queda
-  // congelada justo durante el rato en el que es lo único que hay en pantalla, y
-  // si el mapa fallara no se movería nunca.
-  //
-  // Se enciende con la primera ranura y se apaga con la última, así que jugando
-  // no hay ningún `requestAnimationFrame` de más.
-  let latiendo = 0;
-  let ultimo = 0;
-  const latir = (ahora) => {
-    if (!vivas.size) { latiendo = 0; return; }
-    latiendo = requestAnimationFrame(latir);
-    const dt = Math.min(0.1, (ahora - ultimo) / 1000);
-    ultimo = ahora;
-    visor?.animar(dt);
-  };
-  const arrancarLatido = () => {
-    if (latiendo) return;
-    ultimo = performance.now();
-    latiendo = requestAnimationFrame(latir);
-  };
+  // Lo que se conserva de lo que estaba escrito aquí, porque sigue siendo el
+  // motivo de que el reloj de los retratos sea suyo y no el del mapa: el bucle
+  // del mapa arranca cuando el mapa termina de cargar —1,7 s— y esta pantalla
+  // sale a los 231 ms. Colgada de él, la figura se queda congelada justo durante
+  // el rato en el que es lo único que hay en pantalla.
+  const retratos = new Retratos(cuerpos);
 
   /**
    * Pone un retrato en una caja. Devuelve la caja, ya en el árbol.
    *
-   * Las ranuras se apuntan en `vivas` y se sueltan al cambiar de pantalla: sin
-   * eso, cada vuelta a la lista de personajes deja tres esqueletos y tres
-   * mezcladores animándose para un `canvas` que ya no está en la página. No da
-   * error — da una pantalla que va cada vez más despacio.
+   * Las ranuras se sueltan al cambiar de pantalla: sin eso, cada vuelta a la
+   * lista deja tres esqueletos y tres mezcladores animándose para un `canvas`
+   * que ya no está en la página. No da error — da una pantalla que va cada vez
+   * más despacio.
    */
   function retrato(opciones = {}) {
     const lienzo = el("canvas", { clase: "mx-retrato" });
     const caja = el("div", { clase: "mx-caja-retrato" }, [lienzo]);
-    if (!cuerpos) return caja;
-    Promise.resolve(cuerpos).then((c) => {
-      if (!c || !caja.isConnected) return;
-      // El tamaño en píxeles se toma del sitio que la hoja de estilo le haya
-      // dado, no de un número escrito aquí: si no, cambiar el CSS deja el
-      // retrato con la resolución de otra caja y se ve borroso sin más pista.
-      const dpr = Math.min(2, globalThis.devicePixelRatio || 1);
-      const r = caja.getBoundingClientRect();
-      if (!r.width || !r.height) return;
-      lienzo.width = Math.round(r.width * dpr);
-      lienzo.height = Math.round(r.height * dpr);
-      visor ??= c.visor();
-      const ranura = visor.ranura(lienzo, opciones);
-      ranura.reposo(opciones.animacion ?? "sinArma");
-      vivas.add(ranura);
-      caja._ranura = ranura;
-      arrancarLatido();
-      if (opciones.alPasar !== false) {
-        // Lo que hace `CRenderChar` cuando le pasas el ratón por encima:
-        // `reg.hud.char.highlight`, que en `global.script` es `jump`.
-        const padre = opciones.senalaCon ?? caja;
-        padre.addEventListener("pointerenter", () => ranura.senalar(true));
-        padre.addEventListener("pointerleave", () => ranura.senalar(false));
-      }
-    });
+    retratos.montar(caja, lienzo, opciones)?.then((r) => { if (r) caja._ranura = r; });
     return caja;
   }
 
-  const soltarRetratos = () => {
-    for (const r of vivas) r.quitar();
-    vivas = new Set();
-  };
+  const soltarRetratos = () => retratos.soltar();
 
   let velo = null;
   // El personaje en juego lo tiene la sesión: aquí no se guarda una segunda
@@ -303,7 +262,23 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   };
 
   // --- elegir personaje ----------------------------------------------------
+  //
+  // DESDE EL EXPERIMENTO 30 ESTO NO ES LO QUE SE VE. La pantalla de personajes
+  // es un panel de VGUI portado (`src/vgui/personaje.js`) con sus tres etapas y
+  // sus modelos, y `panelDePersonajes` es quien lo abre. Lo de aquí abajo se
+  // conserva como suplente: si el panel no está montado —porque falta
+  // `build/gatecity/`, o porque esto se carga fuera del juego— el jugador tiene
+  // que poder elegir un personaje igual. Una pantalla obligatoria sin suplente
+  // es una pantalla en la que te quedas encerrado.
   async function pantallaElegir() {
+    // Y sólo si de verdad lo ha abierto: `panelDePersonajes` devuelve `false`
+    // cuando el registro todavía no está, y entonces vale la suplente. Sin ese
+    // `if` la pantalla obligatoria se quedaba sin salir NINGUNA.
+    if (panelDePersonajes?.()) { cerrar(); return; }
+    return pantallaElegirPropia();
+  }
+
+  async function pantallaElegirPropia() {
     const lista = await almacen.listar();
     const perm = await almacen.pedirPermanencia();
     const ul = el("ul", { clase: "mx-lista" });
@@ -892,8 +867,8 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     get abierta() { return Boolean(velo); },
     get personaje() { return activo(); },
     /** Cuántos retratos hay vivos. Para las sondas. */
-    get retratos() { return vivas.size; },
+    get retratos() { return retratos.cuantos; },
     /** Un paso a mano, para poder cronometrar sin depender del reloj. */
-    animarCuerpos(dt) { if (vivas.size) visor?.animar(dt); },
+    animarCuerpos(dt) { retratos.animar(dt); },
   };
 }

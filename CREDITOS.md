@@ -100,9 +100,9 @@ src/play/     la física del jugador y la manada de bichos, sin DOM
 src/red/      el WebSocket, el protocolo, el servidor de partida y su fauna
 src/juego/    personaje, estadísticas, inventario, almacén, sesión, interfaz
 tools/        extracción, medida y control
-test/         813 comprobaciones
+test/         819 comprobaciones
 src/vgui/     el kit de VGUI portado y los paneles del juego
-sondas/       45 sondas de navegador, que arrancan un Chromium de verdad
+sondas/       46 sondas de navegador, que arrancan un Chromium de verdad
 doc/          los treinta informes, uno por experimento
 ```
 

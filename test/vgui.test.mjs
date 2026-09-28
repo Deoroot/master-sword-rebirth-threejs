@@ -502,3 +502,72 @@ test("las opciones de un NPC salen de su script", async (t) => {
     });
   }
 });
+
+// ── 5. CREAR PERSONAJE: las medidas, que es donde están los fallos ──────────
+
+test("crear personaje: las tres etapas y los dos fallos de medida", async (t) => {
+  const { espaciador, inicioDeArmas, inicioDeArmasSano, MEDIDAS: M, COLORES: C, ETAPA, RANURAS, MAX_ARMAS, MAX_LETRAS, ARMA_PX } =
+    await import("../src/vgui/personaje.js");
+
+  await t.test("son tres etapas, en su orden", () => {
+    // `enum stage_e { STG_CHOOSECHAR, STG_CHOOSEGENDER, STG_CHOOSEWEAPON }`
+    assert.deepEqual([ETAPA.ELEGIR, ETAPA.QUIEN, ETAPA.ARMA], [0, 1, 2]);
+    assert.equal(RANURAS, 3, "CHOOSEPANEL_MAINBTNS");
+    assert.equal(MAX_ARMAS, 9, "«Max of 9 starting weapon choices»");
+    assert.equal(MAX_LETRAS, 32, "m_MaxLetters");
+  });
+
+  await t.test("EL FALLO 1: `XRES(16) * XRES(1)` convierte dos veces", () => {
+    // A 640 no se nota, que es por lo que sigue ahí: 16 × 1 = 16.
+    assert.equal(espaciador(640), 16);
+    // A 1920, `XRES(1)` vale 3, así que el hueco entre personajes es el TRIPLE
+    // del que se quería: 48 unidades de referencia en vez de 16.
+    assert.equal(espaciador(1920), 48);
+    assert.equal(espaciador(1280), 32);
+    // Y crece con la resolución sin parar, que es lo que lo hace un fallo y no
+    // una medida rara: a 3840 son 96 donde tocaban 16.
+    assert.equal(espaciador(3840), 96);
+  });
+
+  await t.test("EL FALLO 2: la rejilla de armas se va a la izquierda", () => {
+    // `GetCenteredItemX` con el `−1` fuera del paréntesis, Y con el espaciador
+    // roto de arriba. A 640 la diferencia son siete píxeles y nadie la ha visto.
+    assert.equal(inicioDeArmasSano(640, 640) - inicioDeArmas(640, 640), 7);
+    // A 1920 son CIENTO SESENTA Y SIETE, y eso sí se ve: la rejilla de armas
+    // se va casi media columna a la izquierda.
+    assert.equal(inicioDeArmasSano(1920, 1920) - inicioDeArmas(1920, 1920), 167);
+    // LOS DOS FALLOS SE MULTIPLICAN, y la cuenta sale exacta: el error es
+    // `espaciador/2 - 1`, y el espaciador ya venía inflado por el fallo 1. O
+    // sea que el error crece con la resolución cuando tendría que ser fijo.
+    for (const ancho of [640, 960, 1280, 1920, 3840]) {
+      const sano = Math.floor(16 * (ancho / 640) + 0.5);
+      const roto = sano * Math.floor(1 * (ancho / 640) + 0.5);
+      // `1,5 × roto − sano − 1`: uno y medio del espaciador inflado, menos el
+      // que tocaba, menos el `−1` de la precedencia. Los dos fallos en la misma
+      // resta, que es por lo que el desvío crece y no se queda en siete píxeles.
+      assert.equal(
+        inicioDeArmasSano(ancho, ancho) - inicioDeArmas(ancho, ancho),
+        1.5 * roto - sano - 1,
+        `a ${ancho} px: espaciador ${sano} inflado a ${roto}`
+      );
+    }
+  });
+
+  await t.test("el botón de arma NO escala: 128 píxeles a cualquier resolución", () => {
+    // `#define WEAPON_BTN_SIZEX 128`, sin `XRES`. Es de las pocas medidas del
+    // panel que no pasan por ahí, y es una decisión: son imágenes de 128×128 y
+    // estirarlas las emborrona.
+    assert.equal(ARMA_PX, 128);
+  });
+
+  await t.test("y los colores son los del original, con su errata incluida", () => {
+    assert.deepEqual(C.disponible, [0, 255, 0, 0], "EnabledColor: el verde de un personaje");
+    assert.deepEqual(C.apagado, [128, 128, 128, 80]);
+    assert.deepEqual(C.nuevo, [255, 255, 255, 0]);
+    assert.deepEqual(C.info, [192, 192, 192, 128]);
+    assert.deepEqual(C.resaltado, [255, 0, 0, 0], "HightlightColor, así escrito");
+    assert.equal(M.ranuraAncho, 110);
+    assert.equal(M.ranuraAlto, 130);
+    assert.equal(M.campoAlto, 20, "el campo de nombre tampoco escala");
+  });
+});

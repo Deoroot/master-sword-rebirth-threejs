@@ -90,8 +90,12 @@ que se pueden comprobar, y la segunda es la que más pesa:
 3. **uno está inventado entero**: `src/juego/inventario.js` es una rejilla estilo
    Diablo. MSR no tiene rejilla.
 
-**Hecho (experimento 29, [doc/VGUI_29.md](doc/VGUI_29.md)):** el kit —`esquema.js`,
-`widgets.js`, `registro.js`, `menubase.js`— y sobre él el menú de interacción con
-la **F** (`interactuar.js`).
+**Hecho:**
 
-**Pendiente:** 30 crear personaje, 31 el inventario, 32 Character Info.
+- **29** ([doc/VGUI_29.md](doc/VGUI_29.md)) el kit —`esquema.js`, `widgets.js`,
+  `registro.js`, `menubase.js`— y sobre él el menú de interacción con la **F**
+  (`interactuar.js`).
+- **30** ([doc/PERSONAJE_30.md](doc/PERSONAJE_30.md)) crear personaje
+  (`personaje.js`), con sus tres etapas y sus modelos.
+
+**Pendiente:** 31 el inventario, 32 Character Info.

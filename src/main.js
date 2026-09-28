@@ -54,6 +54,8 @@ import { cargarEsquema } from "./vgui/esquema.js";
 import { CSS as CSS_VGUI } from "./vgui/widgets.js";
 import { Registro, RUEDA } from "./vgui/registro.js";
 import { MenuInteractuar, ALCANCE as ALCANCE_INTERACTUAR } from "./vgui/interactuar.js";
+import { PanelDePersonaje, CSS as CSS_PERSONAJE } from "./vgui/personaje.js";
+import { Retratos } from "./render/retratos.js";
 import { opcionesDe as opcionesDeNpc, opcionesDelJugador } from "./play/opciones.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
 import { AlmacenLocal, AlmacenMemoria } from "./juego/almacen.js";
@@ -106,7 +108,24 @@ function say(text) {
 let hudMs = null;
 let menuMs = null;
 /** El registro de paneles de VGUI. `src/vgui/registro.js`. */
+/**
+ * Un reloj monótono en segundos, para las esperas de la reacción y para el
+ * desvanecido de los paneles.
+ *
+ * Se declara AQUÍ arriba y no donde se usa, que es donde estaba, porque los
+ * paneles de VGUI se montan antes de cargar el mapa y `Registro` lo lee para el
+ * desvanecido: con la declaración a mitad de `mainGateCity`, abrir la pantalla
+ * de personajes daba «Cannot access 'reloj' before initialization» y la página
+ * se quedaba en blanco. La zona muerta de un `let` no perdona.
+ */
+let reloj = 0;
 let vgui = null;
+/** Los retratos 3D de la pantalla de personajes. `src/render/retratos.js`. */
+let retratosDelPanel = null;
+/** El esquema de fuentes de VGUI. Lo usan los paneles, que se montan en dos sitios. */
+let esquemaVgui = null;
+/** Las opciones de menú de los NPC, de `build/gatecity/menus.json`. */
+let fichaDeMenus = null;
 /**
  * La munición que el jugador ha elegido a mano con el ciclador, o `null` para
  * la que el motor da de balde. Vive aquí y no en el personaje porque en el
@@ -275,7 +294,120 @@ async function mainGateCity() {
       .then((r) => (r.ok ? r.json() : null))
       .then((m) => (m ? cargarCuerpos(m) : null))
       .catch((e) => { console.warn("sin el modelo del personaje:", e); return null; });
-    interfaz = montarInterfaz({ sesion, catalogo, teclas, cuerpos: losCuerpos });
+    // `panelDePersonajes` es una funcion y no el panel: el registro de VGUI se
+    // monta mas tarde —necesita el mapa cargado para el esquema y los bichos— y
+    // esta pantalla sale a los 231 ms. Asi que se le pasa la llamada, que se
+    // resuelve cuando toque; mientras no exista, `interfaz` usa su pantalla
+    // suplente y el jugador puede elegir personaje igual.
+    interfaz = montarInterfaz({
+      sesion, catalogo, teclas, cuerpos: losCuerpos,
+      panelDePersonajes: () => (vgui?.buscar("newchar") ? (vgui.abrir("newchar"), true) : false),
+    });
+    retratosDelPanel = new Retratos(losCuerpos);
+    // ── LOS PANELES DE VGUI ───────────────────────────────────────────────
+    //
+    // Se montan AQUÍ, antes de cargar el mapa, y eso importa: la pantalla de
+    // personajes es la primera que se ve —a los 231 ms— y el mapa tarda 1,7 s.
+    // Montado después, `sesion.arrancar()` pedía esa pantalla, el registro no
+    // existía todavía y no salía ninguna. El esquema y los retratos no
+    // necesitan el mapa; el menú de la F sí, y por eso ése se monta más abajo.
+    //
+    // El kit está en `src/vgui/`: es `vgui_mscontrols.h` y `vgui_menubase.cpp`
+    // portados, con el registro de paneles que reparte las teclas. Ver
+    // `ESTRUCTURA.md` y `doc/VGUI_29.md`.
+    //
+    // Lo que cambia respecto a los paneles que había: **las teclas entran por la
+    // tabla del juego**. `interfaz.js` escuchaba `keydown` en la ventana por su
+    // cuenta, así que sus pantallas no eran del juego, eran páginas encima del
+    // juego. Éste se abre con la acción `interactuar`, que vale `f` porque lo dice
+    // `config.cfg:19`, y se reasigna en las opciones como cualquier otra.
+    try {
+      const m = await fetch("build/gatecity/menus.json").then((r) => (r.ok ? r.json() : null));
+      if (m) fichaDeMenus = m;
+    } catch (e) {
+      console.warn("las opciones de los NPC no están extraídas (`npm run menus`):", e);
+    }
+    esquemaVgui = await cargarEsquema("build/gatecity/", innerWidth);
+    if (!document.getElementById("vg-css")) {
+      const s = document.createElement("style");
+      s.id = "vg-css"; s.textContent = CSS_VGUI + CSS_PERSONAJE;
+      document.body.appendChild(s);
+    }
+    const capaVgui = document.createElement("div");
+    capaVgui.style.cssText = "position:absolute; inset:0; z-index:30; pointer-events:none;";
+    document.body.appendChild(capaVgui);
+
+    vgui = new Registro({
+      esquema: esquemaVgui,
+      raiz: capaVgui,
+      reloj: () => reloj,
+      sonar: (cual) => menuMs?.sonar?.(cual),
+    });
+    vgui.medir(innerWidth, innerHeight);
+
+    // ── CREAR PERSONAJE ───────────────────────────────────────────────────────
+    //
+    // `CNewCharacterPanel`, con sus tres etapas. Ver `doc/PERSONAJE_30.md`.
+    let iconosDeArma = null;
+    try {
+      iconosDeArma = await fetch("build/gatecity/iconos.json").then((r) => (r.ok ? r.json() : null));
+    } catch (e) {
+      console.warn("sin los iconos de las armas (`npm run iconos`):", e);
+    }
+    // Las siete de `reg.newchar.weaponlist`, con su icono si su script lo declara
+    // con `trade` — que son dos de siete, y eso es del juego. Ver `tools/iconos.mjs`.
+    const armasDePartida = (sesion?.catalogo?.nuevoPersonaje?.armas ?? []).map((id) => {
+      const f = catalogoDeObjetos?.porId?.get(id) ?? null;
+      const ic = iconosDeArma?.armas?.[id] ?? null;
+      return {
+        id, nombre: f?.nombre ?? id,
+        habilidad: f?.arma?.habilidad ?? (f?.tipo === "hechizo" ? "spellcasting" : null),
+        icono: ic ? `${iconosDeArma.base}${ic.archivo}` : null,
+      };
+    });
+
+    let censoDePersonajes = [];
+    const refrescarCenso = async () => {
+      try { censoDePersonajes = await sesion.almacen.listar(); } catch { censoDePersonajes = []; }
+      vgui?.buscar("newchar")?.refrescar();
+    };
+
+    vgui.poner(new PanelDePersonaje({
+      esquema: esquemaVgui,
+      retratos: retratosDelPanel,
+      armas: armasDePartida,
+      // `listar()` es sincrono porque el panel se redibuja en cada fotograma del
+      // desvanecido; la lista se refresca aparte y se queda cacheada.
+      listar: () => censoDePersonajes,
+      async jugar(id) {
+        vgui.cerrar();
+        await sesion.entrar(id);
+      },
+      async crear({ nombre, genero, arma }) {
+        const p = await sesion.crear({ nombre, genero, arma });
+        vgui.cerrar();
+        await sesion.entrar(p.id);
+      },
+      async borrar(id) {
+        await sesion.almacen.borrar(id);
+        await refrescarCenso();
+      },
+    }));
+    await refrescarCenso();
+
+    // EL PANEL SIGUE AL ESTADO DE LA SESIÓN, y no al revés.
+    //
+    // Se abre cuando la sesión dice ELIGIENDO —por `interfaz`, que es quien
+    // escucha— y **se cierra cuando deja de decirlo**, venga la entrada de donde
+    // venga. Sin esta segunda mitad, entrar al juego por cualquier camino que no
+    // sea pulsar en el panel —una sonda, un enlace, volver de la muerte— dejaba
+    // la pantalla de personajes puesta encima del mapa, con el jugador andando
+    // detrás. Lo cazó `sonda:vgui29`, que entra por `sesion.nuevo`.
+    sesion.al("estado", ({ ahora }) => {
+      if (ahora !== ESTADO.ELIGIENDO && vgui?.abierto?.nombre === "newchar") vgui.cerrar();
+    });
+
+
     guardarAlCerrar(sesion);
     // La pantalla de personajes, YA. El mapa viene detras.
     document.getElementById("intro").hidden = true;
@@ -705,42 +837,7 @@ async function mainGateCity() {
     },
   });
 
-  // ── LOS PANELES DE VGUI, y el menú de la F ────────────────────────────────
-  //
-  // El kit está en `src/vgui/`: es `vgui_mscontrols.h` y `vgui_menubase.cpp`
-  // portados, con el registro de paneles que reparte las teclas. Ver
-  // `ESTRUCTURA.md` y `doc/VGUI_29.md`.
-  //
-  // Lo que cambia respecto a los paneles que había: **las teclas entran por la
-  // tabla del juego**. `interfaz.js` escuchaba `keydown` en la ventana por su
-  // cuenta, así que sus pantallas no eran del juego, eran páginas encima del
-  // juego. Éste se abre con la acción `interactuar`, que vale `f` porque lo dice
-  // `config.cfg:19`, y se reasigna en las opciones como cualquier otra.
-  let fichaDeMenus = null;
-  try {
-    const m = await fetch("build/gatecity/menus.json").then((r) => (r.ok ? r.json() : null));
-    if (m) fichaDeMenus = m;
-  } catch (e) {
-    console.warn("las opciones de los NPC no están extraídas (`npm run menus`):", e);
-  }
-  const esquemaVgui = await cargarEsquema("build/gatecity/", innerWidth);
-  if (!document.getElementById("vg-css")) {
-    const s = document.createElement("style");
-    s.id = "vg-css"; s.textContent = CSS_VGUI;
-    document.body.appendChild(s);
-  }
-  const capaVgui = document.createElement("div");
-  capaVgui.style.cssText = "position:absolute; inset:0; z-index:30; pointer-events:none;";
-  document.body.appendChild(capaVgui);
-
-  vgui = new Registro({
-    esquema: esquemaVgui,
-    raiz: capaVgui,
-    reloj: () => reloj,
-    sonar: (cual) => menuMs?.sonar?.(cual),
-  });
-  vgui.medir(innerWidth, innerHeight);
-
+  // ── EL MENÚ DE INTERACCIÓN, que necesita a los bichos y al jugador ────────
   vgui.poner(new MenuInteractuar({
     esquema: esquemaVgui,
     // A quién tengo delante: `GetEntInFrontOfMe(72)`, o sea 72 unidades del
@@ -1287,8 +1384,6 @@ async function mainGateCity() {
     if (!ra || !rb) return false;
     return relacionDeRazas(tablaDeRazas, ra, rb) === RELACION.ALIADO;
   };
-  /** Un reloj monótono en segundos para las esperas de la reacción. */
-  let reloj = 0;
 
   // LA PASADA DE LA VISTA: el arma y el muñeco, encima del mundo y con la
   // profundidad limpia. Los dos juntos en una escena para que se tapen bien
@@ -2859,6 +2954,7 @@ async function mainGateCity() {
     get grupos() { return grupos; },
     get gruposDetalle() { return gruposDetalle; },
     get vgui() { return vgui; },
+    get retratosDelPanel() { return retratosDelPanel; },
     get hudMs() { return hudMs; },
     get huidas() { return huidas; },
     get impactos() { return impactos; },

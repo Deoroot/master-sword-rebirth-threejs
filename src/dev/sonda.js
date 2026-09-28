@@ -326,6 +326,12 @@ export function montarSonda(S) {
       }),
       /** El sitio medido, tal como lo escribio `tools/aparicion.mjs`. */
       aparicion: () => S.aparicion,
+      /** El personaje en juego, para poder mirarle el nombre y las manos. */
+      get personaje() { return S.sesion?.personaje ?? null; },
+      /** Los personajes guardados. Es `almacen.listar()`. */
+      listar: () => S.sesion?.almacen?.listar?.() ?? [],
+      /** Y borrar uno, para que una sonda pueda empezar de cero. */
+      borrar: (id) => S.sesion?.almacen?.borrar?.(id),
       /**
        * Crea uno y entra, que es el camino del jugador nuevo de un tiron.
        *
@@ -618,6 +624,10 @@ export function montarSonda(S) {
           id: i.id, nombre: i.ficha?.nombre ?? null, script: i.ficha?.script ?? null,
           hostil: i.ficha?.hostil ?? null, donde: [...i.donde],
         })),
+      /** En qué etapa está el panel de crear personaje. `stage_e`. */
+      etapa: () => S.vgui?.abierto?.etapa ?? null,
+      /** Cuántos retratos 3D siguen animándose. Cero fuera de esa pantalla. */
+      retratosVivos: () => (S.retratosDelPanel?.cuantos ?? 0) + (S.interfaz?.retratos ?? 0),
       /** Lo que se le ha dicho al jugador al elegir una opción. */
       ultimoSuceso: () => S.hudMs?.estado().consola?.at?.(-1) ?? null,
     },

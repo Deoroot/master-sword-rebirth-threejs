@@ -52,6 +52,10 @@ try {
 
   await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
+  // Desde el experimento 30 la pantalla de personajes es un panel de VGUI y
+  // está abierta al arrancar. `sesion.nuevo` crea y entra, y al entrar se
+  // cierra: hay que esperarlo, porque con ella delante la F no llega.
+  await pag.waitForFunction(() => window.probe.vgui.abierto() === null, null, { timeout: 60000 });
   await pag.evaluate(() => window.probe.vivo.congelarPaseo(true));
   await pag.evaluate(() => window.probe.hud.avanzar(40));
 
@@ -67,7 +71,10 @@ try {
   console.log(`    letra pequeña   ${kit.esquema.sml}`);
   console.log(`    letra de título ${kit.esquema.titulo}`);
   control("el registro de paneles está montado", kit.hay === true);
-  control("y arranca sin ningún panel abierto", kit.abierto === null, `${kit.abierto}`);
+  // Y al entrar al juego no queda ninguno abierto. Antes del 30 esto decía
+  // «arranca sin ningún panel abierto», que ya no es verdad: la pantalla de
+  // personajes es el primer panel que se ve.
+  control("dentro del juego no queda ningún panel abierto", kit.abierto === null, `${kit.abierto}`);
   // 1200 px de ancho: el motor elegiría el archivo de 960, que es el mayor que
   // no pasa. Si saliera 1440 es que se está interpolando, y el motor no lo hace.
   control("elige el archivo de esquema como el motor: el mayor que no pasa",
@@ -77,7 +84,7 @@ try {
 
   // ── 1. LA F LO ABRE. Con la tecla, no con una llamada ────────────────────
   console.log(`\n  LA TECLA`);
-  await pag.click("canvas", { position: { x: 600, y: 400 } });
+  await pag.click("#view", { position: { x: 600, y: 400 } });
   await pag.keyboard.press("KeyF");
   // 900 ms y no 400: el desvanecido dura MEDIO SEGUNDO, y medir el color a mitad
   // de camino da el ambar al 93 % de alfa. El primer intento de esta sonda midio
@@ -264,7 +271,14 @@ try {
     return { script: quien.script, nombre: quien.nombre, id: quien.id, total: lista.length };
   });
   console.log(`    puesto delante  ${puesto ? `${puesto.nombre} (${puesto.script})` : "NADIE"}`);
-  await new Promise((r) => setTimeout(r, 400));
+  // Y se ESPERA A VERLO antes de pulsar la F, en vez de confiar en un retardo.
+  // `poner()` mueve el cuerpo y la física tarda un paso en asentarlo; con un
+  // `setTimeout` a ojo la F llegaba antes de que `elegirObjetivo` viera a nadie
+  // y el panel salía con el menú del jugador. El control de después pasaba
+  // igual, porque vuelve a mirar y para entonces ya se veía: un control que
+  // mide en otro momento que la acción no mide la acción.
+  await pag.waitForFunction(() => window.probe.vgui.delante() !== null, null, { timeout: 15000 })
+    .catch(() => {});
   await pag.keyboard.press("KeyF");
   await new Promise((r) => setTimeout(r, 900));
   const conNpc = await pag.evaluate(() => ({

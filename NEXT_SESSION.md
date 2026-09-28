@@ -1,5 +1,21 @@
 # Dónde se quedó esto
 
+> **EL 30 ESTÁ HECHO: [doc/PERSONAJE_30.md](doc/PERSONAJE_30.md).** Crear
+> personaje, que es la primera pantalla del juego: **tres etapas** —elegir, quién
+> eres, con qué arma— y los personajes son **modelos**, no dibujos.
+> **819 pruebas y 17 de 17 en la sonda.** `npm run sonda:personaje30`.
+>
+> Dos fallos de medida del original, portados con el fallo y **multiplicándose
+> entre sí**: `XRES(16) * XRES(1)` convierte dos veces, y la función de centrar
+> tiene el `−1` fuera del paréntesis. A 640 son siete píxeles; a 1920 la rejilla
+> de armas se va **167** a la izquierda. Y uno de los datos: **cinco de las siete
+> armas de partida no tienen icono**, porque sus scripts dicen `sethudsprite
+> hand` y no `trade`.
+>
+> **Lo siguiente son los dos paneles que quedan**: 31 el inventario de verdad —se
+> retira la rejilla inventada de `src/juego/inventario.js`— y 32 Character Info.
+> Después, el repositorio con el tag del alfa.
+
 > **EL 29 ESTÁ HECHO: [doc/VGUI_29.md](doc/VGUI_29.md).** El kit de VGUI portado
 > —esquema de fuentes, `Panel`, `MSLabel`, `MSButton`, `LineBorder`, el registro
 > de paneles— y encima el menú de interacción con la **F**, que es el primero de
