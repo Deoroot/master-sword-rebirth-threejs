@@ -140,6 +140,31 @@ mirar la captura de la sonda al lado de la del juego.**
    funciona. No es un olvido: `maxplayers` necesita cuentas, `ms_reset_time`
    necesita que el mapa se reinicie —y no se reinicia, `doc/MISIONES_33.md` §8— y
    `sv_password` no protege nada que se pueda alcanzar desde fuera.
+
+   > **Revisado después, y este apartado estaba mal por partida doble.**
+   >
+   > **Son trece, no doce** —doce de la captura más «Play in full screen», que es
+   > nuestro— y los que funcionaban no eran uno: la cuenta decía **tres** y de
+   > verdad era **uno**. `mapa` y `nombre` no tenían `porQueNo`, así que pasaban
+   > por vivos, y ninguno de los dos llegaba al juego: `alEmpezar` sólo miraba
+   > `pantallaCompleta` y el valor de la fila «Map» se tiraba a la basura. Es la
+   > forma de fallo del 35, del agua y de los retratos otra vez —**el valor de
+   > reposo pasando la prueba**—, sólo que aquí el reposo era «no poner motivo».
+   >
+   > Y los motivos de arriba eran **falsos**, no sólo incompletos. `maxplayers`
+   > no necesita cuentas: `partida.js:199` ya reparte slots de verdad. Y «no hay
+   > servidor donde guardar los personajes» era falso desde el experimento 27,
+   > que trajo `AlmacenRemoto`.
+   >
+   > **El motivo bueno es uno solo para los once:** en el juego «Start» levanta
+   > un servidor, y aquí abre una partida local en la pestaña. `Anfitrion` sólo
+   > lo usa `tools/servidor.mjs`, que es otro proceso. No faltan once cosas,
+   > falta una.
+   >
+   > Quedan **dos vivos de trece**: `pantallaCompleta`, y `mapa`, que ya se
+   > engancha —«Start» entra con lo que resuelve `mapaElegido()`—. Para que no
+   > se repita, un ajuste ahora tiene que decir o `porQueNo` o `aplica`, y hay
+   > una prueba que lo exige: un ajuste no puede quedarse callado.
 4. **Keyboard Lock, comprobado en un Chromium a pantalla completa.** El
    experimento 35 lo dejó dicho y sigue sin sonda.
 
@@ -164,6 +189,6 @@ mirar la captura de la sonda al lado de la del juego.**
 ```bash
 npm run servidor            # y entonces la pestaña «Lan» encuentra algo
 npm test                    # 978 pruebas
-npm run sonda:arranque36    # 12 controles: la única sonda que carga SIN ?map=
+npm run sonda:arranque36    # 22 controles: la única sonda que carga SIN ?map=
 npm run sonda:vgui2_34      # 26 controles
 ```

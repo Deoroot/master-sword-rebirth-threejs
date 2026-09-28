@@ -28,11 +28,11 @@ All game content is theirs; see [CREDITOS.md](CREDITOS.md).
 | **The character** | attributes, the six skill schools, experience, levels, inventory, weight, gold, quickslots, saving |
 | **Multiplayer** | a Node WebSocket server, 100 Hz ticks, delta snapshots, `ex_interp` interpolation, lag compensation with rewind |
 | **The interface** | the HUD, the event console, the main menu, and all four character panels — create a character, inventory, Character Info and the NPC interaction menu — ported from the game's own VGUI widgets and text schemes. The inventory has the real gear column (your hands and the four containers a new character is given) and the game's Tiled / Small / Descriptions views; the F menu on yourself offers the six options the player script registers, and drops to three while you are sitting |
-| **Starting a game** | the game opens where the game opens: at the main menu. «Establish a Kingdom» brings up Valve's own Create Server window with its two tabs and its cvars, and «Start» is the door into Gate City; «Visit a Kingdom» opens Valve's server browser, which here finds the local `npm run servidor` in its **Lan** tab — there is no Steam master server behind the other five. `?map=gatecity` skips straight in, which is what `hl.exe +map` does |
+| **Starting a game** | the game opens where the game opens: at the main menu. «Establish a Kingdom» brings up Valve's own Create Server window with its two tabs and its cvars — two of its thirteen rows reach the game, the map you pick and fullscreen, and the other eleven are off for one shared reason rather than eleven: here «Start» opens a game inside the tab, it does not launch a server, and every one of those rows is a server cvar; «Visit a Kingdom» opens Valve's server browser, which here finds the local `npm run servidor` in its **Lan** tab — there is no Steam master server behind the other five. `?map=gatecity` skips straight in, which is what `hl.exe +map` does |
 | **Settings** | Valve's own Options dialog, and nine of its thirty controls reach the game: mouse sensitivity, filtering and inversion use the mod's own formula (`sensitivity × m_yaw`, not a constant), sound and music are two separate gains as in the engine, the player name is what the character screen proposes, and brightness and gamma rebuild the 25 lightmap atlases — which is the one thing `R_GammaChanged` does. The other twenty-one are shown disabled and each says why |
 | **One quest** | the Gate City mayor's. His menu options come from *running* his `.script`, and handing him the goblin chief's head really does take it out of your pack and pay you. Quest state saves with the character |
 
-Roughly 31 000 lines of JavaScript, **1 000 Node checks** and 22 browser probes that
+Roughly 31 000 lines of JavaScript, **1 003 Node checks** and 23 browser probes that
 drive a real Chromium and measure what is on screen. Every ported rule cites the
 engine or mod source it came from, file and line.
 
@@ -71,13 +71,13 @@ cd -
 
 # 2. this
 npm install
-npm test                  # 1 000 checks, no browser needed
+npm test                  # 1 003 checks, no browser needed
 
 # 3. extract what the browser needs into build/ (never committed)
 npm run gatecity          # the map, its textures and its lightmap
 npm run gatecity:bichos   # the 69 NPCs' models
 npm run cuerpo            # the player models
-npm run sonido            # the sounds
+npm run sonido            # the sounds — see "Two builds, two soundtracks" below
 npm run objetos           # the item catalogue from the scripts
 npm run hud && npm run menu
 npm run vgui && npm run menus   # the VGUI text schemes and the NPC menu options
@@ -93,6 +93,31 @@ The tools read from `../MSC/assets/msr/` and `../MSC/MSCScripts/scripts/`, which
 what the two clones above give you. Nothing is written back there; everything
 extracted lands in `build/`, which is not committed and carries its own
 `build/gatecity/PROCEDENCIA.md` saying which game file each piece came from.
+
+### Two builds, two soundtracks
+
+Master Sword ships twice and the two do not sound the same, which took a while to
+notice. The **Xash3D** build is standalone — its `gameinfo.txt` says
+`basedir "msr"` and says why: *"makes MSR a fully standalone game (no valve/
+dependency)"*. The **GoldSrc** build is an ordinary mod, `hl.exe -game msr`, and
+GoldSrc always mounts `valve/` behind the mod. So a third of the sounds the game
+asks for — `pl_step*` (stone, 92 % of Gate City's floor), `pl_dirt*`,
+`pl_slosh*`/`pl_wade*`, `common/bodydrop*`, `doors/doormove*` and most of the
+combat set — are Half-Life's, and the mod inherits them.
+
+`npm run sonido` bakes whichever it finds. Point it at a Half-Life install to get
+the GoldSrc set, which is what a player actually hears:
+
+```bash
+HALFLIFE="C:/path/to/Half-Life" npm run sonido   # the mod, valve/ behind it
+HALFLIFE=none npm run sonido                     # Xash3D: stone runs silent
+```
+
+Without it, the 36 Half-Life files are missing and four footstep samples are
+**generated** instead — ours, not the game's, marked `generado: true` in the
+catalogue. That is the honest Xash3D sound. Anything read from `valve/` is
+Valve's, is listed separately in `PROCEDENCIA.md`, and is another reason the
+content cannot be redistributed: see the licence note at the end.
 
 ## Layout
 

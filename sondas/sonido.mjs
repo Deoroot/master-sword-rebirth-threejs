@@ -53,8 +53,55 @@ console.log(`  catálogo: ${JSON.stringify(antes.catalogo)}`);
 control("el catálogo de sonido carga", Boolean(antes.catalogo));
 control("y trae las cuatro canciones del mapa", antes.catalogo?.musica.length === 4,
   (antes.catalogo?.musica ?? []).join(", "));
-control("y declara lo que NO está en el juego", (antes.catalogo?.faltan ?? 0) > 0,
-  `${antes.catalogo?.faltan} archivos, de la carpeta valve de Half-Life`);
+// ── DE QUÉ HORNADA HABLA ESTA SONDA ────────────────────────────────────────
+//
+// Master Sword tiene dos builds y NO SUENAN IGUAL, así que una sonda que fije
+// una sola miente en la otra. Cuatro controles de aquí estuvieron afirmando que
+// `pl_step*` y `pl_dirt*` «no están en el juego» y que la piedra suena con
+// muestras nuestras: era verdad de la build de **Xash3D** (`basedir "msr"`, sin
+// `valve/` detrás) y es falso del **mod de GoldSrc** (`hl.exe -game msr`, que
+// monta `valve/` detrás y hereda los pasos de Half-Life). Ver `tools/sonido.mjs`.
+//
+// Así que primero se lee QUÉ se ha horneado, y después se comprueba lo que a esa
+// hornada le corresponde. Se lee del catálogo horneado y no de un interruptor de
+// la sonda, porque el catálogo es lo que el juego va a tocar.
+const crudo = await pag.evaluate(async () => {
+  const r = await fetch("build/gatecity/sonido.json");
+  if (!r.ok) return null;
+  const c = await r.json();
+  const pasos = Object.entries(c.pasos ?? {});
+  const cuenta = (f) => pasos.reduce((a, [, v]) => a + v.filter(f).length, 0);
+  return {
+    deValve: cuenta((s) => s.de === "valve"),
+    deMod: cuenta((s) => s.de === "msr"),
+    generados: cuenta((s) => s.generado),
+    sinDe: cuenta((s) => !s.de && !s.generado),
+    porMaterial: Object.fromEntries(pasos.map(([m, v]) => [m,
+      (v[0]?.archivo?.match(/pl_[a-z]+|gen/) ?? ["?"])[0]])),
+  };
+});
+const goldsrc = (crudo?.deValve ?? 0) > 0;
+console.log(`  hornada: ${goldsrc ? "MOD DE GOLDSRC ('valve/' detrás)" : "XASH3D (standalone)"} · ` +
+  `${crudo?.deValve} muestras de valve, ${crudo?.deMod} del mod, ${crudo?.generados} generadas`);
+console.log(`  por material: ${Object.entries(crudo?.porMaterial ?? {}).map(([m, a]) => `${m}→${a}`).join(", ")}`);
+control("el catálogo dice de dónde viene cada paso", crudo && crudo.sinDe === 0,
+  `${crudo?.sinDe} sin declarar`);
+if (goldsrc) {
+  // La piedra es el 92 % del suelo de Gate City: si suena, suena esto.
+  control("horneado como el mod: la piedra suena con los `pl_step*` de Half-Life",
+    crudo.porMaterial.piedra === "pl_step", `piedra → ${crudo.porMaterial.piedra}`);
+  control("y la tierra con los suyos, que son OTROS archivos",
+    crudo.porMaterial.tierra === "pl_dirt", `tierra → ${crudo.porMaterial.tierra}`);
+  control("y no queda nada generado por nosotros", crudo.generados === 0, `${crudo.generados}`);
+  control("y ya no falta nada de la carpeta valve", (antes.catalogo?.faltan ?? 0) === 0,
+    `${antes.catalogo?.faltan} ausentes`);
+} else {
+  control("horneado como Xash3D: declara lo que NO está en el juego",
+    (antes.catalogo?.faltan ?? 0) > 0,
+    `${antes.catalogo?.faltan} archivos, de la carpeta valve de Half-Life`);
+  control("y la piedra suena con muestras GENERADAS, no leídas",
+    crudo.porMaterial.piedra === "gen", `piedra → ${crudo.porMaterial.piedra}`);
+}
 control("y los que están y no suenan", (antes.catalogo?.mudos ?? 0) === 4,
   `${antes.catalogo?.mudos} (pl_ladder*, 10 ms)`);
 
@@ -76,9 +123,13 @@ control("los sonidos de ambiente arrancan solos", desp.arrancadas >= 1, `${desp.
 // existe, así que el archivo que falta llegaba como HTML y sólo lo cazó el
 // decodificador, dos pasos más tarde. Lo que se pide es que NO se pida nada
 // que el catálogo ya diga que no está.
+// Y el «>= 1» sólo vale horneando Xash3D: en el mod de GoldSrc `drips.wav` SÍ
+// existe —está en `valve/ambience/`— así que no hay nada que saltarse, y exigir
+// un salto dejaría la sonda en rojo por funcionar bien. Lo que se pide en las dos
+// hornadas es lo mismo: ni un fallo de decodificación.
 control("y no se pide ningún archivo que el catálogo dice que no está",
-  desp.ambienteSinArchivo >= 1 && desp.fallos.length === 0,
-  `${desp.ambienteSinArchivo} saltado (ambience/drips.wav, de Half-Life), ${desp.fallos.length} fallos`);
+  desp.fallos.length === 0 && (goldsrc || desp.ambienteSinArchivo >= 1),
+  `${desp.ambienteSinArchivo} saltado${goldsrc ? " (con valve/ detrás no falta ninguno)" : " (ambience/drips.wav, de Half-Life)"}, ${desp.fallos.length} fallos`);
 control("y ninguno da 404 — que además no bastaría", fallos404.length === 0, fallos404.join(", ") || "ninguno");
 
 // ── 4. QUÉ SE PISA ─────────────────────────────────────────────────────────
@@ -190,15 +241,14 @@ control("abrir una puerta PIDE su sonido", pedidosDespues > pedidosAntes,
 const fin = await pag.evaluate(() => window.probe.sonido.estado);
 control("y los pasos sin archivo se cuentan, no se tragan", typeof fin.sinArchivo === "number",
   `${fin.sinArchivo} pedidos sin archivo`);
-// Desde el 26 la piedra y la tierra SÍ tienen muestras, y son NUESTRAS:
-// `pl_step*` y `pl_dirt*` siguen sin estar en el mod y los genera
-// `tools/sonido.mjs`. Este control está aquí para que no se olvide cuál es
-// cuál — un catálogo lleno es justo cuando deja de verse.
-control("la piedra y la tierra suenan con muestras GENERADAS, no leídas",
-  fin.catalogo?.generados?.piedra === 4 && fin.catalogo?.generados?.tierra === 4,
-  `piedra ${fin.catalogo?.generados?.piedra}, tierra ${fin.catalogo?.generados?.tierra} de 4`);
-control("y los de Valve siguen contados como ausentes",
-  (fin.catalogo?.faltan ?? 0) > 0, `${fin.catalogo?.faltan} archivos que el juego no tiene`);
+// De quién son las muestras que acaban de sonar, que es lo que no se ve en un
+// catálogo lleno. Las dos hornadas tienen su respuesta y las dos son correctas;
+// lo que no sería correcto es que la sonda sólo supiera una. Los controles de
+// arriba, junto a la hornada, ya lo fijan — aquí sólo queda que el recuento del
+// catálogo cuadre con lo que se leyó del `.json` por otro camino.
+control("lo que dice el catálogo cuadra con lo que el juego cargó",
+  (fin.catalogo?.generados?.piedra ?? 0) === (goldsrc ? 0 : 4),
+  `piedra generada: catálogo ${fin.catalogo?.generados?.piedra ?? 0}, hornada ${goldsrc ? "goldsrc" : "xash"}`);
 
 // ── el veredicto ───────────────────────────────────────────────────────────
 console.log("\n  CONTROLES");

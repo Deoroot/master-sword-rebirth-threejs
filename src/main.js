@@ -52,6 +52,8 @@ import { Audio } from "./play/audio.js";
 // LO QUE HACE CADA AJUSTE (experimento 37): la fórmula del ratón del mod, la
 // ganancia del volumen y la tabla que lleva el atlas de una gamma a otra.
 import { Raton, ganancia, PITCH_MAX } from "./play/aplicar.js";
+// El mapa que elige «Create Server». La tabla es la regla; aquí sólo se aplica.
+import { mapaElegido } from "./play/crearpartida.js";
 import { porDefecto as ajustesPorDefecto } from "./play/ajustes.js";
 import { rehacerMapaDeLuz } from "./render/regamma.js";
 import { AJUSTES as GAMMA_HORNEADA, validar as validarGamma } from "./bsp/gamma.js";
@@ -130,6 +132,13 @@ function say(text) {
 // decir QUÉ clase de suceso es.
 let hudMs = null;
 let menuMs = null;
+/**
+ * Con qué mapa se entró, resuelto por `mapaElegido()` desde la fila «Map» de
+ * «Create Server». `null` mientras no se haya entrado por ahí —con `?map=` no
+ * pasa por esta ventana, que es lo que mide el control positivo del 36—. Está
+ * aquí para que la sonda lea LO QUE SE APLICÓ y no lo que la ventana enseñaba.
+ */
+let mapaDeLaPartida = null;
 /** El registro de paneles de VGUI. `src/vgui/registro.js`. */
 /**
  * Un reloj monótono en segundos, para las esperas de la reacción y para el
@@ -270,6 +279,45 @@ async function mainGateCity() {
 
   let interfaz = null;
   let vgui2 = null;                  // las ventanas de Valve: Options y Servers
+
+  /**
+   * EL PUNTERO, PARA LAS TRES CAPAS DE INTERFAZ QUE HAY.
+   *
+   * `atrapa = true` significa «esta capa quiere el ratón», y entonces se suelta
+   * el `canvas`; `false` es «ya no lo quiere», y el juego se lo queda otra vez.
+   * Es `UpdateCursorState` (`vgui_teamfortressviewport.cpp:1741-1750`), donde
+   * sin menú el motor llama a `IN_ResetMouse()` y baja `g_iVisibleMouse` en el
+   * mismo fotograma.
+   *
+   * ESTABA ESCRITO TRES VECES Y CABLEADO UNA. El experimento 35 se lo dio a los
+   * paneles de VGUI1 —el inventario y el menú de la F, que abrían y no se podían
+   * pulsar— y el menú principal se quedó sin él. No se notó porque el menú se
+   * abre con la Escape, y **la Escape suelta el puntero ella sola**: eso ya
+   * estaba escrito en `src/juego/navegador.js:76`, en la tabla de teclas que el
+   * navegador se reserva. O sea que durante seis experimentos el ratón del menú
+   * principal lo soltó el navegador por nosotros.
+   *
+   * Y en pantalla completa con Keyboard Lock **la Escape ya no es del
+   * navegador**: la pedimos nosotros, que es justo el punto del experimento 35.
+   * Así que el favor desaparece, el puntero se queda en el `canvas` y el menú
+   * principal se abre sin ratón. Un arreglo se llevó por delante lo que le
+   * tapaba el fallo al de al lado.
+   */
+  const cursorDelRaton = (atrapa) => {
+    if (atrapa) { document.exitPointerLock?.(); return; }
+    // Aquí hay una diferencia del navegador que conviene dejar escrita:
+    // `requestPointerLock` exige un gesto del usuario. Cerrar un panel siempre
+    // es uno —la Escape, un número, un clic en un botón—, así que dentro de ese
+    // manejador se concede. Si algún día se cierra solo (un temporizador, el
+    // servidor), no se concederá y **no pasa nada**: el clic en el `canvas` lo
+    // recupera. Por eso esto no comprueba el resultado ni avisa de nada.
+    if (interfaz?.abierta) return;    // eligiendo personaje o muerto: no
+    // Chrome devuelve una promesa desde la 111 y las versiones viejas no
+    // devuelven nada. Sin este `if` una negativa sale por la consola como un
+    // error sin atrapar, que es ruido justo donde se mira si hay fallos.
+    const pedido = canvas.requestPointerLock?.();
+    if (pedido?.catch) pedido.catch(() => {});
+  };
   // Lo que la ventana de Options deja puesto al pulsar «Apply», y lo que hace.
   //
   // `ajustesDelJugador` es lo aplicado; `aplicarAjustes` es quien lo reparte, y
@@ -375,9 +423,20 @@ async function mainGateCity() {
     //   `interfaz?.abierta`    eligiendo personaje o muerto. Sin esto, cerrar
     //                          una ventana durante la pantalla de muerte le
     //                          quita el ratón a quien necesita pulsar un botón.
+    //   `menuMs?.abierto`      el menú principal, que desde ahora SIGUE ABIERTO
+    //                          detrás de Options. Cerrar la ventana le devolvía
+    //                          el puntero al lienzo y dejaba el menú sin ratón.
+    //                          Hoy no llega a pasar —el menú ya lo había
+    //                          soltado al abrirse, así que no hay nada que
+    //                          devolver— pero la regla es «con el menú puesto
+    //                          el ratón es libre» y vale más escrita que
+    //                          dependiendo de en qué orden se abrieron las
+    //                          cosas. Es la mina del 38, que era exactamente
+    //                          un favor que se cumplía solo hasta que dejó de
+    //                          cumplirse.
     montarVgui2({
       teclas, acciones: ACCIONES,
-      puedeCapturar: () => !vgui?.atrapaElRaton && !interfaz?.abierta,
+      puedeCapturar: () => !vgui?.atrapaElRaton && !interfaz?.abierta && !menuMs?.abierto,
       alAplicar: (valores) => { ajustesDelJugador = valores; aplicarAjustes?.(valores); },
       // LA LISTA, y sólo la pestaña **Lan** devuelve algo.
       //
@@ -459,27 +518,7 @@ async function mainGateCity() {
       // textos y su ratón encima— y no se podía pulsar **ni uno**, porque el
       // puntero seguía atrapado en el `canvas` y los clics no llegaban al DOM.
       // `atrapaElRaton` estaba escrito desde el 29 y nadie lo conectaba.
-      cursor: (atrapa) => {
-        if (atrapa) { document.exitPointerLock?.(); return; }
-        // Y AL CERRAR SE VUELVE A ATRAPAR, que es lo que hace el motor: sin
-        // menú, `UpdateCursorState` llama a `IN_ResetMouse()` y baja
-        // `g_iVisibleMouse`, o sea que el ratón es del juego otra vez en el
-        // mismo fotograma (vgui_teamfortressviewport.cpp:1741-1750).
-        //
-        // Aquí hay una diferencia del navegador que conviene dejar escrita:
-        // `requestPointerLock` exige un gesto del usuario. Cerrar un panel
-        // siempre es uno —la Escape, un número, un clic en un botón—, así que
-        // dentro de ese manejador se concede. Si algún día se cierra solo (un
-        // temporizador, el servidor), no se concederá y **no pasa nada**: el
-        // clic en el `canvas` de más abajo lo recupera. Por eso esto no
-        // comprueba el resultado ni avisa de nada.
-        if (interfaz?.abierta) return;    // eligiendo personaje o muerto: no
-        // Chrome devuelve una promesa desde la 111 y las versiones viejas no
-        // devuelven nada. Sin este `if` una negativa sale por la consola como
-        // un error sin atrapar, que es ruido justo donde se mira si hay fallos.
-        const pedido = canvas.requestPointerLock?.();
-        if (pedido?.catch) pedido.catch(() => {});
-      },
+      cursor: cursorDelRaton,
     });
     vgui.medir(innerWidth, innerHeight);
 
@@ -1116,13 +1155,34 @@ async function mainGateCity() {
   }
   menuMs = montarMenu({
     ficha: fichaDelMenu,
+    cursor: cursorDelRaton,
+    // Con una ventana de VGUI2 delante el menú se ve pero no se toca. Hace
+    // falta desde que «Options» se queda detrás en vez de cerrarse, pero el
+    // agujero es más viejo: lo tenían ya el navegador de servidores (34) y
+    // «Establish a Kingdom» (36), que llevan desde entonces dejándolo abierto.
+    tapado: () => Boolean(vgui2?.hayAlgoAbierto()),
     hacer({ que }) {
       if (que === "cerrar") { menuMs.cerrar(); return true; }
       if (que === "opciones" || que === "nombrar") {
         // «Name Character» y «Options» comparten comando en el archivo del
         // juego; aquí van a sitios distintos porque es lo que dicen.
-        menuMs.cerrar();
-        if (que === "nombrar") interfaz?.elegir?.();
+        //
+        // Y NO CIERRAN EL MENÚ IGUAL, que es el fallo que se veía jugando: la
+        // ventana de Options salía flotando sobre el mapa y sobre el HUD, con
+        // el menú desaparecido. En el juego una ventana se abre SOBRE LA VISTA
+        // DONDE ESTABAS, y desde el menú esa vista es el menú.
+        //
+        //   - «Options» es de VGUI2, que vive en `z-index: 60` contra el `40`
+        //     del menú: dibuja encima sola. El menú se queda detrás y tapa el
+        //     mapa —`inset: 0` y fondo opaco—, que es lo que se quiere, y es lo
+        //     que ya hacían «Visit a Kingdom» y «Establish a Kingdom» aquí al
+        //     lado. Options era la única de las tres que se salía del molde.
+        //   - «Name Character» es de VGUI1 y NO tiene `z-index`, así que con el
+        //     menú abierto quedaría enterrada debajo. Ésa sí lo cierra.
+        //
+        // Por eso la rama se parte en vez de vaciarse: la línea que sobraba
+        // sobraba para una de las dos, no para las dos.
+        if (que === "nombrar") { menuMs.cerrar(); interfaz?.elegir?.(); }
         else interfaz?.opciones?.();
         return true;
       }
@@ -1152,8 +1212,26 @@ async function mainGateCity() {
                 else suceso("nopuedes", `Could not go fullscreen (${r.porque}).`);
               });
             }
-            // Sólo hay un mapa portado, así que `mapa` todavía no elige nada:
-            // está para no mentir en la lista. Ver `src/play/crearpartida.js`.
+            // EL MAPA ELEGIDO, que hasta ahora se tiraba a la basura. La fila
+            // estaba en la ventana, el jugador la movía y `alEmpezar` ni la
+            // miraba: contada como viva y sin llegar a ningún sitio.
+            //
+            // `mapaElegido()` resuelve `< Random Map >` —al azar entre los que
+            // existen de verdad, que hoy es uno— y descarta un nombre que no
+            // esté portado. Con un solo mapa las dos entradas caen en
+            // `gatecity`, así que esto no cambia a dónde se va: cambia que la
+            // elección se LEE. El día que entre un segundo mapa ya está hecho.
+            //
+            // Y si no resuelve nada no se entra: «Start» prometiendo una
+            // partida que no puede abrir es peor que «Start» que no hace nada.
+            // Es la misma regla que la prueba «sin ningún mapa de verdad,
+            // "Start" no promete nada».
+            const mapa = mapaElegido(valores.mapa);
+            mapaDeLaPartida = mapa;
+            if (!mapa) {
+              suceso("nopuedes", "No map to start: nothing is ported yet.");
+              return;
+            }
             menuMs.cerrar();
             entrarPorElMenu = false;
             sesion?.arrancar();
@@ -1162,9 +1240,36 @@ async function mainGateCity() {
         return true;
       }
       if (que === "desconectar") {
-        menuMs.cerrar();
-        sesion?.guardar({ forzar: true });
-        interfaz?.elegir?.();
+        // «DISCONNECT» DEVUELVE AL MENÚ PRINCIPAL, no a la pantalla de
+        // personajes. En GoldSrc `disconnect` tira la partida y lo que queda
+        // delante es el menú con su fondo; quien elige personaje es quien está
+        // entrando, no quien acaba de salir.
+        //
+        // Lo que había aquí era `guardar()` + `interfaz.elegir()`, y eso dejaba
+        // dos cosas mal a la vez: se veía la pantalla de personajes en vez del
+        // menú, y **el mapa se quedaba detrás** porque el personaje seguía
+        // vivo en la sesión. `sesion.salir()` existe desde siempre y hace lo
+        // que toca —guarda a la fuerza, suelta el personaje y pasa a ELIGIENDO
+        // (`src/juego/sesion.js:450`)—; no se estaba llamando.
+        //
+        // El menú se reabre con `hayPartida = false`, que es lo que quita
+        // «Resume game» y «Disconnect» de la lista: ya no hay partida a la que
+        // volver, y dejarlas puestas sería ofrecer una puerta a ningún sitio.
+        //
+        // LO QUE ESTO NO HACE, y va dicho: no descarga el mapa. El motor sí lo
+        // hace, y aquí costaría los segundos de volver a leer el `.bsp` con sus
+        // 25 atlas de luz. El fondo del menú es opaco, así que no se ve; pero
+        // los 69 bichos siguen en memoria y ésa es una diferencia nuestra.
+        // Y se espera a que salga antes de reabrir el menú, porque soltar el
+        // personaje pasa la sesión a ELIGIENDO y la interfaz reacciona
+        // levantando la pantalla de personajes. Sin cerrarla queda DETRÁS del
+        // menú, y la Escape siguiente descubre una pantalla de elegir personaje
+        // donde debería estar el mapa que ya no hay. El menú es la única cosa
+        // delante después de desconectar.
+        Promise.resolve(sesion?.salir?.()).then(() => {
+          vgui?.cerrar();
+          menuMs.abrir(false);
+        });
         return true;
       }
       return false;
@@ -1539,8 +1644,25 @@ async function mainGateCity() {
     // panel y a partir de ahí el `if (menuMs?.abierto) return;` de dos líneas más
     // abajo se comía todas las teclas: la F no cerraba, el 1 no elegía, nada.
     // Cuatro controles de `sonda:vgui29` en rojo de una vez, todos por esto.
+    // Y `!e.repeat`, que es el fallo que se ve jugando y no leyendo. AGUANTAR
+    // LA ESCAPE ES LO QUE PIDE CHROMIUM PARA SALIR DE PANTALLA COMPLETA cuando
+    // el teclado está atrapado —un toque no basta, a propósito: es la única
+    // salida que le queda al usuario—. Así que en pantalla completa el jugador
+    // TIENE que aguantarla, y cada repetición del `keydown` alternaba el menú:
+    // abre, cierra, abre, cierra, sesenta veces por segundo, con su sonido cada
+    // vez. `src/main.js:1599` ya sabía esto para las ranuras —«aguantar una
+    // tecla en un navegador dispara `keydown` en bucle»— y a la tecla que sirve
+    // para salir no se le aplicó.
+    //
+    // No es una concesión al navegador: en el motor el menú también se alterna
+    // al PULSAR y no mientras se aguanta. `IN_KeyEvent` reparte cambios de
+    // estado, y un `keydown` repetido no es un cambio de estado.
     if (e.code === "Escape" && !interfaz?.abierta && !vgui?.abierto) {
-      menuMs?.alternar(Boolean(sesion?.personaje));
+      // El `if` va DENTRO y no en la condición de arriba: así la repetición se
+      // come la tecla igual que el primer toque —no cae al reparto de los
+      // paneles de VGUI— y sólo deja de alternar. Es la forma de
+      // `src/main.js:1599`, y por la misma razón.
+      if (!e.repeat) menuMs?.alternar(Boolean(sesion?.personaje));
       e.preventDefault();
       return;
     }
@@ -3471,6 +3593,7 @@ async function mainGateCity() {
     get mallaDetalle() { return mallaDetalle; },
     get materialBajoLosPies() { return materialBajoLosPies; },
     get materiales() { return materiales; },
+    get mapaDeLaPartida() { return mapaDeLaPartida; },
     get menuMs() { return menuMs; },
     get muertes() { return muertes; },
     get mundo() { return mundo; },

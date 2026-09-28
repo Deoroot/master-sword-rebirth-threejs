@@ -83,6 +83,86 @@ try {
   control("y «Quit» sigue apagada, porque una pestaña no se cierra sola",
     estado.salir === "no", `Quit: ${estado.salir}`);
 
+  // ── 2b. «OPTIONS» SE ABRE **ENCIMA DEL MENÚ**, no encima del mapa ────────
+  //
+  // El fallo que se veía jugando: `main.js` cerraba el menú antes de abrir la
+  // ventana, así que Options salía flotando sobre el mundo y sobre el HUD. En
+  // el juego una ventana se abre sobre la vista donde estabas. Sus dos
+  // hermanas de la misma función —«Visit a Kingdom» y «Establish a Kingdom»—
+  // ya se quedaban detrás; Options era la única que no.
+  //
+  // La entrada se busca por `data-que="opciones"` y no por su texto: la
+  // etiqueta sale de `gamemenu.res`, y el comando es el mismo que el de «Name
+  // Character» (`play/menu.js:42-45`), que sí cierra el menú a propósito.
+  const hayOpciones = await pag.evaluate(() =>
+    !!document.querySelector('.ms-menu-op[data-que="opciones"][data-sirve="si"]'));
+  control("el menú trae una entrada «Options» que se puede elegir",
+    hayOpciones === true, `data-que="opciones": ${hayOpciones}`);
+
+  await pag.click('.ms-menu-op[data-que="opciones"]');
+  await pag.waitForTimeout(400);
+  const conOpciones = await pag.evaluate(() => ({
+    ventana: window.probe.vgui2.estado().opciones?.pestana ?? null,
+    menu: !document.querySelector(".ms-menu")?.hidden,
+    tapado: window.probe.menu.estado().tapado,
+  }));
+  // LA LÍNEA BASE SE TOMA DESPUÉS DE ABRIR, no antes: pulsar «Options» con el
+  // ratón marca esa misma entrada (`menums.js`, el `click` hace `elegida = i`),
+  // así que una foto anterior al clic compararía contra otra cosa y el control
+  // saldría rojo por el motivo equivocado.
+  const marcada = await pag.evaluate(() => window.probe.menu.estado().elegida);
+  control("«Options» abre la ventana de Valve",
+    conOpciones.ventana !== null, `pestaña ${conOpciones.ventana}`);
+  control("Y EL MENÚ SIGUE DETRÁS, que es el fallo: no se cierra",
+    conOpciones.menu === true, `menú abierto: ${conOpciones.menu}`);
+  control("el menú se sabe tapado, así que no atiende a nadie",
+    conOpciones.tapado === true, `tapado: ${conOpciones.tapado}`);
+
+  // EL GUARDIA. Con el menú detrás, el `Enter` se lo queda la ventana Y ADEMÁS
+  // activaba la opción que hubiera debajo, a ciegas. Las flechas movían la
+  // marca por detrás igual. Se mide con teclas de verdad, no llamando a
+  // `elegir()`: lo que se quiere probar es el reparto del teclado.
+  await pag.keyboard.press("ArrowDown");
+  await pag.keyboard.press("ArrowDown");
+  await pag.keyboard.press("Enter");
+  await pag.waitForTimeout(350);
+  const trasTeclas = await pag.evaluate(() => ({
+    elegida: window.probe.menu.estado().elegida,
+    abiertas: window.probe.vgui2.abiertas(),
+    menu: !document.querySelector(".ms-menu")?.hidden,
+  }));
+  control("con la ventana delante, las flechas NO mueven la marca de detrás",
+    trasTeclas.elegida === marcada,
+    `al abrir ${marcada} · tras las flechas ${trasTeclas.elegida}`);
+  control("y el Enter NO pulsa la entrada que hay debajo de la ventana",
+    trasTeclas.abiertas === 1 && trasTeclas.menu === true,
+    `${trasTeclas.abiertas} ventana(s), menú ${trasTeclas.menu}`);
+
+  await pag.screenshot({ path: "build/gatecity/vistas/arranque36_opciones.png" });
+  console.log(`    captura         build/gatecity/vistas/arranque36_opciones.png`);
+
+  // La Escape cierra la ventana y devuelve el menú, que es la vuelta.
+  await pag.keyboard.press("Escape");
+  await pag.waitForTimeout(350);
+  const trasCerrar = await pag.evaluate(() => ({
+    abiertas: window.probe.vgui2.abiertas(),
+    menu: !document.querySelector(".ms-menu")?.hidden,
+    tapado: window.probe.menu.estado().tapado,
+  }));
+  control("la Escape cierra Options y deja el menú donde estaba",
+    trasCerrar.abiertas === 0 && trasCerrar.menu === true, JSON.stringify(trasCerrar));
+
+  // CONTROL POSITIVO DEL GUARDIA. Sin esto, los dos controles de arriba
+  // estarían verdes con un menú que no responde NUNCA —que es exactamente la
+  // forma de fallo del 35 y del 38: el verde del valor de reposo—. Aquí se
+  // comprueba que la misma flecha que no hacía nada hace tres líneas, ahora sí.
+  await pag.keyboard.press("ArrowDown");
+  await pag.waitForTimeout(250);
+  const yaResponde = await pag.evaluate(() => window.probe.menu.estado().elegida);
+  control("CONTROL POSITIVO: cerrada la ventana, la flecha vuelve a mover el menú",
+    trasCerrar.tapado === false && yaResponde !== marcada,
+    `tapado ${trasCerrar.tapado} · ${marcada} -> ${yaResponde}`);
+
   // ── 3. Y ABRE «CREATE SERVER», con el ratón ──────────────────────────────
   for (const b of await pag.$$(".ms-menu-op")) {
     if ((await b.textContent()).trim() === "Establish a Kingdom") { await b.click(); break; }
@@ -142,6 +222,18 @@ try {
   control("y no se deja ninguna ventana de Valve abierta por detrás",
     dentro.ventanas === 0, `${dentro.ventanas} abiertas`);
 
+  // ── 6b. LA FILA «MAP» LLEGA AL JUEGO ─────────────────────────────────────
+  //
+  // Estaba contada como viva y no hacía nada: `alEmpezar` sólo miraba
+  // `pantallaCompleta` y el valor de la fila se tiraba. Ahora «Start» lo
+  // resuelve con `mapaElegido()` y entra con lo que salga.
+  //
+  // Se mide LO APLICADO, no lo que la ventana enseñaba: son dos cosas y hasta
+  // ahora sólo existía la segunda. El control positivo va en el apartado 7.
+  const conQue = await pag.evaluate(() => window.probe.vgui2.mapaDeLaPartida());
+  control("«Start» entra con el mapa que resuelve la fila «Map»",
+    conQue === "gatecity", `mapa aplicado: ${JSON.stringify(conQue)}`);
+
   // ── 7. EL CONTROL POSITIVO: con `?map=` NO hay menú ──────────────────────
   //
   // Sin esto, «sale el menú» saldría verde en una página que no hubiera cambiado
@@ -153,9 +245,18 @@ try {
   const atajo = await otra.evaluate(() => ({
     menu: !document.querySelector(".ms-menu")?.hidden,
     panel: window.probe.vgui.abierto(),
+    mapa: window.probe.vgui2.mapaDeLaPartida(),
   }));
   control("CONTROL POSITIVO: con `?map=` se entra directo, como con `+map`",
     atajo.menu === false && atajo.panel === "newchar", JSON.stringify(atajo));
+  // Y EL POSITIVO DE LA FILA «MAP». Sin esto, «Start entra con el mapa de la
+  // fila» estaría verde aunque el juego dijera «gatecity» SIEMPRE, por una
+  // constante escrita en otro sitio: sólo hay un mapa portado, así que el
+  // valor correcto y el valor de reposo son el mismo string. Aquí no se pasa
+  // por la ventana, así que nadie ha resuelto ninguna fila y tiene que ser
+  // `null`. Es la diferencia entre «se aplicó» y «coincide».
+  control("CONTROL POSITIVO: sin pasar por la ventana no hay mapa resuelto",
+    atajo.mapa === null, `mapa aplicado: ${JSON.stringify(atajo.mapa)}`);
   await otra.close();
 } catch (e) {
   errores.push(`la sonda se cayó: ${String(e).slice(0, 300)}`);

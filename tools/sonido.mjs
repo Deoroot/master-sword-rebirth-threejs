@@ -16,12 +16,22 @@
 //    son los dos que reutilizó. Quien lea sólo la cabecera busca un
 //    `pl_grass*.wav` que no existe y concluye que falta.
 //
-// 2. `basedir "msr"` en `gameinfo.txt`: Rebirth es STANDALONE, no hay `valve/`
-//    detrás. Y entre sus 1 570 wavs no hay ni `pl_step*` (piedra), ni
-//    `pl_dirt*`, ni `pl_slosh*`/`pl_wade*` (agua), ni `pl_metal*`, ni
-//    `pl_grate*`, ni `doors/doormove*`. No es que no los tengamos nosotros:
-//    **no están en el juego**. Lo que el motor pide y el juego no trae, no
-//    suena — y eso es lo que hay que reproducir, no rellenar.
+// 2. **HAY DOS BUILDS DE MASTER SWORD Y NO SUENAN IGUAL.** Entre los 1 570 wavs
+//    del repo de assets no hay `pl_step*` (piedra), ni `pl_dirt*`, ni
+//    `pl_slosh*`/`pl_wade*` (agua), ni `pl_metal*`, ni `pl_grate*`, ni
+//    `doors/doormove*` — son de `valve/`, o sea de Half-Life. Y de ahí se sacó
+//    la conclusión equivocada: «no están en el juego».
+//
+//    Están, si se juega como se juega. El `gameinfo.txt` que dice
+//    `basedir "msr"` es el de la build de **Xash3D**, y lo dice él mismo en su
+//    primera línea: «This file makes MSR a fully standalone game (no valve/
+//    dependency)». La build de **GoldSrc** es un mod —`hl.exe -game msr`, y su
+//    `liblist.gam` no declara ni `basedir` ni `fallback_dir`— y el sistema de
+//    archivos de GoldSrc monta `valve/` DETRÁS del mod siempre.
+//
+//    Así que en Xash correr por piedra es mudo y en GoldSrc suena con los pasos
+//    de Half-Life. Se lee de las dos raíces, en el orden del motor. Ver el
+//    bloque de `VALVE`, más abajo.
 //
 // 3. `pl_ladder1..4.wav` SÍ están y son 110 bytes de datos a 11 025 Hz 8 bits:
 //    **10 milisegundos**. Son silencio con forma de archivo. MSR calló la
@@ -34,6 +44,63 @@ import { dirname } from "node:path";
 const MSR = "../MSC/assets/msr";
 const SALIDA = "build/gatecity";
 const DESTINO = `${SALIDA}/snd`;
+
+// ── LAS DOS BUILDS DE MASTER SWORD, Y POR QUÉ ESTO ESTABA MAL ──────────────
+//
+// Este archivo decía, con su cita y todo, que Rebirth es standalone y que los
+// pasos de piedra «no están en el juego»:
+//
+//     basedir "msr"   ← ../MSC/assets/msr/gameinfo.txt
+//
+// Es verdad, y era la conclusión equivocada. Ese `gameinfo.txt` lleva su propio
+// comentario encima:
+//
+//     // Master Sword Rebirth - Xash3D FWGS Game Configuration
+//     // This file makes MSR a fully standalone game (no valve/ dependency)
+//
+// O sea que **hay dos builds** y ese archivo es de una sola:
+//
+//   1. **Xash3D standalone.** Sin `valve/` detrás. Ahí `pl_step*` no existe y
+//      correr por piedra de verdad no suena.
+//   2. **Mod de GoldSrc**, `hl.exe -game msr`. Su `liblist.gam` no declara
+//      `basedir` ni `fallback_dir` — es un mod normal, y el sistema de archivos
+//      de GoldSrc monta `valve/` DETRÁS del mod siempre. Ahí correr suena, con
+//      los pasos de Half-Life.
+//
+// Y la 2 es cómo se juega. Leer sólo el `gameinfo.txt` del repo de assets —que
+// es lo que hacía esto— daba «no lo tiene el juego tampoco» sobre el 99,5 % del
+// suelo de Gate City, y llevó a generar cuatro pasos nuestros para tapar un
+// hueco que no era un hueco. El hueco estaba en el sitio donde buscábamos.
+//
+// `HALFLIFE` es la raíz de la instalación de Half-Life; si no está, esto sigue
+// funcionando exactamente como antes —los pasos generados— y lo dice. No se
+// adivina la ruta: se prueba la de Steam por defecto y se acepta la variable.
+// `HALFLIFE=none` apaga la búsqueda, y eso no es un adorno: es lo único que
+// permite hornear la build de Xash3D en una máquina que tiene Half-Life, o sea
+// **comprobar que el camino de los pasos generados sigue funcionando**. Sin él,
+// añadir `valve/` habría dejado ese camino sin forma de probarse y se habría
+// podrido sin que nadie se enterara.
+// Y SI SE PIDE UNA RUTA, MANDA ELLA SOLA. La primera versión la metía como
+// primer candidato entre los de siempre, así que `HALFLIFE=C:/ruta_mala` caía
+// calladita en la instalación de Steam y horneaba con otra cosa: el que pide una
+// ruta se merece un fallo, no un silencio.
+const PEDIDA = process.env.HALFLIFE;
+const CANDIDATOS = PEDIDA === "none" ? []
+  : PEDIDA ? [PEDIDA]
+  : [
+    "C:/Juegos/Steam/steamapps/common/Half-Life",
+    "C:/Program Files (x86)/Steam/steamapps/common/Half-Life",
+  ];
+const RAIZ_HL = CANDIDATOS.find((d) => existsSync(`${d}/valve/sound/player`)) ?? null;
+const VALVE = RAIZ_HL ? `${RAIZ_HL}/valve` : null;
+if (PEDIDA && PEDIDA !== "none" && !RAIZ_HL) {
+  console.error(`  FALLO: HALFLIFE=${PEDIDA} y ahí no hay 'valve/sound/player'.`);
+  console.error(`         Se para en vez de hornear Xash3D sin avisar: pediste GoldSrc.`);
+  process.exit(1);
+}
+
+/** Lo que ha salido de `valve/` y no del mod. Es de Valve, y va dicho aparte. */
+const deHalfLife = [];
 
 console.log("SONIDO de Gate City\n");
 
@@ -124,8 +191,16 @@ const catalogo = {}; const faltan = []; const mudos = [];
 let bytes = 0;
 
 function traer(relativo) {
-  const origen = `${MSR}/${relativo}`;
-  if (!existsSync(origen)) { faltan.push(relativo); return null; }
+  // EL ORDEN DE BÚSQUEDA ES EL DE GOLDSRC: primero el mod, después `valve/`.
+  // Ver el bloque «LAS DOS BUILDS» arriba. Si el archivo está en los dos, manda
+  // el del mod, que es lo que hace el motor y es cómo MSR reemplazó `pl_tile*`
+  // y `pl_duct*` sin tocar el código.
+  const enMod = `${MSR}/${relativo}`;
+  const enValve = VALVE ? `${VALVE}/${relativo}` : null;
+  const origen = existsSync(enMod) ? enMod : (enValve && existsSync(enValve) ? enValve : null);
+  if (!origen) { faltan.push(relativo); return null; }
+  const deValve = origen === enValve;
+  if (deValve) deHalfLife.push(relativo);
   const destino = `${DESTINO}/${relativo.replace(/^(sound|music)\//, "")}`;
   mkdirSync(dirname(destino), { recursive: true });
   copyFileSync(origen, destino);
@@ -133,7 +208,14 @@ function traer(relativo) {
   bytes += tam;
   const dur = relativo.endsWith(".wav") ? duracionWav(origen) : null;
   if (dur != null && dur < MUDO) mudos.push(`${relativo} (${(dur * 1000).toFixed(0)} ms)`);
-  return { archivo: `snd/${relativo.replace(/^(sound|music)\//, "")}`, bytes: tam, segundos: dur };
+  return {
+    archivo: `snd/${relativo.replace(/^(sound|music)\//, "")}`,
+    bytes: tam, segundos: dur,
+    // De quién es, que aquí no es un detalle: lo de `valve/` es de Valve y el
+    // equipo de MSR no puede dar permiso sobre ello. Va al catálogo y a
+    // PROCEDENCIA.md por separado.
+    de: deValve ? "valve" : "msr",
+  };
 }
 
 // Los pasos: sólo los materiales que este mapa pisa, más los del agua y la
@@ -306,9 +388,13 @@ for (const mat of porMaterial.keys()) {
   catalogo.pasos[mat] = PASOS_COMUNES.map((s) => ({ ...s }));
   sinArchivo.push(mat);
 }
-console.log(`  GENERADOS       ${generados.length} pasos nuestros, los MISMOS para ` +
-  `${sinArchivo.join(", ") || "ninguno"}: el mod no trae los de Valve, así que en el ` +
-  `juego esos materiales tampoco suenan distinto`);
+if (sinArchivo.length) {
+  console.log(`  GENERADOS       ${generados.length} pasos nuestros, los MISMOS para ` +
+    `${sinArchivo.join(", ")}: no están ni en el mod ni en 'valve/', así que en el ` +
+    `juego esos materiales tampoco suenan distinto`);
+} else {
+  console.log(`  GENERADOS       ninguno: todos los materiales pisables tienen su archivo`);
+}
 
 // --- 4c. los sonidos del jugador que SÍ están --------------------------------
 //
@@ -385,10 +471,20 @@ if (mudos.length) {
   console.log(`  MUDOS           ${mudos.length}: ${mudos.slice(0, 4).join(", ")}${mudos.length > 4 ? "…" : ""}`);
   console.log(`                  existen y no suenan. No son un hueco: son una decisión del mod.`);
 }
+if (deHalfLife.length) {
+  console.log(`  DE HALF-LIFE    ${deHalfLife.length}: ${[...new Set(deHalfLife.map((f) => f.replace(/\d+\.wav$/, "*.wav")))].join(", ")}`);
+  console.log(`                  de ${VALVE}`);
+  console.log(`                  el mod los hereda de 'valve/' al correr con hl.exe. Son de VALVE:`);
+  console.log(`                  el equipo de MSR no puede dar permiso sobre ellos.`);
+} else if (!VALVE) {
+  console.log(`  SIN HALF-LIFE   no se encuentra 'valve/sound/player'. Se generan los pasos que`);
+  console.log(`                  falten, que es lo que suena en la build de Xash3D (standalone).`);
+  console.log(`                  Para los de verdad: HALFLIFE=<raíz de Half-Life> npm run sonido`);
+}
 if (faltan.length) {
   console.log(`  NO ESTÁN        ${faltan.length}: ${[...new Set(faltan.map((f) => f.replace(/\d+\.wav$/, "*.wav")))].join(", ")}`);
-  console.log(`                  son de la carpeta 'valve' de Half-Life, y Rebirth es standalone`);
-  console.log(`                  (gameinfo.txt: basedir "msr"). No los tiene el juego tampoco.`);
+  console.log(`                  no están ni en el mod ni en 'valve/'. Lo que el motor pide y`);
+  console.log(`                  ninguna de las dos raíces trae, no suena — y eso se reproduce.`);
 }
 
 // ── EL CONTROL DE QUE TODOS SUENAN IGUAL, con su contrario al lado ────────
@@ -402,6 +498,42 @@ if (faltan.length) {
   const archivosDe = (m) => (catalogo.pasos[m] ?? []).map((s) => s.archivo).join("|");
   const generados = [...porMaterial.keys()].filter((m) => catalogo.pasos[m]?.[0]?.generado);
   const distintos = new Set(generados.map(archivosDe));
+  // ── CON `valve/` DETRÁS EL CONTROL SE INVIERTE ──────────────────────────
+  //
+  // Si no se ha generado nada es que se ha horneado como el mod de GoldSrc, y
+  // entonces «todos suenan igual» no tiene sujeto: no hay dos generados que
+  // comparar. Lo que hay que comprobar es **lo contrario**, que es lo que hace
+  // el motor cuando los archivos están: que piedra y tierra suenen DISTINTO,
+  // porque `pl_step*` y `pl_dirt*` son archivos distintos.
+  //
+  // No se afloja el control: se cambia por el que corresponde a lo horneado. Un
+  // `if (generados.length < 2) return` habría dejado la hornada de GoldSrc sin
+  // ningún control sobre los pasos, que es la forma exacta de fallo que este
+  // laboratorio ya se ha comido tres veces — el verde que no mide nada.
+  if (!generados.length) {
+    const conArchivo = [...porMaterial.keys()].filter((m) => catalogo.pasos[m]?.length);
+    if (conArchivo.length < 2) {
+      console.error(`  FALLO: ${conArchivo.length} material con archivo. Sin dos no hay nada que comparar.`);
+      process.exit(1);
+    }
+    const juegos = new Set(conArchivo.map(archivosDe));
+    if (juegos.size < 2) {
+      console.error(`  FALLO: los ${conArchivo.length} materiales del mapa (${conArchivo.join(", ")})`);
+      console.error(`         comparten las MISMAS muestras, y con 'valve/' detrás no deberían:`);
+      console.error(`         pl_step*, pl_dirt* y pl_duct* son nueve archivos distintos.`);
+      process.exit(1);
+    }
+    // Y que ninguno se haya quedado mudo por el camino: un material con cuatro
+    // archivos de 10 ms pasaría los dos controles de arriba sin sonar.
+    const mudo = conArchivo.find((m) => !catalogo.pasos[m].some((s) => (s.segundos ?? 1) >= MUDO));
+    if (mudo) {
+      console.error(`  FALLO: '${mudo}' tiene archivos pero todos son más cortos que ${MUDO * 1000} ms.`);
+      process.exit(1);
+    }
+    console.log(`\n  control         ${conArchivo.length} materiales del mapa con ${juegos.size} juegos ` +
+      `de muestras DISTINTOS: ${conArchivo.map((m) => `${m}→${(catalogo.pasos[m][0].archivo.match(/pl_[a-z]+/) ?? ["?"])[0]}`).join(", ")}`);
+    console.log(`                  (horneado como el mod de GoldSrc: 'valve/' detrás)`);
+  } else {
   if (generados.length < 2) {
     console.error(`  FALLO: sólo ${generados.length} material generado. Con menos de dos, «todos`);
     console.error(`         suenan igual» no dice nada: no hay dos que comparar.`);
@@ -424,14 +556,27 @@ if (faltan.length) {
     `(${(100 * [...porMaterial].filter(([m]) => generados.includes(m)).reduce((a, [, n]) => a + n, 0) /
         [...porMaterial.values()].reduce((a, b) => a + b, 0)).toFixed(1)} % del suelo), ` +
     `y ${conArchivo.join(", ")} no, porque el mod sí trae sus archivos`);
+  console.log(`                  (horneado como la build de Xash3D: sin 'valve/' detrás)`);
+  }
 }
 
-// EL CONTROL, y es un control de control: si un día no faltara ninguno,
-// significaría que alguien ha puesto un Half-Life al lado — y entonces este
-// informe estaría mintiendo sobre lo que suena en el juego original.
-if (!faltan.length) {
-  console.log(`  AVISO: no falta ninguno. Eso NO es lo esperado con Rebirth solo:`);
-  console.log(`         revisa si hay una instalación de Half-Life mezclada en ${MSR}.`);
+// EL CONTROL DE CONTROL, Y ESTE AVISO ACERTÓ ANTES DE QUE PASARA.
+//
+// Decía: «si un día no faltara ninguno, significaría que alguien ha puesto un
+// Half-Life al lado — y entonces este informe estaría mintiendo sobre lo que
+// suena en el juego original». Llevaba razón en el hecho y se equivocaba en la
+// conclusión: **el Half-Life al lado no contamina el informe, lo completa**,
+// porque la build con la que se juega es el mod y el mod corre sobre `valve/`.
+//
+// Lo que sí sigue siendo un fallo es que no falte ninguno **y no sepamos de
+// dónde ha salido**: eso sería contenido de Valve entrando por la puerta de
+// atrás, mezclado dentro de `${MSR}`, sin quedar declarado. Por eso el aviso no
+// desaparece: se le pone la condición que le faltaba.
+if (!faltan.length && !deHalfLife.length) {
+  console.error(`  FALLO: no falta ninguno y ninguno viene de 'valve/'. Entonces hay archivos`);
+  console.error(`         de Valve mezclados dentro de ${MSR}, sin declarar. Eso es`);
+  console.error(`         exactamente lo que PROCEDENCIA.md existe para que no pase.`);
+  process.exit(1);
 }
 // Y el que de verdad puede romperse solo: que la letra reusada siga reusada.
 // Si alguien "arregla" la tabla creyendo la cabecera de materials.txt y pone
@@ -481,11 +626,35 @@ y entre ellos \`d2-cav.mp3\`, \`d2-leoric.mp3\`, \`d2tombs.mp3\` (Diablo II) y
 propia carpeta de música**, así que «es un mod gratuito» no cubre nada: lo que
 se redistribuiría no es suyo.
 
-Lo que **no** se copia porque no existe en el juego: \`pl_step*\`, \`pl_dirt*\`,
-\`pl_slosh*\`, \`pl_wade*\`, \`pl_metal*\`, \`pl_grate*\`, \`common/bodydrop*\` y
-\`doors/doormove*\`. Son de la carpeta \`valve\` de Half-Life, y Rebirth es
-standalone (\`gameinfo.txt\`: \`basedir "msr"\`). El catálogo los sigue
-declarando ausentes uno a uno, y \`faltan\` no se toca.
+### Lo que viene de Half-Life y no del mod
+
+${deHalfLife.length
+  ? `Estos ${deHalfLife.length} archivos salen de \`${VALVE}\`, no de \`${MSR}\`:
+
+${[...new Set(deHalfLife.map((f) => f.replace(/\\d+\\.wav$/, "*.wav")))].map((f) => `- \`${f}\``).join("\n")}
+
+**Son de Valve.** Master Sword: Rebirth los usa porque en su build de GoldSrc es
+un mod —\`hl.exe -game msr\`, sin \`basedir\` ni \`fallback_dir\` en su
+\`liblist.gam\`— y el sistema de archivos de GoldSrc monta \`valve/\` detrás del
+mod. O sea que el jugador los oye, y por eso están aquí.
+
+Lo que esto NO cambia: **el equipo de MSR no puede dar permiso sobre ellos**, y
+eso ya estaba dicho en el \`README\`. Están en \`build/\`, que está en
+\`.gitignore\`, y no se mueve un byte a \`public/\`. En el catálogo van marcados
+\`de: "valve"\` para que se puedan contar y quitar de golpe.
+
+En la build de **Xash3D** no existen: ahí \`gameinfo.txt\` declara
+\`basedir "msr"\` y no hay \`valve/\` detrás, así que esos materiales son mudos y
+lo que suena son los pasos generados de más abajo. Son dos juegos distintos en
+esto, y el catálogo dice de cuál se ha horneado.`
+  : `No hay ninguno: no se encontró una instalación de Half-Life, así que esto se
+horneó como la build de **Xash3D standalone** —\`basedir "msr"\`, sin \`valve/\`
+detrás— y los pasos que el mod no trae van generados. Con
+\`HALFLIFE=<raíz> npm run sonido\` se hornea como el mod de GoldSrc, que es como
+se juega, y entonces los pasos son los de Half-Life.`}
+
+Lo que **no** se copia porque no existe en ninguna de las dos raíces queda
+declarado ausente uno a uno en el catálogo, y \`faltan\` no se toca.
 
 ### Y de los que faltan, dos están GENERADOS
 

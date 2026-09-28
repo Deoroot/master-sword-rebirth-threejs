@@ -228,6 +228,13 @@ La escalera **no está diagnosticada**; sólo hay un sospechoso:
 `atan2(nn[0], nn[2])` con cuatro signos de más. Si el signo está al revés, el
 jugador anda de espaldas y 0,00 m es la medida correcta.
 
+> **Corrección, experimento 38: el sospechoso era inocente.** El `atan2` de
+> cuatro signos es correcto. Lo que fallaba era la posición: la sonda
+> empotraba al jugador en la pared. El red venía del 21 y ya está arreglado
+> —`sonda:mapa` pasó de 28/30 a 32/33—, así que de los tres reds de este
+> capítulo sólo queda vivo «y en seco SÍ mata». Que el signo *parezca* raro
+> no lo convierte en la causa: cuatro signos de más son feos y son inocentes.
+
 Ninguna de las dos sondas se ha tocado: son reds viejos y arreglarlos es
 decisión del usuario.
 

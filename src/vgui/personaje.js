@@ -397,7 +397,16 @@ export class PanelDePersonaje extends PanelConNombre {
     return this;
   }
 
-  cerrar() { this.retratos?.soltar(); return super.cerrar(); }
+  cerrar() {
+    this.retratos?.soltar();
+    // Y se olvida que estaban montados, porque `soltar()` los ha quitado: sin
+    // esto, volver a esta pantalla —«Name Character», o morir y reaparecer—
+    // encontraba los lienzos puestos, se daba por hecha y enseñaba tres cajas
+    // vacías. El lienzo se queda y se reutiliza; lo que se tira es el retrato.
+    for (const r of this.ranuras) r.retrato = null;
+    for (const g of this.generos) g.retrato = null;
+    return super.cerrar();
+  }
 
   /** `Update()`: qué se ve en cada etapa. */
   refrescar() {
@@ -531,16 +540,50 @@ export class PanelDePersonaje extends PanelConNombre {
     return this;
   }
 
+  /**
+   * LOS RETRATOS, Y POR QUÉ HAY QUE REINTENTARLO.
+   *
+   * `Retratos.montar()` se rinde en silencio si la caja mide 0x0
+   * (`src/render/retratos.js:78`), y eso es lo correcto: no se puede dar
+   * resolución a un lienzo sin saber de qué tamaño va a ser. Lo que estaba mal
+   * era darse por montado de todas formas.
+   *
+   * El registro monta los paneles **escondidos**: `poner()` hace
+   * `panel.raiz?.ver(false)` y justo después `panel.colocar(...)`, que es quien
+   * llama aquí (`src/vgui/registro.js:141-151`). O sea que el primer intento
+   * ocurre siempre con las tres cajas a 0x0 y siempre falla. Y el segundo no
+   * llegaba: `if (destino.lienzo) return` daba el sitio por hecho porque el
+   * `<canvas>` ya estaba puesto, así que las tres ranuras se quedaban con un
+   * lienzo vacío para siempre.
+   *
+   * Ese lienzo vacío es además la razón de que ninguna sonda lo viera: un
+   * `<canvas>` recién creado mide **300x150** por definición del elemento, así
+   * que el control «hay un lienzo por ranura» de `sondas/personaje30.mjs:98`
+   * —`c.width > 0 && c.height > 0`— estaba en verde con los tres retratos sin
+   * montar. Ver `sondas/pantalla38.mjs`, que lo mide por los vivos.
+   *
+   * Así que la marca de «hecho» es el retrato, no el lienzo, y el intento se
+   * repite en cada `colocar()` hasta que sale. El registro llama a `colocar()`
+   * dentro de `abrir()`, o sea con el panel ya visible: ahí la caja mide.
+   */
   _montarRetratos() {
     if (!this.retratos) return;
     const poner = (destino, genero) => {
-      if (destino.lienzo) return;
-      const lienzo = el("canvas", "vg-char-retrato");
-      destino.caja.nodo.appendChild(lienzo);
-      destino.lienzo = lienzo;
-      this.retratos.montar(destino.caja.nodo, lienzo, {
+      // Ya montado de verdad, o montándose ahora mismo: `montar()` es una
+      // promesa y dos `colocar()` en el mismo fotograma montarían dos veces.
+      if (destino.retrato || destino.montando) return;
+      if (!destino.lienzo) {
+        const lienzo = el("canvas", "vg-char-retrato");
+        destino.caja.nodo.appendChild(lienzo);
+        destino.lienzo = lienzo;
+      }
+      destino.montando = true;
+      Promise.resolve(this.retratos.montar(destino.caja.nodo, destino.lienzo, {
         genero, animacion: "sinArma", senalaCon: destino.boton.nodo,
-      });
+      })).then((r) => {
+        destino.montando = false;
+        destino.retrato = r ?? null;
+      }).catch(() => { destino.montando = false; });
     };
     for (const r of this.ranuras) if (r.caja.nodo.isConnected) poner(r, "male");
     for (const g of this.generos) if (g.caja.nodo.isConnected) poner(g, g.clave);

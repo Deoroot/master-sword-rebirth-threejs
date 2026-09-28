@@ -361,6 +361,55 @@ test("cada ajuste apagado dice POR QUÉ, y ninguno se calla", () => {
   }
 });
 
+// ── «CREATE SERVER»: NINGÚN AJUSTE SE CALLA ─────────────────────────────────
+//
+// Esta es la prueba que faltaba y la que habría cazado el fallo. `porQueNo`
+// vacío significaba «esto hace algo» y no lo comprobaba nadie, así que `mapa` y
+// `nombre` pasaron por vivos sin llegar al juego: `alEmpezar` sólo miraba
+// `pantallaCompleta`. La cuenta decía tres y era uno.
+//
+// Es la misma forma de fallo que los tres controles verdes del 35, del agua y
+// de los retratos: **el valor de reposo pasando la prueba**. Aquí el reposo era
+// «no pone `porQueNo`».
+
+test("en «Create Server» todo ajuste o dice por qué no, o dice dónde se aplica", () => {
+  for (const a of AJUSTES_CS) {
+    const callado = !a.porQueNo && !a.aplica;
+    assert.ok(!callado,
+      `«${a.clave}» no dice ni por qué no hace nada ni dónde se aplica: ` +
+      `o se le pone \`porQueNo\`, o se le pone \`aplica\` y se enchufa de verdad`);
+    // Y ninguno de los dos vale como coartada si no dice nada.
+    if (a.aplica) assert.ok(a.aplica.length > 20, `el \`aplica\` de ${a.clave} no dice dónde`);
+    if (a.porQueNo) assert.ok(a.porQueNo.length > 20, `el motivo de ${a.clave} no explica nada`);
+  }
+});
+
+test("y los que dicen estar vivos son EXACTAMENTE los que están enchufados", () => {
+  // Escrita a mano a propósito: si alguien enciende un ajuste, esta lista le
+  // obliga a venir aquí y a mirar si de verdad lo enchufó. Una lista calculada
+  // volvería a estar de acuerdo consigo misma, que es justo lo que pasó.
+  const vivos = AJUSTES_CS.filter((a) => !a.porQueNo).map((a) => a.clave).sort();
+  assert.deepEqual(vivos, ["mapa", "pantallaCompleta"]);
+  // Trece, no doce: doce son los de la captura y el decimotercero es
+  // «Play in full screen», que es nuestro y se declara como tal.
+  const c = cuentaCS();
+  assert.equal(c.total, 13);
+  assert.equal(c.vivos, 2);
+  assert.equal(c.apagados, 11);
+  assert.equal(AJUSTES_CS.filter((a) => a.nuestra).length, 1);
+});
+
+test("«Store Characters» y «Max. players» ya no dan un motivo falso", () => {
+  // Los dos decían que faltaba algo que SÍ existe. El motivo bueno es el mismo
+  // para los dos y es uno solo: «Start» no levanta un servidor.
+  const guardar = ajusteCS("guardarPersonajes").porQueNo;
+  assert.ok(!/there is no server/i.test(guardar), "vuelve a decir que no hay servidor");
+  assert.match(guardar, /AlmacenRemoto/);
+  const max = ajusteCS("maxJugadores").porQueNo;
+  assert.ok(!/accounts/i.test(max), "vuelve a echarle la culpa a las cuentas");
+  assert.match(max, /server process/);
+});
+
 test("la cuenta de lo que funciona se calcula, no se escribe", () => {
   const c = cuenta();
   assert.equal(c.vivos + c.apagados, c.total);

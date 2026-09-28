@@ -93,14 +93,34 @@ try {
     `${hueco - anchoRanura} px, esperado ${espRoto} (el bueno sería ${espSano})`);
 
   // ── 2. LOS PERSONAJES SON MODELOS ───────────────────────────────────────
+  // ESTE CONTROL ESTUVO VERDE MIDIENDO NADA, y tapó el fallo entero.
+  //
+  // Contaba `c.width > 0 && c.height > 0` sobre los lienzos, y **un `<canvas>`
+  // recién creado mide 300x150** por definición del elemento: el control estaba
+  // en verde con los tres retratos sin montar, que es exactamente lo que pasaba
+  // —el registro monta los paneles escondidos, la caja medía 0x0,
+  // `Retratos.montar()` se rendía en silencio y nadie lo reintentaba. Ver
+  // `src/vgui/personaje.js:_montarRetratos`.
+  //
+  // Ahora se mira lo que no se puede fingir: cuántos retratos están VIVOS —o
+  // sea, animándose— y que el lienzo tenga la resolución de su caja y no la de
+  // fábrica.
   const conRetrato = await pag.evaluate(() => ({
     lienzos: document.querySelectorAll(".vg-char-retrato").length,
-    pintados: [...document.querySelectorAll(".vg-char-retrato")]
-      .filter((c) => c.width > 0 && c.height > 0).length,
+    deFabrica: [...document.querySelectorAll(".vg-char-retrato")]
+      .filter((c) => c.width === 300 && c.height === 150).length,
+    conSuCaja: [...document.querySelectorAll(".vg-char-retrato")].filter((c) => {
+      const r = c.parentElement?.getBoundingClientRect();
+      return r?.width > 0 && Math.abs(c.width - Math.round(r.width * Math.min(2, devicePixelRatio || 1))) <= 2;
+    }).length,
+    vivos: window.probe.vgui.retratosVivos?.() ?? 0,
   }));
-  console.log(`    retratos        ${conRetrato.pintados} de ${conRetrato.lienzos} con tamaño`);
-  control("los personajes son MODELOS, no dibujos: hay un lienzo por ranura",
-    conRetrato.pintados >= 3, `${conRetrato.pintados}`);
+  console.log(`    retratos        ${conRetrato.vivos} vivos · ${conRetrato.conSuCaja} de ` +
+    `${conRetrato.lienzos} lienzos con la resolución de su caja · ${conRetrato.deFabrica} sin tocar`);
+  control("los personajes son MODELOS, no dibujos: tres retratos ANIMÁNDOSE",
+    conRetrato.vivos >= 3, `${conRetrato.vivos} vivos`);
+  control("y sus lienzos tienen la resolución de su caja, no la de fábrica",
+    conRetrato.conSuCaja >= 3, `${conRetrato.conSuCaja} de ${conRetrato.lienzos}`);
 
   await pag.screenshot({ path: "build/gatecity/vistas/personaje30-elegir.png" });
 

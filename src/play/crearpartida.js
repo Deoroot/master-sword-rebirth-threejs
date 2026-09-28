@@ -35,6 +35,42 @@
 // parece es `ms_serverchar` (svglobals.cpp:52), que vale "1", y no explica el 3.
 // Así que la opción se porta con el texto de la captura y sin atarla a ningún
 // cvar: escribir uno adivinado sería peor que decir que no se sabe.
+//
+// ── POR QUÉ CASI TODO ESTÁ APAGADO: ES UNA RAZÓN, NO NUEVE ────────────────
+//
+// La tabla llevaba nueve motivos distintos —«no hay a quién ocultarse», «no hay
+// segundo jugador», «no hay servidor donde guardar»— y eso hacía parecer que
+// faltaban nueve cosas. **Falta una.** En el juego, «Start» LEVANTA UN
+// SERVIDOR y te conecta a él; aquí abre una partida local en la pestaña y ya
+// está. `Anfitrion` —el que sí es un servidor de verdad— sólo lo usa
+// `tools/servidor.mjs`, que es otro proceso y se arranca a mano con
+// `npm run servidor`.
+//
+// Por eso todos los `FCVAR_SERVER` de la pestaña Game están apagados: no es que
+// no exista la función, es que no hay servidor al que decírselo. Y dos de los
+// motivos que había escritos eran **falsos**, no sólo imprecisos:
+//
+//   - «no hay servidor donde guardar los personajes» — sí lo hay:
+//     `AlmacenRemoto` (`src/red/cliente.js`) guarda contra `npm run servidor`
+//     desde el experimento 27, y `src/main.js:374-376` elige entre él y el
+//     local. Lo que no hay es forma de pedirlo DESDE AQUÍ: lo decide `?red=`
+//     al cargar la página, antes de que esta ventana exista.
+//   - «el anfitrión es el único jugador hasta que el port tenga cuentas» — las
+//     cuentas no tienen nada que ver: `partida.js:199` ya reparte slots contra
+//     `red.maxJugadores` y hay varios jugadores de verdad. Lo que falta es que
+//     este diálogo pueda fijar ese número, que vive en el otro proceso
+//     (`protocolo.js:134`).
+//
+// ── Y UN AJUSTE «VIVO» PUEDE NO ESTAR VIVO ────────────────────────────────
+//
+// `porQueNo` vacío significaba «esto hace algo», y no lo comprobaba nadie:
+// `mapa` y `nombre` estaban los dos sin motivo y **ninguno de los dos llegaba
+// al juego**, porque `alEmpezar` sólo miraba `pantallaCompleta`. La cuenta
+// decía tres vivos y era uno.
+//
+// Para que no vuelva a pasar, un ajuste encendido tiene que decir DÓNDE se
+// aplica, en `aplica`, y hay una prueba que exige una de las dos cosas: o
+// `porQueNo`, o `aplica`. Un ajuste no puede estar callado.
 
 /** Las dos pestañas de la ventana, en el orden de la captura. */
 export const PESTANAS = ["Server", "Game"];
@@ -44,7 +80,11 @@ export const PESTANAS = ["Server", "Game"];
  *
  *   `cvar`     cómo se llama en el motor o en el mod.
  *   `fuente`   dónde está declarado, para poder volver a mirarlo.
- *   `porQueNo` vacío si el ajuste hace algo aquí; si no, por qué no puede.
+ *   `porQueNo` por qué este ajuste no puede hacer nada aquí.
+ *   `aplica`   dónde se aplica, si lo hace. **Uno de los dos, nunca ninguno**:
+ *              un ajuste sin `porQueNo` y sin `aplica` es uno que dice estar
+ *              vivo sin que nadie lo haya comprobado, que es como `mapa` y
+ *              `nombre` pasaron por vivos sin llegar al juego.
  */
 export const AJUSTES = [
   // ── Server ──────────────────────────────────────────────────────────────
@@ -54,6 +94,16 @@ export const AJUSTES = [
     // El original lista todos los `.bsp` del juego. Aquí la lista la pone quien
     // monta la ventana, porque **sólo hay un mapa portado**: Gate City. Poner
     // los ciento y pico nombres del original haría una lista que miente.
+    //
+    // Y ahora se USA: `mapaElegido()` resuelve `< Random Map >` y el nombre
+    // elegido, y «Start» arranca con lo que salga de ahí. Antes esta fila
+    // estaba en la ventana y el valor se tiraba a la basura.
+    //
+    // Con un solo mapa portado las dos entradas llevan al mismo sitio, y eso
+    // se dice aquí para que nadie lo lea como una elección que no es: lo que
+    // se comprueba es que **«Start» abre el mapa que resuelve la fila**, no
+    // que haya dos destinos. El día que entre un segundo mapa, esto ya está.
+    aplica: "src/main.js, el «Start» de alEmpezar: mapaElegido(valores.mapa)",
   },
 
   // ── NUESTRA, y se declara ───────────────────────────────────────────────
@@ -74,6 +124,7 @@ export const AJUSTES = [
     pestana: "Server", clave: "pantallaCompleta", tipo: "casilla",
     etiqueta: "Play in full screen (web port only — lets the game keep Ctrl+W)",
     pordefecto: true, nuestra: true,
+    aplica: "src/main.js, el «Start» de alEmpezar: atraparTeclado(document.documentElement)",
   },
 
   // ── Game ────────────────────────────────────────────────────────────────
@@ -91,11 +142,21 @@ export const AJUSTES = [
     // (sv_main.cpp:6291-6295). Por eso en la captura pone el nombre del mod y no
     // «Half-Life».
     fuente: "host.cpp:50, pisado en sv_main.cpp:6291-6295",
+    // ESTA FILA ESTABA CONTADA COMO VIVA Y NO HACÍA NADA. El nombre de una
+    // partida es de quien la sirve: `Partida.nombre` es lo que sale en la
+    // columna «Servers» de la pestaña Lan (`src/vgui2/servidores.js:45`), y esa
+    // partida la levanta `npm run servidor`, no este diálogo.
+    porQueNo: "the game «Start» opens is local to this tab; the name belongs to " +
+      "whoever serves a game, and that is `npm run servidor`, another process.",
   },
   {
     pestana: "Game", clave: "maxJugadores", cvar: "maxplayers", tipo: "numero",
     etiqueta: "Max. players", pordefecto: 6, min: 1, max: 32,
-    porQueNo: "the host is the only player until the port has accounts.",
+    // El motivo de antes —«hasta que el port tenga cuentas»— era falso: las
+    // cuentas no pintan nada aquí y el reparto de slots ya existe.
+    fuente: "src/red/partida.js:199 reparte contra `red.maxJugadores`",
+    porQueNo: "the slots are real and already shared out, but the number lives " +
+      "in the server process (`protocolo.js:134`) and «Start» does not launch one.",
   },
   {
     pestana: "Game", clave: "clave", cvar: "sv_password", tipo: "texto",
@@ -121,7 +182,11 @@ export const AJUSTES = [
     // comentario de la línea lo dice —`// 1 == in town only`—. La ventana lo
     // aplana a sí/no, y se porta aplanado porque es lo que el jugador ve.
     fuente: 'svglobals.cpp:51 — {"ms_pklevel", "0"} // 1 == in town only',
-    porQueNo: "there is no second player to fight yet.",
+    // El motivo de antes —«no hay un segundo jugador»— era impreciso: sí los
+    // hay, contra `npm run servidor`. Lo que no hay es daño entre jugadores:
+    // `ms_pklevel` no aparece en ningún sitio fuera de esta tabla.
+    porQueNo: "players can meet, but nothing yet decides whether one may hurt " +
+      "another: `ms_pklevel` is not read anywhere outside this table.",
   },
   {
     pestana: "Game", clave: "reiniciarTras", cvar: "ms_reset_time", tipo: "numero",
@@ -140,7 +205,13 @@ export const AJUSTES = [
     etiqueta: "Store Characters", opciones: ["On Client", "On Server", "3 On Server"],
     pordefecto: "3 On Server",
     // Sin cvar atado a propósito: ver la cabecera.
-    porQueNo: "characters live in this browser's localStorage; there is no server to store them on.",
+    //
+    // El motivo de antes decía «no hay servidor donde guardarlos» y era FALSO:
+    // `AlmacenRemoto` lo hace desde el 27. Lo que no hay es forma de elegirlo
+    // desde aquí.
+    fuente: "src/red/cliente.js, AlmacenRemoto; lo elige src/main.js:374-376",
+    porQueNo: "«On Server» exists (AlmacenRemoto, since experiment 27), but which " +
+      "store is used is decided by `?red=` when the page loads, before this window exists.",
   },
   {
     pestana: "Game", clave: "central", cvar: "ms_central_enabled", tipo: "casilla",

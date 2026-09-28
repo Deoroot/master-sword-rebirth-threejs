@@ -50,7 +50,8 @@
     "sonda:misiones33": "node sondas/misiones33.mjs",
     "sonda:vgui2_34": "node sondas/vgui2_34.mjs",
     "sonda:arranque36": "node sondas/arranque36.mjs",
-    "sonda:ajustes37": "node sondas/ajustes37.mjs"
+    "sonda:ajustes37": "node sondas/ajustes37.mjs",
+    "sonda:pantalla38": "node sondas/pantalla38.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

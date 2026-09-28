@@ -142,33 +142,114 @@ console.log(`  la misma velocidad en seco (nivel ${enSeco.agua}): vida ${enSeco.
 control("y en seco SÍ mata", enSeco.despues < enSeco.antes, `${enSeco.antes} → ${enSeco.despues}`);
 
 // ── 3. LAS ESCALERAS ───────────────────────────────────────────────────────
+//
+// «Y SE SUBE POR ELLA» ESTUVO EN ROJO DESDE EL EXPERIMENTO 21, Y ERA DE ESTA
+// SONDA. Medido con un `git worktree` en `a2a430c` —la mudanza, el primer commit
+// del repositorio—: el rojo se hereda de la época del laboratorio, así que no lo
+// rompió nadie, nació roto.
+//
+// El fallo: ponía al jugador en **el centro de la caja de la escalera**. Una
+// escalera de GoldSrc es un brush fino pegado a la pared —ésta mide 1,02 x 10,54
+// x 0,13 m— así que su centro está a 6 cm de la pared y el casco del jugador
+// mide medio metro. El jugador quedaba EMPOTRADO, y un jugador empotrado no se
+// mueve en ninguna dirección: los cuatro números del diagnóstico, con el mismo
+// `atan2` de siempre, fueron
+//
+//     centro de la caja           sube  0,00 m   horizontal  0,00 m
+//     el mismo sitio, al revés    sube  0,00 m   horizontal  0,00 m
+//     separado 0,3 m (lado libre) sube  6,29 m   horizontal  0,14 m
+//     separado 0,3 m (la pared)   sube −2,58 m   horizontal  0,25 m
+//
+// El horizontal es el que lo demuestra: **cero en las dos direcciones no es una
+// escalera que no sube, es un jugador que no se mueve**. Y el sospechoso que
+// llevábamos apuntado —el `atan2(-(-x), -(-z))` de cuatro signos, que parece un
+// error de copiar— resulta ser correcto: los cuatro signos son «mira CONTRA la
+// normal», y con el jugador bien colocado trepa seis metros en 1,2 s.
+//
+// A cambio la sonda ya no puede elegir el lado a dedo: `normalDeEscalera`
+// apunta SIEMPRE hacia el jugador (`movimiento.js:568`), así que desde dentro de
+// la pared también contesta, y con la cara equivocada. Se prueban los dos lados,
+// y eso deja la pareja de controles que faltaba: por el lado abierto se sube, y
+// por el de la pared no. A ±0,5 m ya no detecta la escalera —la caja holgada de
+// `volumenes.js:110` no llega— y por eso el paso es 0,3.
 const escalera = sitios.escaleras[0];
 const cEsc = centro(escalera);
-const trepa = await pag.evaluate(async (e) => {
-  // Al pie de la escalera, pegado a ella.
-  window.probe.mundo.poner(e.c[0], e.min1 + 0.2, e.c[2]);
-  await new Promise((r) => setTimeout(r, 200));
-  return { medio: window.probe.mundo.medio(), y: window.probe.player.feet[1] };
-}, { c: cEsc, min1: escalera.min[1] });
-console.log(`  al pie de la escalera: ${trepa.medio.escalera ? `normal ${trepa.medio.escalera}` : "NO la detecta"}`);
-control("la escalera se detecta", Array.isArray(trepa.medio.escalera),
-  JSON.stringify(trepa.medio.escalera));
+const tamEsc = [0, 1, 2].map((k) => escalera.max[k] - escalera.min[k]);
+let finoEsc = 0;
+for (let k = 1; k < 3; k++) if (tamEsc[k] < tamEsc[finoEsc]) finoEsc = k;
+console.log(`  la escalera mide ${tamEsc.map((t) => t.toFixed(2)).join(" x ")} m, ` +
+  `fina en ${"XYZ"[finoEsc]}`);
 
-if (Array.isArray(trepa.medio.escalera)) {
-  // Mirando hacia la escalera y andando hacia delante, se sube.
-  const n = trepa.medio.escalera;
-  await pag.evaluate((nn) => {
-    // El yaw que mira CONTRA la normal: la escalera está delante.
-    window.probe.player.yaw = Math.atan2(-(-nn[0]), -(-nn[2]));
+// EL CENTRO DE LA CAJA, QUE ES LA TRAMPA, MEDIDO A PROPÓSITO. Queda como
+// control para que nadie vuelva a poner ahí al jugador creyendo que mide la
+// escalera: lo que mide es el empotramiento.
+const empotrado = await pag.evaluate(async (e) => {
+  window.probe.sesion.reaparecer();
+  await new Promise((r) => setTimeout(r, 300));
+  window.probe.mundo.poner(e.c[0], e.min1 + 0.2, e.c[2]);
+  await new Promise((r) => setTimeout(r, 250));
+  const n = window.probe.mundo.medio().escalera;
+  if (Array.isArray(n)) {
+    window.probe.player.yaw = Math.atan2(-(-n[0]), -(-n[2]));
     window.probe.player.pitch = 0;
-  }, n);
-  const y0 = await pag.evaluate(() => window.probe.player.feet[1]);
+  }
+  return { medio: window.probe.mundo.medio(), p0: [...window.probe.player.feet] };
+}, { c: cEsc, min1: escalera.min[1] });
+control("la escalera se detecta", Array.isArray(empotrado.medio.escalera),
+  JSON.stringify(empotrado.medio.escalera));
+await pag.keyboard.down("KeyW");
+await pag.waitForTimeout(1200);
+await pag.keyboard.up("KeyW");
+const pEmp = await pag.evaluate(() => [...window.probe.player.feet]);
+const horizEmp = Math.hypot(pEmp[0] - empotrado.p0[0], pEmp[2] - empotrado.p0[2]);
+console.log(`  desde el centro de la caja: sube ${(pEmp[1] - empotrado.p0[1]).toFixed(2)} m, ` +
+  `horizontal ${horizEmp.toFixed(2)} m`);
+control("en el centro de la caja el jugador está empotrado y no se mueve para NINGÚN lado",
+  horizEmp < 0.05 && Math.abs(pEmp[1] - empotrado.p0[1]) < 0.05,
+  `sube ${(pEmp[1] - empotrado.p0[1]).toFixed(2)} m, horiz ${horizEmp.toFixed(2)} m`);
+
+/** Trepa 1,2 s desde `pos` mirando contra la normal que el juego reporte. */
+async function treparDesde(pos) {
+  const puesto = await pag.evaluate(async (p) => {
+    window.probe.sesion.reaparecer();
+    await new Promise((r) => setTimeout(r, 300));
+    window.probe.mundo.poner(p[0], p[1], p[2]);
+    await new Promise((r) => setTimeout(r, 250));
+    const n = window.probe.mundo.medio().escalera;
+    if (!Array.isArray(n)) return null;
+    // El yaw que mira CONTRA la normal: la escalera está delante. Los cuatro
+    // signos son a propósito, ver el bloque de arriba.
+    window.probe.player.yaw = Math.atan2(-(-n[0]), -(-n[2]));
+    window.probe.player.pitch = 0;
+    return { n, p0: [...window.probe.player.feet] };
+  }, pos);
+  if (!puesto) return null;
   await pag.keyboard.down("KeyW");
   await pag.waitForTimeout(1200);
   await pag.keyboard.up("KeyW");
-  const y1 = await pag.evaluate(() => window.probe.player.feet[1]);
-  console.log(`  trepando: ${(y1 - y0).toFixed(2)} m en 1,2 s`);
-  control("y se sube por ella", y1 - y0 > 0.5, `${(y1 - y0).toFixed(2)} m`);
+  const p1 = await pag.evaluate(() => [...window.probe.player.feet]);
+  return { n: puesto.n, sube: p1[1] - puesto.p0[1] };
+}
+
+const ladosEsc = [];
+for (const signo of [1, -1]) {
+  const p = [...cEsc];
+  p[finoEsc] = cEsc[finoEsc] + signo * 0.3;
+  p[1] = escalera.min[1] + 0.2;
+  const r = await treparDesde(p);
+  console.log(`  a ${signo > 0 ? "+" : "−"}0,3 m en ${"XYZ"[finoEsc]}: ` +
+    (r ? `normal ${JSON.stringify(r.n)}, sube ${r.sube.toFixed(2)} m` : "no detecta la escalera"));
+  ladosEsc.push(r);
+}
+const medidosEsc = ladosEsc.filter(Boolean);
+control("los dos lados de la escalera se detectan", medidosEsc.length === 2, `${medidosEsc.length} de 2`);
+if (medidosEsc.length) {
+  const mejor = Math.max(...medidosEsc.map((r) => r.sube));
+  const peor = Math.min(...medidosEsc.map((r) => r.sube));
+  control("y por su lado abierto se sube", mejor > 0.5, `${mejor.toFixed(2)} m`);
+  // El negativo, que es la mitad que faltaba: si esto también subiera, «se
+  // trepa» lo pasaría un mundo donde andar hacia una pared te eleva.
+  control("y por el lado de la pared NO", peor <= 0, `${peor.toFixed(2)} m`);
   await foto("2-escalera");
 }
 

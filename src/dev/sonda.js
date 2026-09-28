@@ -35,7 +35,9 @@ import { animacionDeParado } from "../play/actividad.js";
 import { atlasDe } from "../render/studio.js";
 import { defensaDelJugador, dentroDelCono2D } from "../play/escudo.js";
 import { listarPartidas } from "../red/navegador.js";
-import { nombreDeTecla } from "../juego/teclas.js";
+import { ACCIONES, nombreDeTecla } from "../juego/teclas.js";
+import { choques, enPantallaCompleta, hayAtrapaTeclado, tecladoAtrapado }
+  from "../juego/navegador.js";
 import { relacionDeRazas } from "../bsp/razas.js";
 
 /**
@@ -584,6 +586,44 @@ export function montarSonda(S) {
       servidores: () => { S.vgui2?.()?.abrirServidores(); },
       /** Los ajustes que hacen algo, y los que no. Lo calcula `cuenta()`. */
       cuenta: () => S.cuentaDeAjustes ?? null,
+      /**
+       * CON QUÉ MAPA SE ENTRÓ, resuelto por `mapaElegido()` al pulsar «Start».
+       * Es lo APLICADO, no lo que la fila «Map» enseñaba: son dos cosas
+       * distintas y hasta ahora sólo existía la segunda, porque el valor de la
+       * fila se tiraba sin usarlo.
+       */
+      mapaDeLaPartida: () => S.mapaDeLaPartida ?? null,
+    },
+
+    /**
+     * LA FRONTERA CON EL SITIO DONDE SE JUEGA (experimento 35, medido en el 38).
+     *
+     * `src/juego/navegador.js` es lo único nuestro que no porta nada: existe
+     * porque un juego de escritorio no tiene este problema. Y hasta ahora lo
+     * único que lo comprobaba eran las pruebas de Node, que llegan al
+     * diagnóstico —qué teclas choca el `config.cfg`— y no a lo que hace el
+     * navegador cuando se le piden.
+     *
+     * ESTO SÓLO LEE, por lo mismo que `vgui`: pedir el teclado desde aquí no
+     * valdría de nada. Las dos APIs exigen un gesto del usuario, así que la
+     * sonda tiene que pulsar la tecla de verdad —la `b`— y esto sirve para ver
+     * qué pasó. Un `probe.navegador.atrapar()` daría el verde sin gesto y
+     * mediría el `try` en vez de la concesión.
+     */
+    navegador: {
+      /** ¿Este navegador trae Keyboard Lock? Es el positivo de todo lo demás. */
+      hayKeyboardLock: () => hayAtrapaTeclado(),
+      /** ¿Lo tenemos atrapado AHORA, según nosotros? */
+      atrapado: () => tecladoAtrapado(),
+      /** Y según el navegador, que es quien manda. */
+      pantallaCompleta: () => enPantallaCompleta(),
+      /** De quién es el ratón, para el menú principal en pantalla completa. */
+      puntero: () => document.pointerLockElement?.tagName ?? null,
+      /**
+       * Los choques que `navegador.js` encuentra con las teclas PUESTAS, no con
+       * las de fábrica: es lo que el jugador tiene delante.
+       */
+      choques: () => choques(S.teclas.mapa, ACCIONES),
     },
 
     /**

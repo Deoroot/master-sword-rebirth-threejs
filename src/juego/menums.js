@@ -64,8 +64,19 @@ const el = (tag, clase = "") => {
  *
  * `hacer` recibe `{ que, entrada }` y devuelve `true` si lo ha hecho. Todo lo
  * que el menú sabe del juego pasa por ahí.
+ *
+ * `tapado` dice si hay una ventana de VGUI2 ENCIMA. El menú sigue abierto y
+ * visible detrás de ella —es lo que hace el juego, y por eso «Options»,
+ * «Visit a Kingdom» y «Establish a Kingdom» ya no lo cierran— pero mientras
+ * algo lo tape **no atiende ni teclas ni clics**. Sin esto la Escape está bien
+ * (`vgui2/montar.js:96` escucha en captura y corta la propagación) pero el
+ * `Enter` no: se lo quedaba la ventana Y ADEMÁS activaba la opción del menú
+ * que había debajo, a ciegas. Las flechas movían la marca por detrás igual.
  */
-export function montarMenu({ raiz = document.body, ficha = null, hacer = () => false, sonar = null } = {}) {
+export function montarMenu({
+  raiz = document.body, ficha = null, hacer = () => false, sonar = null, cursor = null,
+  tapado = null,
+} = {}) {
   if (!document.getElementById("ms-menu-css")) {
     const s = el("style"); s.id = "ms-menu-css"; s.textContent = CSS;
     raiz.appendChild(s);
@@ -121,6 +132,14 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
   let visibles = [];
   let elegida = -1;
   let enJuego = false;
+  /**
+   * CUÁNTAS VECES SE HA ABIERTO. Sólo sube, y está aquí para que se pueda medir
+   * un fallo que el estado no delata: aguantar la Escape alternaba el menú
+   * sesenta veces por segundo, y mirar «¿está abierto?» de vez en cuando daba
+   * verde igual —entre dos miradas cabe un número par de vueltas—. Contar las
+   * aperturas sí lo distingue. Ver `sondas/pantalla38.mjs`.
+   */
+  let aperturas = 0;
 
   function pintar() {
     visibles = entradasVisibles(ENTRADAS, { enJuego });
@@ -166,8 +185,16 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
     }
   }
 
+  /**
+   * Hay una ventana encima. Va en una función y no en cada manejador para que
+   * el guardia esté en los DOS sitios por los que se entra —`elegir()` y
+   * `mover()`— y no en los cuatro por los que se llama a esos dos.
+   */
+  const estoyTapado = () => Boolean(tapado?.());
+
   /** Pulsar la que esté marcada. */
   function elegir() {
+    if (estoyTapado()) return null;
     const e = visibles[elegida];
     if (!e) return null;
     const q = quehace(e);
@@ -185,6 +212,7 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
 
   /** Moverse con las flechas, saltando separadores. */
   function mover(paso) {
+    if (estoyTapado()) return;
     const n = visibles.length;
     if (!n) return;
     for (let i = 1; i <= n; i++) {
@@ -216,8 +244,17 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
       pintar();
       mover(1);
       nodo.hidden = false;
+      aperturas++;
+      // EL MENÚ QUIERE EL RATÓN, y hay que pedirlo. Ver `cursorDelRaton` en
+      // `src/main.js`: hasta ahora lo soltaba la Escape del navegador por
+      // nosotros, y en pantalla completa con Keyboard Lock esa Escape es
+      // nuestra y el favor se acabó.
+      cursor?.(true);
     },
-    cerrar() { nodo.hidden = true; },
+    cerrar() {
+      nodo.hidden = true;
+      cursor?.(false);
+    },
     alternar(hayPartida = false) { if (nodo.hidden) this.abrir(hayPartida); else this.cerrar(); },
     mover, elegir,
     /** Lo que se ve, para las sondas. */
@@ -225,6 +262,11 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
       return {
         abierto: !nodo.hidden,
         enJuego,
+        aperturas,
+        // Abierto y tapado a la vez es el estado nuevo: se VE detrás de la
+        // ventana y no atiende a nadie. Antes no existía porque «Options»
+        // cerraba el menú.
+        tapado: estoyTapado(),
         opciones: [...lista.querySelectorAll(".ms-menu-op")].map((b) => ({
           texto: b.textContent, sirve: b.dataset.sirve === "si", que: b.dataset.que,
         })),
