@@ -156,13 +156,13 @@ export function exportar(p) {
  */
 export function importar(texto) {
   let doc;
-  try { doc = JSON.parse(texto); } catch { throw new Error("eso no es un JSON"); }
+  try { doc = JSON.parse(texto); } catch { throw new Error("that is not JSON"); }
   const crudo = doc?.marca === MARCA ? doc.personaje : doc;
   // Un array es un objeto, y `[1,2,3]` colaba hasta aquí para morir tres
   // líneas más abajo con «sin nombre» — un mensaje que manda a mirar el sitio
   // equivocado.
   if (!crudo || typeof crudo !== "object" || Array.isArray(crudo)) {
-    throw new Error("el fichero no trae un personaje dentro");
+    throw new Error("the file has no character in it");
   }
   const { personaje, avisos } = abrirPersonaje(crudo);
   // Un personaje importado es OTRO personaje, aunque venga del mismo: si se

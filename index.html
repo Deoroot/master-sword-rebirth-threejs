@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Mydra Web Lab — sonda 03</title>
+<title>Mydra Web Lab — probe 03</title>
 <style>
 :root {
   color-scheme: dark;
@@ -70,25 +70,25 @@ body {
 
 <div id="hud" hidden>
   <dl class="counters">
-    <dt>Andado</dt><dd><span id="h-dist">0.0</span> m</dd>
+    <dt>Walked</dt><dd><span id="h-dist">0.0</span> m</dd>
     <dt>Pos</dt><dd id="h-pos">– – –</dd>
-    <dt>Pies</dt><dd id="h-ground">–</dd>
+    <dt>Feet</dt><dd id="h-ground">–</dd>
   </dl>
   <div id="help">
-    <kbd>WASD</kbd> andar · <kbd>Raton</kbd> mirar<br>
-    <kbd>Espacio</kbd> saltar · <kbd>R</kbd> volver al inicio<br>
-    clic para capturar el raton
+    <kbd>WASD</kbd> move · <kbd>Mouse</kbd> look<br>
+    <kbd>Space</kbd> jump · <kbd>R</kbd> back to the start<br>
+    click to capture the mouse
   </div>
 </div>
 
 <div id="intro">
-  <h1>Sonda minima — experimento 03</h1>
-  <p>plaza.map del experimento 02, cargado en Three.js y caminado con Rapier.
-     Las mismas piezas corren en Node sin navegador: <code>npm test</code>.
-     El sellado lo sigue juzgando qbsp: <code>npm run verdict</code>.</p>
+  <h1>Minimal probe — experiment 03</h1>
+  <p>plaza.map from experiment 02, loaded in Three.js and walked with Rapier.
+     The same pieces run in Node with no browser: <code>npm test</code>.
+     The seal is still judged by qbsp: <code>npm run verdict</code>.</p>
 </div>
 
-<p id="status">arrancando…</p>
+<p id="status">starting…</p>
 
 <script type="module" src="/src/main.js"></script>
 </body>

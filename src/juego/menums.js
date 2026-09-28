@@ -168,12 +168,12 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
     if (q.que === "separador") return null;
     dar("elegir");
     if (!q.sirve) {
-      pie.textContent = `«${e.texto || e.etiqueta}»: ${q.porque ?? "todavía no"}`;
+      pie.textContent = `"${e.texto || e.etiqueta}": ${q.porque ?? "not yet"}`;
       return { ...q, entrada: e, hecho: false };
     }
     const hecho = Boolean(hacer({ que: q.que, entrada: e }));
     dar("confirmar");
-    if (!hecho) pie.textContent = `«${e.texto || e.etiqueta}»: no ha hecho nada`;
+    if (!hecho) pie.textContent = `"${e.texto || e.etiqueta}": did nothing`;
     return { ...q, entrada: e, hecho };
   }
 
@@ -206,7 +206,7 @@ export function montarMenu({ raiz = document.body, ficha = null, hacer = () => f
     abrir(hayPartida = false) {
       enJuego = Boolean(hayPartida);
       elegida = -1;
-      pie.textContent = ficha ? "" : "el menú no está horneado (`npm run menu`): sin fondo ni sonidos";
+      pie.textContent = ficha ? "" : "the menu has not been baked (`npm run menu`): no background, no sounds";
       pintar();
       mover(1);
       nodo.hidden = false;

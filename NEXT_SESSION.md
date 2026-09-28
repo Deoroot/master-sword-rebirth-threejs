@@ -43,6 +43,42 @@
 > desplegado—, las flechas no pasan por la comprobación de distancia, los bichos
 > no se pelean entre ellos y no hay reaparición de monstruos.
 
+> **Y detrás, el orden y el idioma: [ORDEN_28.md](ORDEN_28.md).**
+>
+> **Este proyecto YA TIENE `git`**, que llevaba veintiocho experimentos sin él y
+> era lo primero: sin control de versiones, un refactor mecánico de dos mil
+> líneas no se puede deshacer.
+>
+> **`src/main.js` baja de 5 253 a 2 878 líneas** sacando dos cosas que no son el
+> juego: la sonda (`src/dev/sonda.js`, 2 045 líneas, el 45 % de `mainGateCity`)
+> y el banco de pruebas de los experimentos 01-09 (`src/mirador.js`, que ahora
+> se carga bajo demanda y con `?map=gatecity` ni se descarga). Hecho con
+> `rollup/parseAst` resolviendo ámbitos, no con expresiones regulares. La sonda
+> baja por un **saco de captadores** y no por copias: con copias, las cuentas de
+> golpes y muertes se habrían quedado en 0 para siempre y ningún control lo
+> habría dicho.
+>
+> Lo que NO se ha hecho y es la deuda que queda: `mainGateCity` sigue siendo una
+> función de 2 600 líneas. Partirla de verdad pide sacar el estado compartido a
+> un objeto explícito, y eso es un experimento propio.
+>
+> **LA INTERFAZ HABLA INGLÉS** y los comentarios y la documentación siguen en
+> español. No es sólo un encargo: es lo fiel — Master Sword está en inglés y sus
+> propias cadenas ya estaban aquí sin traducir (`parried!`, `has fallen!`). Los
+> nombres de las acciones salen de su `gfx/shell/kb_act.lst`.
+>
+> Y lo mantiene `test/idioma.test.mjs`, que busca las cadenas **por dónde se
+> usan y no por su texto**: `"inventario"` es a la vez una etiqueta y el nombre
+> de una acción del teclado, y sólo el sitio las distingue. Con su control
+> positivo, que es lo que impide que la prueba pase por estar rota.
+>
+> Dos fallos de sonda salieron por el camino: `text=create` de Playwright casa
+> por subcadena y se iba al `<code>CreateChar()</code>` del párrafo, y
+> **`sonda:red` llevaba desde el 27 terminando con un `ReferenceError`** — su
+> `const errores` estaba dentro del `try` y la línea que decide el código de
+> salida, fuera. Imprimía «21 de 21» y luego se caía: el código de salida no
+> significaba nada.
+
 ## LO QUE ENCONTRÓ EL 06, y es el fallo más caro de los seis experimentos
 
 **Gate City llevaba dos sesiones dibujándose SIN SU MAPA DE LUZ**, con las 397

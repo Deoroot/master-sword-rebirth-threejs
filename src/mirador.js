@@ -37,13 +37,13 @@ import { terrainLevel } from "./map/terrain.js";
 export async function mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, KIT_LEVEL, JHARRO_LEVEL }) {
   let level;
   if (JHARRO_LEVEL) {
-    say("excavando el jharro…");
+    say("digging the jharro…");
     level = jharroLevel();
   } else if (MESH_LEVEL) {
-    say("calculando terreno…");
+    say("computing terrain…");
     level = terrainLevel({ name: MAP });
   } else {
-    say("cargando mapa…");
+    say("loading map…");
     const response = await fetch(`maps/${MAP}.map`);
     if (!response.ok) throw new Error(`no se pudo leer maps/${MAP}.map`);
     level = loadLevel(await response.text(), { name: MAP });
@@ -63,7 +63,7 @@ export async function mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, 
   // leerian como un fallo de fisica en vez de como un orden de carga.
   let kit = null;
   if (JHARRO_LEVEL) {
-    say("montando el jharro…");
+    say("setting up the jharro…");
     // Las fachadas del kit, y después la roca y los faroles generados. El orden
     // es el mismo que en Corinth y por lo mismo: la malla de colisión de Rapier
     // se construye de una pieza y no se le pueden añadir triángulos después.
@@ -85,7 +85,7 @@ export async function mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, 
       colision: [piezas, { pos: level.solida.pos, idx: level.solida.idx }],
     };
   } else if (KIT_LEVEL) {
-    say("montando Corinth…");
+    say("setting up Corinth…");
     const monta = montarCorinth();
     const grupo = await buildFromPlan(new GLTFLoader(), monta.piezas);
     // La colision se saca ANTES de meterle la roca de dibujo, porque esa lleva
@@ -109,7 +109,7 @@ export async function mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, 
     };
   }
 
-  say("arrancando fisica…");
+  say("starting physics…");
   await initPhysics();
   const colision = kit
     ? fundirMallas([{ pos: level.mesh.positions, idx: level.mesh.indices }, ...kit.colision])
@@ -121,7 +121,7 @@ export async function mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, 
   // jugador de cara a una pared.
   if (typeof level.startYaw === "number") player.yaw = level.startYaw;
 
-  say("cargando texturas…");
+  say("loading textures…");
   const BUSH_VARIANTS = 8;
   const wanted = [
     ...new Set([
@@ -341,7 +341,7 @@ export async function mirarMapa({ MAP, DT, MOUSE, canvas, hud, say, MESH_LEVEL, 
     counters.pos.textContent = after
       .map((v) => Math.round(v * UNITS_PER_M))
       .join(" ");
-    counters.ground.textContent = player.grounded ? "suelo" : "aire";
+    counters.ground.textContent = player.grounded ? "ground" : "air";
   }
 
   // Puerta para el sacador de capturas: dejar mirar y colocar la camara desde

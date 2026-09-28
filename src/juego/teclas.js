@@ -52,29 +52,29 @@ function codigoDe(cfg) {
  * mirarlo.
  */
 export const ACCIONES = [
-  { clave: "adelante", nombre: "Andar adelante", cfg: "w", boton: true },
-  { clave: "atras", nombre: "Andar atrás", cfg: "s", boton: true },
-  { clave: "izquierda", nombre: "Ir a la izquierda", cfg: "a", boton: true },
-  { clave: "derecha", nombre: "Ir a la derecha", cfg: "d", boton: true },
-  { clave: "saltar", nombre: "Saltar", cfg: "SPACE", boton: true },
-  { clave: "agachar", nombre: "Agacharse", cfg: "CTRL", boton: true },
-  { clave: "correr", nombre: "Correr", cfg: "SHIFT", boton: true },
-  { clave: "atacar", nombre: "Atacar", cfg: "MOUSE1", boton: true },
-  { clave: "atacar2", nombre: "Ataque secundario", cfg: "MOUSE2", boton: true },
-  { clave: "usar", nombre: "Usar (mantenido)", cfg: "e", boton: true },
-  { clave: "usarYa", nombre: "Usar", cfg: "q", boton: true },
-  { clave: "coger", nombre: "Coger", cfg: "x", boton: true },
-  { clave: "soltar", nombre: "Soltar", cfg: "c", boton: true },
-  { clave: "cambiarMano", nombre: "Cambiar de mano", cfg: "h", boton: true },
+  { clave: "adelante", nombre: "Move Forward", cfg: "w", boton: true },
+  { clave: "atras", nombre: "Move Back", cfg: "s", boton: true },
+  { clave: "izquierda", nombre: "Move Left", cfg: "a", boton: true },
+  { clave: "derecha", nombre: "Move Right", cfg: "d", boton: true },
+  { clave: "saltar", nombre: "Jump", cfg: "SPACE", boton: true },
+  { clave: "agachar", nombre: "Duck", cfg: "CTRL", boton: true },
+  { clave: "correr", nombre: "Run", cfg: "SHIFT", boton: true },
+  { clave: "atacar", nombre: "Attack", cfg: "MOUSE1", boton: true },
+  { clave: "atacar2", nombre: "Secondary Attack", cfg: "MOUSE2", boton: true },
+  { clave: "usar", nombre: "Use (hold)", cfg: "e", boton: true },
+  { clave: "usarYa", nombre: "Use", cfg: "q", boton: true },
+  { clave: "coger", nombre: "Pick Up", cfg: "x", boton: true },
+  { clave: "soltar", nombre: "Drop", cfg: "c", boton: true },
+  { clave: "cambiarMano", nombre: "Swap Hands", cfg: "h", boton: true },
   // CICLAR. Un comando con argumento en el motor —`quickslot weapon|spell|arrow`
   // (hud.cpp:267)—, tres acciones aquí porque cada una lleva su tecla.
   //
   // Y el reparto por defecto NO es 1-2-3: la 3 abre el inventario y la munición
   // es la 4 (`gfx/shell/kb_def.lst`). Son `bind`, o sea que cualquiera los tiene
   // cambiados; lo que se porta es la acción.
-  { clave: "ciclarArma", nombre: "Elegir arma", cfg: "1", boton: false },
-  { clave: "ciclarHechizo", nombre: "Elegir hechizo", cfg: "2", boton: false },
-  { clave: "ciclarMunicion", nombre: "Elegir munición", cfg: "4", boton: false },
+  { clave: "ciclarArma", nombre: "Select Weapon", cfg: "1", boton: false },
+  { clave: "ciclarHechizo", nombre: "Select Spell", cfg: "2", boton: false },
+  { clave: "ciclarMunicion", nombre: "Select Ammo", cfg: "4", boton: false },
   // LAS DOCE RANURAS. `+quickslot N`: pulsar usa, aguantar dos segundos graba.
   //
   // El `alias` es el SEGUNDO bind que el juego trae de fábrica para las cinco
@@ -84,7 +84,7 @@ export const ACCIONES = [
   // ranuras se pueden usar siempre.
   ...Array.from({ length: 12 }, (_, i) => ({
     clave: `ranura${i + 1}`,
-    nombre: `Ranura ${i + 1}${i === 0 ? " (aguantar para grabar)" : ""}`,
+    nombre: `Quickslot ${i + 1}${i === 0 ? " (hold to assign)" : ""}`,
     cfg: `F${i + 1}`,
     alias: i < 5 ? String((6 + i) % 10) : null,
     boton: false,
@@ -94,14 +94,14 @@ export const ACCIONES = [
   // «+24»— pero son ALIAS DE CONSOLA, no comandos del motor, y `kb_def.lst` no
   // les da ninguna tecla: quien los quiere se los asigna. Así que ALT y ALT GR
   // son **elección nuestra** y se dice; lo de arriba son hechos, esto no.
-  { clave: "correrRanuras12", nombre: "Ranuras 13-24 (mantener)", cfg: "ALT", boton: false },
-  { clave: "correrRanuras24", nombre: "Ranuras 25-36 (mantener)", cfg: "ALTGR", boton: false },
+  { clave: "correrRanuras12", nombre: "Shift Quickslots +12 (hold)", cfg: "ALT", boton: false },
+  { clave: "correrRanuras24", nombre: "Shift Quickslots +24 (hold)", cfg: "ALTGR", boton: false },
   // Y las de interfaz, que NO son botones de juego.
-  { clave: "hoja", nombre: "Hoja de personaje", cfg: "p", boton: false },
-  { clave: "inventario", nombre: "Inventario", cfg: "i", boton: false },
-  { clave: "opciones", nombre: "Opciones", cfg: "g", boton: false },
-  { clave: "menu", nombre: "Menú principal", cfg: "ESCAPE", boton: false },
-  { clave: "marcador", nombre: "Lista de jugadores", cfg: "TAB", boton: false },
+  { clave: "hoja", nombre: "Character Sheet", cfg: "p", boton: false },
+  { clave: "inventario", nombre: "Inventory", cfg: "i", boton: false },
+  { clave: "opciones", nombre: "Options", cfg: "g", boton: false },
+  { clave: "menu", nombre: "Main Menu", cfg: "ESCAPE", boton: false },
+  { clave: "marcador", nombre: "Scoreboard", cfg: "TAB", boton: false },
 ];
 
 /** Las doce ranuras rápidas, en orden. */
@@ -256,16 +256,16 @@ export class Teclas {
 export function nombreDeTecla(codigo) {
   if (!codigo) return "—";
   const m = {
-    Space: "Espacio", ControlLeft: "Ctrl izq", ControlRight: "Ctrl der",
-    ShiftLeft: "Mayús izq", ShiftRight: "Mayús der", AltLeft: "Alt", AltRight: "Alt Gr",
-    Tab: "Tab", Enter: "Intro", Escape: "Esc", Backspace: "Retroceso",
+    Space: "Space", ControlLeft: "Left Ctrl", ControlRight: "Right Ctrl",
+    ShiftLeft: "Left Shift", ShiftRight: "Right Shift", AltLeft: "Alt", AltRight: "Alt Gr",
+    Tab: "Tab", Enter: "Enter", Escape: "Esc", Backspace: "Backspace",
     ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
-    Mouse0: "Ratón izq", Mouse1: "Ratón centro", Mouse2: "Ratón der",
-    Mouse3: "Ratón 4", Mouse4: "Ratón 5",
+    Mouse0: "Left Mouse", Mouse1: "Middle Mouse", Mouse2: "Right Mouse",
+    Mouse3: "Mouse 4", Mouse4: "Mouse 5",
   };
   if (m[codigo]) return m[codigo];
   if (codigo.startsWith("Key")) return codigo.slice(3);
   if (codigo.startsWith("Digit")) return codigo.slice(5);
-  if (codigo.startsWith("Numpad")) return `Num ${codigo.slice(6)}`;
+  if (codigo.startsWith("Numpad")) return `Numpad ${codigo.slice(6)}`;
   return codigo;
 }

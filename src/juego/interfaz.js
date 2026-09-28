@@ -168,11 +168,11 @@ const barra = (f) => el("div", { clase: "mx-barra" }, [
  * los tres grupos son los tres tipos de propiedad que existen.
  */
 const GRUPOS = [
-  { nombre: "Armas", porQue: "Agrupación nuestra: SkillStatList[9] es plana. Estas seis comparten las tres propiedades de SkillTypeList — Proficiency, Balance y Power.",
+  { nombre: "Weapons", porQue: "Our grouping: SkillStatList[9] is flat. These six share the three properties of SkillTypeList — Proficiency, Balance and Power.",
     claves: ["swordsmanship", "martialarts", "smallarms", "axehandling", "bluntarms", "polearms", "archery"] },
-  { nombre: "Magia", porQue: "Agrupación nuestra. Spell Casting es la única con las cinco escuelas de SpellTypeList en vez de las tres propiedades de arma.",
+  { nombre: "Magic", porQue: "Our grouping. Spell Casting is the only one with the five schools of SpellTypeList instead of the three weapon properties.",
     claves: ["spellcasting"] },
-  { nombre: "Defensa", porQue: "Agrupación nuestra. Parry es la única con UNA sola propiedad, y la única que no aporta a ningún atributo.",
+  { nombre: "Defence", porQue: "Our grouping. Parry is the only one with a SINGLE property, and the only one that feeds no attribute.",
     claves: ["parry"] },
 ];
 
@@ -323,20 +323,20 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
         ]),
         el("span", { clase: "mx-fila" }, [
           el("span", { clase: "mx-cuando", texto: new Date(c.actualizado).toLocaleString() }),
-          el("button", { clase: "mx-boton", texto: "jugar", onclick: async (ev) => {
+          el("button", { clase: "mx-boton", texto: "play", onclick: async (ev) => {
             // Entrar es cosa de la sesión: ella decide si naces o vuelves,
             // espera a que el mapa esté cargado, y avisa al visor de dónde
             // ponerte. Puede tardar, así que se dice.
             const b = ev.currentTarget;
-            b.disabled = true; b.textContent = "cargando…";
+            b.disabled = true; b.textContent = "loading…";
             await sesion.entrar(c.id);
             cerrar({ aunqueSeaObligatoria: true });
           } }),
-          el("button", { clase: "mx-boton", texto: "exportar", onclick: async () => {
+          el("button", { clase: "mx-boton", texto: "export", onclick: async () => {
             const r = await almacen.leer(c.id);
             descargar(`${c.nombre.replace(/[^\w]+/g, "_")}.json`, exportar(r.personaje));
           } }),
-          el("button", { clase: "mx-boton mx-peligro", texto: "borrar", onclick: async () => {
+          el("button", { clase: "mx-boton mx-peligro", texto: "delete", onclick: async () => {
             await almacen.borrar(c.id);
             pantallaElegir();
           } }),
@@ -354,10 +354,10 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
       nueva.appendChild(retrato({ animacion: "inactivo", tic: false, senalaCon: nueva }));
       nueva.appendChild(el("span", { clase: "mx-datos" }, [
         el("span", {}, [
-          el("span", { texto: lista.length ? "ranura libre" : "todavía no hay ninguno" }),
-          lista.length ? null : el("small", { clase: "mx-cuando", texto: " · empieza por aquí" }),
+          el("span", { texto: lista.length ? "empty slot" : "no characters yet" }),
+          lista.length ? null : el("small", { clase: "mx-cuando", texto: " · start here" }),
         ]),
-        el("button", { clase: "mx-boton", texto: "personaje nuevo", onclick: () => pantallaCrear() }),
+        el("button", { clase: "mx-boton", texto: "new character", onclick: () => pantallaCrear() }),
       ]));
       ul.appendChild(nueva);
     }
@@ -371,7 +371,7 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
         await almacen.escribir(personaje);
         pantallaElegir();
       } catch (e) {
-        alert(`no he podido importar eso: ${e.message}`);
+        alert(`could not import that: ${e.message}`);
       }
     });
 
@@ -389,20 +389,20 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
       aviso.appendChild(el("span", {
         clase: bien ? "mx-si" : "mx-aviso-linea",
         texto: bien
-          ? "✓ protegidos en este navegador"
+          ? "✓ protected in this browser"
           : estado.soportado
-            ? "⚠ guardados sólo en este navegador; puede borrarlos"
-            : "⚠ este navegador no sabe decir si los conserva",
-        title: "Se guardan en este navegador y en este equipo. «Borrar datos de " +
-          "navegación» se los lleva, y si le falta espacio puede desalojarlos.",
+            ? "⚠ saved only in this browser; it may delete them"
+            : "⚠ this browser cannot say whether it keeps them",
+        title: "They live in this browser and on this machine. \"Clear browsing data\" " +
+          "takes them away, and the browser may evict them if it runs short of space.",
       }));
       if (!bien && estado.soportado) {
-        aviso.appendChild(el("button", { clase: "mx-boton", texto: "proteger", onclick: async (ev) => {
+        aviso.appendChild(el("button", { clase: "mx-boton", texto: "protect", onclick: async (ev) => {
           ev.currentTarget.disabled = true;
           pintaAviso(await almacen.pedirPermanencia());
         } }));
       }
-      aviso.appendChild(el("button", { clase: "mx-boton", texto: "exportar todo", onclick: async () => {
+      aviso.appendChild(el("button", { clase: "mx-boton", texto: "export all", onclick: async () => {
         for (const c of await almacen.listar()) {
           const r = await almacen.leer(c.id);
           if (r) descargar(`${c.nombre.replace(/[^\w]+/g, "_")}.json`, exportar(r.personaje));
@@ -412,13 +412,13 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     pintaAviso(perm);
 
     abrir(el("div", { clase: "mx-panel" }, [
-      el("h2", { texto: "Personajes" }),
+      el("h2", { texto: "Characters" }),
       aviso,
       ul,
       el("div", { clase: "mx-fila" }, [
         // «Personaje nuevo» ya está arriba, en la ranura libre. Tenerlo dos
         // veces es dos sitios donde mirar para lo mismo.
-        el("button", { clase: "mx-boton", texto: "importar de un fichero", onclick: () => importador.click() }),
+        el("button", { clase: "mx-boton", texto: "import from a file", onclick: () => importador.click() }),
         importador,
       ]),
     ]));
@@ -428,7 +428,7 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   function pantallaCrear() {
     let arma = nuevoPersonaje.armas[0] ?? null;
     let genero = "male";
-    const nombre = el("input", { clase: "mx-input", placeholder: "nombre", maxlength: "31" });
+    const nombre = el("input", { clase: "mx-input", placeholder: "name", maxlength: "31" });
     const aviso = el("p", { clase: "mx-aviso" });
     const armas = el("div", { clase: "mx-armas" });
     // La vista previa, y con `senalar` apagado: aquí el ratón va a estar
@@ -445,7 +445,7 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     const generos = el("div", { clase: "mx-fila" });
     const pintaGenero = () => {
       generos.replaceChildren();
-      for (const [clave, texto] of [["male", "hombre"], ["female", "mujer"]]) {
+      for (const [clave, texto] of [["male", "man"], ["female", "woman"]]) {
         generos.appendChild(el("button", {
           clase: `mx-boton${clave === genero ? " mx-elegida" : ""}`,
           texto,
@@ -472,44 +472,44 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
           onclick: () => { arma = id; pinta(); },
         }, [
           el("b", { texto: f.nombre ?? id }),
-          el("small", { texto: `${hab}${f.arma?.dano ? ` · ${f.arma.dano} de daño` : ""}${f.arma?.tipoDano ? ` · ${f.arma.tipoDano}` : ""}` }),
+          el("small", { texto: `${hab}${f.arma?.dano ? ` · ${f.arma.dano} damage` : ""}${f.arma?.tipoDano ? ` · ${f.arma.tipoDano}` : ""}` }),
         ]));
       }
     };
     pinta();
 
     abrir(el("div", { clase: "mx-panel" }, [
-      el("h2", { texto: "Personaje nuevo" }),
+      el("h2", { texto: "New character" }),
       el("p", { clase: "mx-sub", html:
-        `Empiezas con <b>${nuevoPersonaje.oro} de oro</b>, ` +
-        `<b>${nuevoPersonaje.gratis.length} objetos</b> y <b>un arma</b>, que es lo que da ` +
-        `<code>CreateChar()</code> en Master Sword. No se elige raza: el motor escribe ` +
-        `«Human» a fuego y lo marca <i>LEGACY</i>.<br>` +
-        `Y no se reparten puntos: <b>los seis atributos se derivan de las nueve habilidades</b>, ` +
-        `así que suben solos con lo que uses.` }),
+        `You start with <b>${nuevoPersonaje.oro} gold</b>, ` +
+        `<b>${nuevoPersonaje.gratis.length} items</b> and <b>one weapon</b>, which is what ` +
+        `<code>CreateChar()</code> gives you in Master Sword. You do not pick a race: the engine ` +
+        `hardcodes \"Human\" and marks it <i>LEGACY</i>.<br>` +
+        `And there are no points to spend: <b>the six attributes are derived from the nine skills</b>, ` +
+        `so they rise on their own with whatever you use.` }),
       el("div", { clase: "mx-crear" }, [
         vista,
         el("div", {}, [
-          el("h3", { texto: "Nombre" }),
+          el("h3", { texto: "Name" }),
           nombre,
-          el("h3", { texto: "Quién eres" }),
+          el("h3", { texto: "Who you are" }),
           generos,
-          el("h3", { texto: "Con qué empiezas" }),
+          el("h3", { texto: "What you start with" }),
           armas,
         ]),
       ]),
       el("p", { clase: "mx-nota", texto:
-        "Falta una octava habilidad en la lista, Martial Arts: en Master Sword empezar " +
-        "sin arma es elegirla. Aquí todavía no se puede — queda dicho." }),
+        "An eighth skill is missing from the list, Martial Arts: in Master Sword, starting " +
+        "with no weapon is how you pick it. That is not possible here yet." }),
       aviso,
       el("div", { clase: "mx-fila" }, [
-        el("button", { clase: "mx-boton", texto: "crear", onclick: async () => {
+        el("button", { clase: "mx-boton", texto: "create", onclick: async () => {
           try {
             await sesion.crear({ nombre: nombre.value, genero, arma });
             pantallaElegir();
           } catch (e) { aviso.textContent = e.message; }
         } }),
-        el("button", { clase: "mx-boton", texto: "volver", onclick: () => pantallaElegir() }),
+        el("button", { clase: "mx-boton", texto: "back", onclick: () => pantallaElegir() }),
       ]),
     ]));
     nombre.focus();
@@ -532,19 +532,19 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     // hoja. Al `title`, donde sigue estando para quien la quiera y no le roba
     // sitio a nadie.
     const FORMULA = {
-      Vida: "MaxHP = 5 + (STR−1)·7 + (FIT−1)·7 + (WIS−1)·3   ·   playershared.cpp",
-      "Maná": "MaxMP = WIS·10",
-      Aguante: "MaxStamina = 3 + FIT·2,5 + STR·1,0",
-      Carga: "Volume = min(STR·25 + 25, 2000)",
+      Health: "MaxHP = 5 + (STR−1)·7 + (FIT−1)·7 + (WIS−1)·3   ·   playershared.cpp",
+      Mana: "MaxMP = WIS·10",
+      Stamina: "MaxStamina = 3 + FIT·2,5 + STR·1,0",
+      Weight: "Volume = min(STR·25 + 25, 2000)",
     };
     const der = el("div", { clase: "mx-stat" });
-    for (const [k, v] of [["Vida", `${p.vida ?? r.derivadas.vidaMax} / ${r.derivadas.vidaMax}`],
-      ["Maná", `${p.mana ?? r.derivadas.manaMax} / ${r.derivadas.manaMax}`],
-      ["Aguante", r.derivadas.aguanteMax.toFixed(1)],
-      ["Carga", `${carga(p.objetos.map((o) => ({ ...o, ficha: ficha(o.id) })), r.derivadas.carga).peso} / ${r.derivadas.carga}`],
-      ["Oro", String(p.oro)]]) {
+    for (const [k, v] of [["Health", `${p.vida ?? r.derivadas.vidaMax} / ${r.derivadas.vidaMax}`],
+      ["Mana", `${p.mana ?? r.derivadas.manaMax} / ${r.derivadas.manaMax}`],
+      ["Stamina", r.derivadas.aguanteMax.toFixed(1)],
+      ["Weight", `${carga(p.objetos.map((o) => ({ ...o, ficha: ficha(o.id) })), r.derivadas.carga).peso} / ${r.derivadas.carga}`],
+      ["Gold", String(p.oro)]]) {
       der.appendChild(el("span", { texto: k, title: FORMULA[k] ?? null }));
-      der.appendChild(el("span", { clase: k === "Oro" ? "mx-n mx-oro" : "mx-n", texto: v, title: FORMULA[k] ?? null }));
+      der.appendChild(el("span", { clase: k === "Gold" ? "mx-n mx-oro" : "mx-n", texto: v, title: FORMULA[k] ?? null }));
     }
 
     // MAESTRO-DETALLE: la lista entera, y abierta sólo la elegida.
@@ -583,20 +583,20 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
           el("span", { clase: "mx-n", style: "text-align:right", texto: String(prop.valor) }),
         ]));
         detalle.appendChild(el("div", { clase: "mx-falta", texto:
-          falta > 0 ? `faltan ${Math.ceil(queda)} para ${prop.valor + 1}` : "el primer punto es gratis" }));
+          falta > 0 ? `${Math.ceil(queda)} to go for ${prop.valor + 1}` : "the first point is free" }));
       }
 
       // QUÉ HACE CRECER, calculado de los pesos del motor y no de una tabla.
       const aporte = aporteDe(h.clave);
-      detalle.appendChild(el("h3", { texto: "Entrenarla sube", title:
-        "Los pesos son los de CMSMonster::GetStat(). Se ordenan por peso/divisor, " +
-        "que es lo que de verdad rinde: el divisor no es el número de sumandos." }));
+      detalle.appendChild(el("h3", { texto: "Training this raises", title:
+        "The weights are those of CMSMonster::GetStat(). They are ordered by weight/divisor, " +
+        "which is what actually pays: the divisor is not the number of terms." }));
       if (!aporte.length) {
         // Y esto es un dato del motor, no un hueco: `parry` no está en ninguna
         // de las siete medias de `GetStat()`.
         detalle.appendChild(el("p", { clase: "mx-nota", texto:
-          "A ningún atributo. Parry no aparece en ninguna de las medias de GetStat(), " +
-          "así que sube sola y no arrastra nada." }));
+          "No attribute. Parry appears in none of the averages of GetStat(), " +
+          "so it rises on its own and drags nothing with it." }));
       } else {
         const lista = el("div", { clase: "mx-aporta" });
         const tope = aporte[0].rinde;
@@ -641,7 +641,7 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
 
     abrir(el("div", { clase: "mx-panel" }, [
       el("h2", { texto: p.nombre }),
-      el("p", { clase: "mx-sub", texto: "P la hoja · I el inventario · G opciones · Esc cierra" }),
+      el("p", { clase: "mx-sub", texto: "P sheet · I inventory · G options · Esc closes" }),
       el("div", { clase: "mx-hoja" }, [
         el("div", {}, [
           // El personaje, el mismo modelo que en la tarjeta y el inventario.
@@ -649,27 +649,27 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
             genero: p.genero ?? "male",
             animacion: (p.manos.derecha || p.manos.izquierda) ? "conArma" : "sinArma",
           }),
-          el("h3", { texto: "Atributos", title: "Se derivan de las nueve habilidades y no se reparten: en Master Sword subes espadas y te sube la fuerza" }),
+          el("h3", { texto: "Attributes", title: "Derived from the nine skills, not spent: in Master Sword you raise swordsmanship and your strength goes up" }),
           atr,
-          el("h3", { texto: "Estado" }),
+          el("h3", { texto: "Status" }),
           der,
         ]),
         el("div", {}, [
-          el("h3", { texto: "Habilidades", title: "La barra es lo que le falta a su propiedad más atrasada" }),
+          el("h3", { texto: "Skills", title: "The bar is how far its most backward property still has to go" }),
           habs,
         ]),
         detalle,
       ]),
       // Lo nuestro, dicho en la pantalla y no sólo en un comentario.
       el("p", { clase: "mx-nota", texto:
-        "Los tres grupos de habilidades son nuestros: en Master Sword la lista es plana. " +
-        "El criterio sale de sus propiedades — las de arma tienen tres, la magia cinco escuelas y Parry una." }),
+        "The three skill groups are ours: in Master Sword the list is flat. " +
+        "The criterion comes from their properties — weapons have three, magic five schools and Parry one." }),
       el("div", { clase: "mx-fila" }, [
-        el("button", { clase: "mx-boton", texto: "inventario", onclick: () => pantallaInventario(p) }),
-        el("button", { clase: "mx-boton", texto: "exportar", onclick: () => descargar(`${p.nombre.replace(/[^\w]+/g, "_")}.json`, exportar(p)) }),
+        el("button", { clase: "mx-boton", texto: "inventory", onclick: () => pantallaInventario(p) }),
+        el("button", { clase: "mx-boton", texto: "export", onclick: () => descargar(`${p.nombre.replace(/[^\w]+/g, "_")}.json`, exportar(p)) }),
         // Cambiar de personaje es SALIR: guarda a la fuerza y suelta el que
         // hay. Pintar la lista sin salir dejaría al anterior a medio guardar.
-        el("button", { clase: "mx-boton", texto: "cambiar de personaje", onclick: () => sesion.salir() }),
+        el("button", { clase: "mx-boton", texto: "switch character", onclick: () => sesion.salir() }),
       ]),
     ]));
   }
@@ -700,8 +700,8 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
       rejilla.appendChild(el("div", {
         clase,
         style: `grid-column: ${o.x + 1} / span ${o.w}; grid-row: ${o.y + 1} / span ${o.h};`,
-        title: [o.ficha.nombre, o.ficha.descripcion, o.ficha.peso != null ? `peso ${o.ficha.peso}` : null,
-          o.ficha.valor != null ? `valor ${o.ficha.valor}` : null].filter(Boolean).join("\n"),
+        title: [o.ficha.nombre, o.ficha.descripcion, o.ficha.peso != null ? `weight ${o.ficha.peso}` : null,
+          o.ficha.valor != null ? `value ${o.ficha.valor}` : null].filter(Boolean).join("\n"),
       }, [
         el("b", { texto: o.ficha.nombre ?? o.id }),
         el("span", { texto: o.n > 1 ? `×${o.n}` : (o.ficha.tipo ?? "") }),
@@ -709,15 +709,15 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     }
 
     abrir(el("div", { clase: "mx-panel" }, [
-      el("h2", { texto: `Inventario — ${p.nombre}` }),
+      el("h2", { texto: `Inventory — ${p.nombre}` }),
       // Sin el «% de la rejilla», que era una métrica nuestra que no le sirve
       // a nadie: lo que limita en Master Sword es el PESO, y lo que el jugador
       // quiere saber es con qué tiene las manos.
       el("p", { clase: "mx-sub", html:
-        `Peso <b>${c.peso}</b> de <b>${c.capacidad}</b>` +
-        `${c.pasado ? " — <b>vas cargado</b>" : ""} · ` +
-        `oro <b class="mx-oro">${p.oro}</b> · ` +
-        `manos: ${ficha(p.manos.derecha)?.nombre ?? "vacía"} / ${ficha(p.manos.izquierda)?.nombre ?? "vacía"}` }),
+        `Weight <b>${c.peso}</b> of <b>${c.capacidad}</b>` +
+        `${c.pasado ? " — <b>overloaded</b>" : ""} · ` +
+        `gold <b class="mx-oro">${p.oro}</b> · ` +
+        `hands: ${ficha(p.manos.derecha)?.nombre ?? "empty"} / ${ficha(p.manos.izquierda)?.nombre ?? "empty"}` }),
       // EL PERSONAJE AL CENTRO Y LA REJILLA DEBAJO, que es como se pidió.
       //
       // Y con el arma en la mano manda la otra animación: `idle` si lleva algo,
@@ -732,11 +732,11 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
       ]),
       rejilla,
       fuera.length
-        ? el("p", { clase: "mx-aviso", texto: `${fuera.length} no caben en la rejilla y NO se han tirado: ${fuera.map((o) => o.ficha.nombre ?? o.id).join(", ")}` })
+        ? el("p", { clase: "mx-aviso", texto: `${fuera.length} do not fit in the grid and have NOT been dropped: ${fuera.map((o) => o.ficha.nombre ?? o.id).join(", ")}` })
         : null,
       el("div", { clase: "mx-fila" }, [
-        el("button", { clase: "mx-boton", texto: "hoja de personaje", onclick: () => pantallaHoja(p) }),
-        el("button", { clase: "mx-boton", texto: "cerrar", onclick: cerrar }),
+        el("button", { clase: "mx-boton", texto: "character sheet", onclick: () => pantallaHoja(p) }),
+        el("button", { clase: "mx-boton", texto: "close", onclick: cerrar }),
       ]),
     ]));
   }
@@ -755,26 +755,26 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   function pantallaMuerte({ anuncio, impuesto = 0, porQue = null, deQuien = null, tipo = "monstruo" } = {}) {
     const p = activo();
     abrir(el("div", { clase: "mx-panel" }, [
-      el("h2", { texto: "HAS CAÍDO" }),
-      el("p", { clase: "mx-caido", texto: anuncio ?? `${p?.nombre ?? "Alguien"} has fallen!` }),
+      el("h2", { texto: "YOU HAVE FALLEN" }),
+      el("p", { clase: "mx-caido", texto: anuncio ?? `${p?.nombre ?? "Someone"} has fallen!` }),
       el("p", { clase: "mx-sub", html:
         (deQuien || porQue
-          ? `Te ha matado <b>${deQuien ?? porQue}</b>.<br>`
+          ? `You were killed by <b>${deQuien ?? porQue}</b>.<br>`
           : "") +
         (tipo === "monstruo"
           ? impuesto > 0
-            ? `Pierdes <b>${impuesto} de oro</b>, el ${IMPUESTO_DE_MUERTE * 100} % de lo que llevabas.`
-            : `No pierdes oro: el impuesto es el ${IMPUESTO_DE_MUERTE * 100} % y es entero, ` +
-              `así que con menos de 100 monedas sale a cero.`
-          : "Morir así no cuesta oro: el impuesto sólo lo cobra un monstruo.") +
-        "<br><b>No sueltas ningún objeto.</b>" }),
+            ? `You lose <b>${impuesto} gold</b>, ${IMPUESTO_DE_MUERTE * 100} % of what you carried.`
+            : `You lose no gold: the tax is ${IMPUESTO_DE_MUERTE * 100} % and it is a whole number, ` +
+              `so with fewer than 100 coins it comes out zero.`
+          : "Dying this way costs no gold: only a monster charges the tax.") +
+        "<br><b>You drop no items.</b>" }),
       el("div", { clase: "mx-fila", style: "justify-content:center" }, [
-        el("button", { clase: "mx-boton", texto: "levantarse", onclick: () => sesion.reaparecer() }),
+        el("button", { clase: "mx-boton", texto: "get up", onclick: () => sesion.reaparecer() }),
       ]),
       el("p", { clase: "mx-nota", html:
-        `Vuelves en ${5} s aunque no toques nada, que es el <code>mp_forcerespawn</code> del motor. ` +
-        `El juego te dice que pierdes el 5 % del oro (<code>help/first_death.script</code>) ` +
-        `y su código cobra el 1 % (<code>DeathTax = 0.01</code>): manda el código.` }),
+        `You come back in ${5} s even if you touch nothing, which is the engine\u2019s <code>mp_forcerespawn</code>. ` +
+        `The game tells you that you lose 5 % of your gold (<code>help/first_death.script</code>) ` +
+        `and its code charges 1 % (<code>DeathTax = 0.01</code>): the code wins.` }),
     ]), "mx-muerte");
   }
 
@@ -798,14 +798,14 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
         const esperandoEsta = esperando === a.clave;
         lista.appendChild(el("div", { clase: "mx-tecla" }, [
           el("span", { texto: a.nombre }),
-          el("span", { clase: "mx-cuando", texto: a.boton ? "botón de juego" : "interfaz" }),
+          el("span", { clase: "mx-cuando", texto: a.boton ? "game button" : "interface" }),
           el("button", {
             clase: `mx-boton${esperandoEsta ? " mx-elegida" : ""}`,
-            texto: esperandoEsta ? "pulsa una tecla…" : nombreDeTecla(teclas.mapa[a.clave]),
+            texto: esperandoEsta ? "press a key…" : nombreDeTecla(teclas.mapa[a.clave]),
             onclick: () => { esperando = esperandoEsta ? null : a.clave; pinta(); },
           }),
           el("button", {
-            clase: "mx-boton mx-peligro", texto: "×", title: "quitar",
+            clase: "mx-boton mx-peligro", texto: "×", title: "clear",
             onclick: () => { teclas.quitar(a.clave); pinta(); },
           }),
         ]));
@@ -838,22 +838,22 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     };
 
     abrir(el("div", { clase: "mx-panel" }, [
-      el("h2", { texto: "Opciones — teclas" }),
+      el("h2", { texto: "Options — keys" }),
       el("p", { clase: "mx-sub", html:
-        "Los valores por defecto salen del <code>config.cfg</code> de Master Sword, " +
-        "no de lo que nos parezca: por eso la hoja de personaje es la <b>P</b> " +
-        "(<code>bind \"p\" \"playerinfo\"</code>) y usar es la <b>E</b>.<br>" +
-        "Una tecla sólo puede hacer una cosa: al asignarla se le quita a quien la tuviera." }),
+        "The defaults come from Master Sword’s own <code>config.cfg</code>, " +
+        "not from what we felt like: that is why the character sheet is <b>P</b> " +
+        "(<code>bind \"p\" \"playerinfo\"</code>) and use is <b>E</b>.<br>" +
+        "A key can only do one thing: assigning it takes it away from whoever had it." }),
       lista,
       el("div", { clase: "mx-fila" }, [
-        el("button", { clase: "mx-boton", texto: "volver a las del juego", onclick: () => { teclas.porDefecto(); pinta(); } }),
-        el("button", { clase: "mx-boton", texto: "cerrar", onclick: () => { soltar(); cerrar(); } }),
+        el("button", { clase: "mx-boton", texto: "back to the game defaults", onclick: () => { teclas.porDefecto(); pinta(); } }),
+        el("button", { clase: "mx-boton", texto: "close", onclick: () => { soltar(); cerrar(); } }),
       ]),
       el("p", { clase: "mx-nota", html:
-        "Los <b>botones de juego</b> son los que el motor cuenta como " +
-        "<code>pev->button</code>. La diferencia no es cosmética: estando muerto, " +
-        "pulsar uno es la orden de levantarse, y meter ahí las de interfaz hace " +
-        "que cerrar una ventana te resucite." }),
+        "The <b>game buttons</b> are the ones the engine counts as " +
+        "<code>pev-&gt;button</code>. The difference is not cosmetic: while you are dead, " +
+        "pressing one is the order to get up, and putting the interface keys in there makes " +
+        "closing a window resurrect you." }),
     ]));
   }
 

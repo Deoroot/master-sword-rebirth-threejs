@@ -31,8 +31,8 @@ export const COMANDOS = Object.freeze({
   // No hay ni lista de servidores ni forma de montar uno: el demo es una
   // partida local. Se dejan VISIBLES y apagadas, que es más honesto que
   // borrarlas del menú del juego.
-  OpenServerBrowser: { que: "servidores", sirve: false, porque: "todavía no hay servidores" },
-  OpenCreateMultiplayerGameDialog: { que: "crearPartida", sirve: false, porque: "todavía no hay servidores" },
+  OpenServerBrowser: { que: "servidores", sirve: false, porque: "no servers yet" },
+  OpenCreateMultiplayerGameDialog: { que: "crearPartida", sirve: false, porque: "no servers yet" },
   // «Name Character» y «Options» llevan las dos a `OpenOptionsDialog` en el
   // archivo del juego. Aquí se separan por la ETIQUETA, no por el comando, para
   // que nombrar al personaje abra lo que dice que abre.
@@ -40,7 +40,7 @@ export const COMANDOS = Object.freeze({
   // Un navegador no cierra su propia pestaña si no la abrió él
   // (`window.close()` no hace nada), así que ésta no puede funcionar y no se
   // finge que sí.
-  Quit: { que: "salir", sirve: false, porque: "un navegador no cierra su pestaña" },
+  Quit: { que: "salir", sirve: false, porque: "a browser cannot close its own tab" },
 });
 
 /** La etiqueta «Name Character» va a otro sitio aunque el comando sea el mismo. */
@@ -64,7 +64,7 @@ export function quehace(entrada) {
   if (!entrada.comando && !entrada.etiqueta) return { que: "separador", sirve: true };
   const porEtiqueta = POR_ETIQUETA[entrada.texto ?? entrada.etiqueta];
   if (porEtiqueta) return { que: porEtiqueta, sirve: true };
-  return COMANDOS[entrada.comando] ?? { que: null, sirve: false, porque: `no sé hacer '${entrada.comando}'` };
+  return COMANDOS[entrada.comando] ?? { que: null, sirve: false, porque: `I do not know how to do '${entrada.comando}'` };
 }
 
 /**

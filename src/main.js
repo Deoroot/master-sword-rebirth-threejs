@@ -247,7 +247,7 @@ async function mainGateCity() {
   if (pedida) {
     const url = pedida === "1" || pedida === "" ? urlPorDefecto() : pedida;
     try {
-      say(`conectando con la partida en ${url}…`);
+      say(`connecting to the game at ${url}…`);
       enlaceDeRed = await enlaceDeNavegador(url);
       red = new ClienteDeRed({ enlace: enlaceDeRed });
       await new Promise((ok, mal) => {
@@ -297,11 +297,11 @@ async function mainGateCity() {
     console.warn("el ciclo de sesion no se ha podido montar:", e);
   }
 
-  say("leyendo lo extraido de gatecity.bsp…");
+  say("reading what was extracted from gatecity.bsp…");
   const level = await gatecityLevel();
   if (!level.mesh.triangleCount) throw new Error("gatecity se cargo vacio");
 
-  say("arrancando fisica…");
+  say("starting physics…");
   const RAPIER = await initPhysics();
   // La colision es OTRA malla, no la que se dibuja: lleva el cielo -que sella- y
   // no lleva los 859 m2 de `func_illusionary` ni los 451 de agua, que en GoldSrc
@@ -335,7 +335,7 @@ async function mainGateCity() {
   });
   addEventListener("resize", resize);
 
-  say(`cargando ${level.manifiesto.texturas.length} texturas y el mapa de luz…`);
+  say(`loading ${level.manifiesto.texturas.length} textures and the lightmap…`);
   const { texturas, faltan } = await cargarTexturasBsp(level.manifiesto, {
     // 8, que es `gl_anisotropy` en la configuracion del juego, y no el maximo
     // de la tarjeta: se trata de parecerse a el, no de verse mejor que el.
@@ -444,7 +444,7 @@ async function mainGateCity() {
   // Las antorchas. Es lo que contesta a «el mapa original emitia luces desde
   // antorchas»: la LUZ ya estaba horneada —`pi_lantern` a 181 sobre 255 contra la
   // roca a 17— y lo que faltaba era la llama, que es `Fire1.spr` puesto 55 veces.
-  say("montando las antorchas...");
+  say("setting up the torches…");
   const carteles = await cargarCarteles(level.manifiesto);
   escena.add(carteles.grupo);
 
@@ -453,7 +453,7 @@ async function mainGateCity() {
   // LOS BICHOS: los 69 NPC y monstruos que el mapa coloca, con el modelo que
   // dice su `.script` y la animación que ese script nombra. Ver
   // `tools/bichos.mjs` y `src/render/bichos.js`.
-  say("montando los bichos...");
+  say("setting up the monsters…");
   let bichos = null;
   // El manifiesto se guarda, no sólo se consume: desde el 19 trae la tabla de
   // razas entera, que es lo que hace falta para saber a quién avisa un bicho al
@@ -598,17 +598,17 @@ async function mainGateCity() {
       // un suceso del juego, y las teclas son una nota de trabajo. Las dos se
       // van solas a los pocos segundos, que es lo que hace la consola — la
       // línea de estado se quedaba ahí para siempre.
-      suceso("normal", `${sesion.personaje.nombre} aparece en ${donde?.nombre ?? "la llegada del mapa"}` +
-        ` — luz ${donde?.luz ?? "?"}/255, ${donde?.hostiles15 ?? "?"} hostiles a 15 m`);
-      suceso("nopuedes", "1 arma · 4 munición · F1-F12 ranuras · Esc el menú · " +
-        "P la hoja · I el inventario · N más armas · B el escudo · K morir");
+      suceso("normal", `${sesion.personaje.nombre} arrives at ${donde?.nombre ?? "the map start"}` +
+        ` — light ${donde?.luz ?? "?"}/255, ${donde?.hostiles15 ?? "?"} hostiles within 15 m`);
+      suceso("nopuedes", "1 weapon · 4 ammo · F1-F12 quickslots · Esc menu · " +
+        "P sheet · I inventory · N more weapons · B shield · K die");
     });
     // Soltar el raton al morir: la pantalla de muerte tiene un boton y con el
     // puntero capturado no se puede pulsar.
     sesion.al("muerte", () => { document.exitPointerLock?.(); });
   }
 
-  say("montando los adornos...");
+  say("setting up the props…");
   const adornos = await cargarAdornos(level, atlas, {
     anisotropia: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
   });
@@ -744,8 +744,8 @@ async function mainGateCity() {
     });
     ranuras = new Ranuras({ guardadas: puestas });
     if (perdidas.length) {
-      suceso("normal", `${perdidas.length} ranura${perdidas.length > 1 ? "s" : ""} ` +
-        `apuntaba${perdidas.length > 1 ? "n" : ""} a algo que ya no llevas`);
+      suceso("normal", `${perdidas.length} quickslot${perdidas.length > 1 ? "s" : ""} ` +
+        `pointed at something you no longer carry`);
     }
   }
 
@@ -827,12 +827,12 @@ async function mainGateCity() {
       sesion.personaje.manos.derecha = orden.id;
       sesion.tocado?.();
       empunar(orden.id);
-      suceso("normal", `Empuñas ${orden.nombre}`);
+      suceso("normal", `You wield ${orden.nombre}`);
     } else if (orden.que === "elegirMunicion") {
       municionElegida = orden.infinita ? null : orden.id;
-      suceso("normal", `Munición: ${orden.nombre}`);
+      suceso("normal", `Ammo: ${orden.nombre}`);
     } else if (orden.que === "preparar") {
-      suceso("nopuedes", `No sabes ningún hechizo todavía`);
+      suceso("nopuedes", `You know no spells yet`);
     }
   }
 
@@ -855,8 +855,8 @@ async function mainGateCity() {
       true
     );
     player.velocityY = 0;
-    say(`pueblo ${visita + 1} de ${level.pueblos.length}: ${p.suelo.toFixed(0)} m2 de suelo en ` +
-      `${p.suelos} caras · T para el siguiente, R para volver a la llegada`);
+    say(`town ${visita + 1} of ${level.pueblos.length}: ${p.suelo.toFixed(0)} m2 of floor across ` +
+      `${p.suelos} faces · T for the next one, R to go back to the start`);
   }
   /**
    * ¿Esta el jugador ESCRIBIENDO?
@@ -955,18 +955,18 @@ async function mainGateCity() {
     if (e.code === "KeyO") {
       paseando = !paseando;
       say(paseando
-        ? `los bichos PIENSAN: 'npcatk_hunt' para los 33 hostiles y 'SetWanderDest' ` +
-          `para los 53 que declaran 'roam 1'. Andan a la velocidad que dice su propio ` +
-          `.mdl (el goblin, 0,92 m/s).`
-        : `los bichos CONGELADOS, cada uno con su animacion de estar parado. ` +
-          `Asi se abria el juego hasta el 21, y no era a proposito.`);
+        ? `monsters THINKING: 'npcatk_hunt' for the 33 hostiles and 'SetWanderDest' ` +
+          `for the 53 that declare 'roam 1'. They walk at the speed their own ` +
+          `.mdl declares (the goblin, 0.92 m/s).`
+        : `monsters FROZEN, each with its own idle animation. ` +
+          `This is how the game opened until experiment 21, and it was not on purpose.`);
     }
     if (e.code === "KeyL") {
       glow.visible = !glow.visible;
       say(glow.visible
-        ? `glow encendido: ${GLOW.alcance} m de alcance, el color de 'pi_lantern' del propio mapa`
-        : `glow APAGADO: el mapa tal como lo horneo el compilador. El 63 % de su superficie ` +
-          `esta por debajo de 32/255, y asi se jugaba sin el hechizo`);
+        ? `glow on: ${GLOW.alcance} m of reach, the colour of the map's own 'pi_lantern'`
+        : `glow OFF: the map as the compiler baked it. 63 % of its surface ` +
+          `is below 32/255, and that is how it played without the spell`);
     }
     // K: morirse.
     //
@@ -986,7 +986,7 @@ async function mainGateCity() {
     // El dia que haya tiendas, esta tecla sobra.
     if (e.code === "KeyB") {
       const lista = [...(catalogoDeEscudos?.keys() ?? [])];
-      if (!lista.length) { say("no hay escudos horneados: `npm run escudos`"); return; }
+      if (!lista.length) { say("no shields have been baked: `npm run escudos`"); return; }
       const i = brazal?.objeto?.id ? lista.indexOf(brazal.objeto.id) : -1;
       // Se recorren en circulo y el ultimo paso es SIN escudo, que tambien es un
       // estado del juego y el que trae de serie un personaje nuevo.
@@ -995,12 +995,12 @@ async function mainGateCity() {
         if (sesion?.personaje) sesion.personaje.manos.izquierda = siguiente;
         const f = brazal?.ficha;
         say(siguiente && f
-          ? `${brazal.objeto.nombre}: arriba bloquea el ${f.bloqueoArriba} % y deja pasar ` +
-            `el ${Math.round((f.danoQuePasa ?? 1) * 100)} % (te llevas el ` +
+          ? `${brazal.objeto.nombre}: raised it blocks ${f.bloqueoArriba} % and lets through ` +
+            `${Math.round((f.danoQuePasa ?? 1) * 100)} % (you take ` +
             `${Math.round((f.bloqueoArriba / 100) * f.danoQuePasa * 100 + (1 - f.bloqueoArriba / 100) * 100)} %); ` +
-            `abajo anula el golpe entero el ${f.bloqueoAbajo} % de las veces. ` +
-            `Boton DERECHO para levantarlo, y mientras lo aguantas no puedes atacar.`
-          : "sin escudo, que es con lo que empieza un personaje de verdad");
+            `lowered it negates the whole blow ${f.bloqueoAbajo} % of the time. ` +
+            `RIGHT mouse button to raise it, and while you hold it you cannot attack.`
+          : "no shield, which is what a real character starts with");
       });
     }
     // N: las otras seis armas de partida en la mochila. Andamio declarado,
@@ -1548,7 +1548,7 @@ async function mainGateCity() {
     // esquivar, y se lee, porque el motor te lo dice con el texto de su script.
     if (golpe.parado) {
       parados++;
-      suceso("ataque", `Tu ataque ha sido ${golpe.mensaje ?? "parried!"}`);
+      suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
       return { objetivo: i, dano: 0, parado: true };
     }
     const muerto = golpe.muerto;
@@ -1601,15 +1601,15 @@ async function mainGateCity() {
       const avisados = bichos.avisar(i, JUGADOR, { esAliado: sonAliados });
       if (avisados.length) {
         avisos += avisados.length;
-        suceso("normal", `${i.ficha.nombre ?? "El monstruo"} ha avisado a ${avisados.length} aliado${avisados.length > 1 ? "s" : ""} al morir`);
+        suceso("normal", `${i.ficha.nombre ?? "The monster"} alerted ${avisados.length} all${avisados.length > 1 ? "ies" : "y"} as it died`);
       }
     } else {
       if (golpe.encoge) encogidas++;
-      if (golpe.huye) { huidas++; suceso("normal", `${i.ficha.nombre ?? "El monstruo"} huye`); }
-      suceso("ataque", `${critico ? "¡CRÍTICO! " : ""}${dano.toFixed(1)} de daño a ` +
-        `${i.ficha.nombre ?? "un monstruo"} — le quedan ` +
-        `${Math.max(0, i.vida).toFixed(0)} de ${i.vidaMaxima}` +
-        `${golpe.encoge ? " · se encoge" : ""}`);
+      if (golpe.huye) { huidas++; suceso("normal", `${i.ficha.nombre ?? "The monster"} flees`); }
+      suceso("ataque", `${critico ? "CRITICAL! " : ""}${dano.toFixed(1)} damage to ` +
+        `${i.ficha.nombre ?? "a monster"} — ` +
+        `${Math.max(0, i.vida).toFixed(0)} of ${i.vidaMaxima} left` +
+        `${golpe.encoge ? " · it flinches" : ""}`);
     }
     return { objetivo: i, dano, critico, muerto, encoge: golpe.encoge, huye: golpe.huye };
   }
@@ -1680,9 +1680,9 @@ async function mainGateCity() {
       // (ver `aprender`), así que «25 de experiencia» y «12 apuntados» son
       // distintos y la diferencia es la regla. Sin los dos, un jugador que
       // mata algo enorme y no ve subir nada sólo puede pensar que está roto.
-      suceso("bueno", `Has matado a ${i.ficha.nombre ?? "un monstruo"} — ${total} de experiencia` +
-        (entregado < total ? ` (${entregado} apuntados: el resto se pierde)` : "") +
-        (subidas ? `, ¡${subidas} punto${subidas > 1 ? "s" : ""} de habilidad!` : ""));
+      suceso("bueno", `You killed ${i.ficha.nombre ?? "a monster"} — ${total} experience` +
+        (entregado < total ? ` (${entregado} recorded: the rest is lost)` : "") +
+        (subidas ? `, ${subidas} skill point${subidas > 1 ? "s" : ""}!` : ""));
     }
   }
   // ── EL TIRO CON ARCO ──────────────────────────────────────────────────────
@@ -1799,7 +1799,7 @@ async function mainGateCity() {
         sesion.personaje.objetos = sesion.personaje.objetos.filter((o) => o !== gasta);
         // `HUDEVENT_UNABLE` es el gris de «no puedes hacer eso», y quedarte sin
         // flechas es exactamente eso.
-        suceso("nopuedes", `Se te ha acabado ${flecha.nombre ?? "la munición"}`);
+        suceso("nopuedes", `You are out of ${flecha.nombre ?? "ammo"}`);
       }
     }
 
@@ -1906,7 +1906,7 @@ async function mainGateCity() {
     });
     // Un escudo puede parar una flecha, y eso ya está portado en `herir`.
     if (golpe.parado) {
-      suceso("ataque", `Tu flecha ha sido ${golpe.mensaje ?? "parried!"}`);
+      suceso("ataque", `Your arrow was ${golpe.mensaje ?? "parried!"}`);
       return null;
     }
     if (golpe.muerto) {
@@ -1917,9 +1917,9 @@ async function mainGateCity() {
     // La misma forma que el golpe de cuerpo a cuerpo, y a propósito: el motor
     // no tiene dos formatos —los dos salen del mismo `fReportHit` de
     // `giattack.cpp`— y «Flecha: 0.5 a Commoner» era un apunte de trabajo.
-    suceso("ataque", `${dano.toFixed(1)} de daño a ${i.ficha.nombre ?? "un monstruo"}` +
-      ` — le quedan ${Math.max(0, i.vida).toFixed(0)} de ${i.vidaMaxima}` +
-      `${golpe.muerto ? " · ¡muerto!" : ""}`);
+    suceso("ataque", `${dano.toFixed(1)} damage to ${i.ficha.nombre ?? "a monster"}` +
+      ` — ${Math.max(0, i.vida).toFixed(0)} of ${i.vidaMaxima} left` +
+      `${golpe.muerto ? " · dead!" : ""}`);
     return golpe;
   }
 
@@ -2128,13 +2128,13 @@ async function mainGateCity() {
       } else if (brazal?.atacando && !deFrente) {
         fueraDelCono++;
       }
-      if (d.parado) { parados++; suceso("atacado", "¡Has parado el golpe!"); return; }
+      if (d.parado) { parados++; suceso("atacado", "You parried the blow!"); return; }
       if (!(d.dano > 0)) return;
       // Y QUE TE PEGAN SE DICE, que hasta ahora no se decía en ningún sitio.
       // Es el `HUDEVENT_ATTACKED` del motor —rojo, (240,0,0)— y es el único
       // aviso que tiene el jugador de que la vida que baja tiene un culpable:
       // `%s hits you: %s` (giattack.cpp:1993).
-      suceso("atacado", `${i.ficha.nombre ?? "Un monstruo"} te da: ${d.dano.toFixed(1)} de daño`);
+      suceso("atacado", `${i.ficha.nombre ?? "A monster"} hits you: ${d.dano.toFixed(1)} damage`);
       sesion.danar(d.dano, { porQue: `${i.ficha.nombre ?? "un monstruo"}`, tipo: "golpe" });
     },
   };
@@ -2173,7 +2173,7 @@ async function mainGateCity() {
           else if (st.usaEncogerse || st.usaDolor) suena(st.sonidosDeGolpe);
           suena(suyos.recibir);
           if (s.encoge) encogidas++;
-          if (s.huye) { huidas++; suceso("normal", `${i?.ficha.nombre ?? "El monstruo"} huye`); }
+          if (s.huye) { huidas++; suceso("normal", `${i?.ficha.nombre ?? "The monster"} flees`); }
           break;
         case "muere":
           suena(suyos.muerte);
@@ -2184,32 +2184,32 @@ async function mainGateCity() {
           if (i) bichosSolidos?.quitar(i);
           if (s.avisados > 0) {
             avisos += s.avisados;
-            suceso("normal", `${i?.ficha.nombre ?? "El monstruo"} ha avisado a ${s.avisados} aliado${s.avisados > 1 ? "s" : ""} al morir`);
+            suceso("normal", `${i?.ficha.nombre ?? "The monster"} alerted ${s.avisados} all${s.avisados > 1 ? "ies" : "y"} as it died`);
           }
           break;
         case "para":
           parados++;
-          suceso("ataque", `Tu ataque ha sido ${i?.ficha.ia?.mensajeDeParry ?? "parried!"}`);
+          suceso("ataque", `Your attack was ${i?.ficha.ia?.mensajeDeParry ?? "parried!"}`);
           break;
         case "tupegas":
           // Se guarda tal cual para la sonda: sin esto, «el techo recorta» sólo
           // se puede comprobar matando algo, y entonces el recorte se esconde
           // detrás de la vida del bicho — un control que pasa sin medir nada.
           ultimoGolpe = s;
-          if (s.lejos) { suceso("malo", `Has fallado: ${s.porque}`); break; }
+          if (s.lejos) { suceso("malo", `You missed: ${s.porque}`); break; }
           if (s.parado || !s.vale) break;          // el `para` ya lo ha dicho
           // Con el golpe que mata NO se dice la vida que queda: la de abajo es
           // la línea de «Has matado a», que es la que el motor da. Decir las dos
           // deja un «0 de daño — le quedan 0 de 80» delante del anuncio.
           if (!s.muerto) {
-            suceso("ataque", `${s.dano ?? 0} de daño a ${i?.ficha.nombre ?? "un monstruo"}` +
-              ` — le quedan ${Math.max(0, Math.round(s.vida ?? 0))} de ${i?.vidaMaxima ?? "?"}`);
+            suceso("ataque", `${s.dano ?? 0} damage to ${i?.ficha.nombre ?? "a monster"}` +
+              ` — ${Math.max(0, Math.round(s.vida ?? 0))} of ${i?.vidaMaxima ?? "?"} left`);
           }
           if (s.muerto && s.experiencia?.total > 0) {
             const x = s.experiencia;
-            suceso("bueno", `Has matado a ${i?.ficha.nombre ?? "un monstruo"} — ${x.total} de experiencia` +
-              (x.entregado < x.total ? ` (${x.entregado} apuntados: el resto se pierde)` : "") +
-              (x.subidas ? ` · ¡${x.subidas} subida${x.subidas > 1 ? "s" : ""}!` : ""));
+            suceso("bueno", `You killed ${i?.ficha.nombre ?? "a monster"} — ${x.total} experience` +
+              (x.entregado < x.total ? ` (${x.entregado} recorded: the rest is lost)` : "") +
+              (x.subidas ? ` · ${x.subidas} skill point${x.subidas > 1 ? "s" : ""}!` : ""));
           }
           break;
         case "pega":
@@ -2218,7 +2218,7 @@ async function mainGateCity() {
           // y es el único aviso de que la vida que baja tiene un culpable.
           if (s.a === `j${red.yo}`) {
             golpesRecibidos++;
-            suceso("atacado", `${i?.ficha.nombre ?? "Un monstruo"} te da: ${s.dano} de daño`);
+            suceso("atacado", `${i?.ficha.nombre ?? "A monster"} hits you: ${s.dano} damage`);
           }
           break;
         default: break;
@@ -2560,7 +2560,7 @@ async function mainGateCity() {
     pasoDelHud(dtB);
     counters.dist.textContent = travelled.toFixed(1);
     counters.pos.textContent = after.map((v) => Math.round(v * U)).join(" ");
-    counters.ground.textContent = player.grounded ? "suelo" : "aire";
+    counters.ground.textContent = player.grounded ? "ground" : "air";
   }
 
   /**
@@ -2652,8 +2652,8 @@ async function mainGateCity() {
       // `#QUICKSLOT_CREATE` es el aviso del motor (clplayer.cpp:1487), y va por
       // el canal de los mensajes de pantalla, no por el de los sucesos.
       suceso("bueno", grabado.grabado
-        ? `Ranura ${grabado.ranura + 1}: ${grabado.grabado.nombre}`
-        : `Ranura ${grabado.ranura + 1} vaciada`);
+        ? `Quickslot ${grabado.ranura + 1}: ${grabado.grabado.nombre}`
+        : `Quickslot ${grabado.ranura + 1} cleared`);
     }
   }
 
@@ -2874,5 +2874,5 @@ async function main() {
 main().catch((error) => {
   console.error(error);
   document.getElementById("intro").hidden = false;
-  say(`FALLO: ${error.message}`);
+  say(`FAILED: ${error.message}`);
 });

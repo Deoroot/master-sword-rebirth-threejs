@@ -80,12 +80,13 @@ personaje y las herramientas:
 ```
 src/bsp/      lector de .bsp, .mdl, .spr, .tga, mapa de luz, gamma, árbol BSP
 src/render/   la escena de Three.js, los bichos, los adornos
+src/dev/      la sonda: por donde se mide el juego desde fuera
 src/play/     la física del jugador y la manada de bichos, sin DOM
 src/red/      el WebSocket, el protocolo, el servidor de partida y su fauna
 src/juego/    personaje, estadísticas, inventario, almacén, sesión, interfaz
 src/kit/      el jharro: una ciudad propia con proporciones medidas
 tools/        extracción, medida y control
-test/         1 059 comprobaciones
+test/         1 070 comprobaciones
 ```
 
 Nada de eso contiene contenido de Master Sword, y el lector vale para

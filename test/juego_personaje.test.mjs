@@ -194,8 +194,8 @@ describe("el registro del personaje", () => {
   });
 
   test("y no acepta un arma que no está en la lista", () => {
-    assert.throws(() => crearPersonaje({ nombre: "X", arma: "swords_excalibur", nuevoPersonaje: cfg }), /no está entre las armas/);
-    assert.throws(() => crearPersonaje({ nombre: "  ", arma: "swords_rsword", nuevoPersonaje: cfg }), /necesita nombre/);
+    assert.throws(() => crearPersonaje({ nombre: "X", arma: "swords_excalibur", nuevoPersonaje: cfg }), /is not one of the starting weapons/);
+    assert.throws(() => crearPersonaje({ nombre: "  ", arma: "swords_rsword", nuevoPersonaje: cfg }), /needs a name/);
   });
 
   // EL QUE IMPORTA.
@@ -239,9 +239,9 @@ describe("el registro del personaje", () => {
   });
 
   test("un personaje sin nombre no se abre, y un objeto cualquiera tampoco", () => {
-    assert.throws(() => abrirPersonaje({ version: 1, id: "a" }), /sin nombre/);
-    assert.throws(() => abrirPersonaje(null), /no es un personaje/);
-    assert.throws(() => abrirPersonaje("hola"), /no es un personaje/);
+    assert.throws(() => abrirPersonaje({ version: 1, id: "a" }), /no name is not a character/);
+    assert.throws(() => abrirPersonaje(null), /is not a character/);
+    assert.throws(() => abrirPersonaje("hola"), /is not a character/);
   });
 
   test("entrenar sube la habilidad que dice el arma — a las tres muertes", () => {
@@ -358,9 +358,9 @@ describe("el almacén", () => {
   test("importar acepta un personaje a pelo y rechaza lo que no lo es", () => {
     const p = crearPersonaje({ nombre: "Cuatro", arma: null, nuevoPersonaje: { oro: 1, gratis: [], armas: [] } });
     assert.equal(importar(JSON.stringify(p)).personaje.nombre, "Cuatro");
-    assert.throws(() => importar("{no es json"), /no es un JSON/);
-    assert.throws(() => importar("[1,2,3]"), /no trae un personaje/);
-    assert.throws(() => importar(JSON.stringify({ marca: MARCA, personaje: { version: 1 } })), /sin nombre/);
+    assert.throws(() => importar("{no es json"), /not JSON/);
+    assert.throws(() => importar("[1,2,3]"), /no character in it/);
+    assert.throws(() => importar(JSON.stringify({ marca: MARCA, personaje: { version: 1 } })), /no name is not a character/);
   });
 });
 

@@ -67,9 +67,9 @@ function nuevoId() {
 export function crearPersonaje({ nombre, genero = "male", arma, nuevoPersonaje = null, ahora = null }) {
   const cfg = nuevoPersonaje ?? { oro: 10, gratis: [], armas: [] };
   const t = ahora ?? new Date().toISOString();
-  if (!nombre || !String(nombre).trim()) throw new Error("un personaje necesita nombre");
+  if (!nombre || !String(nombre).trim()) throw new Error("a character needs a name");
   if (cfg.armas.length && !cfg.armas.includes(arma)) {
-    throw new Error(`'${arma}' no está entre las armas de partida: ${cfg.armas.join(", ")}`);
+    throw new Error(`'${arma}' is not one of the starting weapons: ${cfg.armas.join(", ")}`);
   }
   return {
     version: VERSION,
@@ -108,14 +108,14 @@ export function crearPersonaje({ nombre, genero = "male", arma, nuevoPersonaje =
  * y se vuelve a guardar entero.
  */
 export function abrirPersonaje(doc) {
-  if (!doc || typeof doc !== "object") throw new Error("eso no es un personaje");
+  if (!doc || typeof doc !== "object") throw new Error("that is not a character");
   const avisos = [];
   const p = { ...doc };
 
   if (typeof p.version !== "number") { p.version = VERSION; avisos.push("sin versión, se asume la actual"); }
   if (p.version > VERSION) avisos.push(`versión ${p.version}, y este código entiende la ${VERSION}: se conserva lo que no entiende`);
   if (!p.id) { p.id = nuevoId(); avisos.push("sin id, se le pone uno"); }
-  if (!p.nombre) throw new Error("un personaje sin nombre no es un personaje");
+  if (!p.nombre) throw new Error("a character with no name is not a character");
 
   const hab = p.habilidades ?? {};
   const completas = {};
