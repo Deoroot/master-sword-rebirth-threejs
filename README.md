@@ -27,18 +27,17 @@ All game content is theirs; see [CREDITOS.md](CREDITOS.md).
 | **Multiplayer** | a Node WebSocket server, 100 Hz ticks, delta snapshots, `ex_interp` interpolation, lag compensation with rewind |
 | **The interface** | the HUD, the event console, the main menu and the NPC interaction menu, ported from the game's own VGUI widgets and text schemes |
 
-Roughly 30 000 lines of JavaScript, **819 Node checks** and 16 browser probes that
+Roughly 30 000 lines of JavaScript, **819 Node checks** and 17 browser probes that
 drive a real Chromium and measure what is on screen. Every ported rule cites the
 engine or mod source it came from, file and line.
 
 ## What does not work yet
 
-Two of the four character panels — the inventory and Character Info — were built from
-scratch instead of ported from VGUI. They work, but they do not match the game and they
-are not driven by its key bindings. The other two, the NPC interaction menu and the
-character creation screen, have been redone on a ported VGUI widget kit
-([doc/VGUI_29.md](doc/VGUI_29.md), [doc/PERSONAJE_30.md](doc/PERSONAJE_30.md)); the
-remaining two follow. Quests are not implemented,
+One of the four character panels — Character Info — is still a from-scratch screen that
+does not match the game. The other three, the NPC interaction menu, the character
+creation screen and the inventory, have been redone on a ported VGUI widget kit
+([doc/VGUI_29.md](doc/VGUI_29.md), [doc/PERSONAJE_30.md](doc/PERSONAJE_30.md),
+[doc/INVENTARIO_31.md](doc/INVENTARIO_31.md)). Quests are not implemented,
 so the NPC options you see are read from the game's scripts but do nothing yet. Also
 missing: shops, the NPC navigation graph, monster respawn, `wss://` and accounts.
 

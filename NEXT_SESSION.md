@@ -1,5 +1,22 @@
 # Dónde se quedó esto
 
+> **EL 31 ESTÁ HECHO: [doc/INVENTARIO_31.md](doc/INVENTARIO_31.md).** El
+> inventario portado —columna de equipo, contenedor con barra, panel de
+> información— y **la rejilla inventada retirada**: `src/juego/inventario.js`
+> pasa de 96 líneas a 19 y se queda sólo con la regla del peso, que ésa sí es
+> del juego. **819 pruebas y 13 de 13 en la sonda.**
+>
+> **Y UNA SONDA ESTABA MIDIENDO OTRO PROYECTO.** Un `vite` de «Mydra Web Lab» se
+> quedó escuchando en el 5196; `--strictPort` hizo que el nuestro no arrancara y
+> `stdio: "ignore"` se tragó el aviso, así que `sonda:cuerpo` estuvo **29
+> controles en verde midiendo la carpeta vieja**. Ahora las veintiséis sondas
+> liberan su puerto y comprueban el `<title>` de la página antes de medir nada
+> (`sondas/mismo.mjs`), y `sonda:cuerpo` se rehízo para el panel nuevo.
+>
+> **Lo siguiente es el último panel**: 32 Character Info (`vgui_stats.cpp`), que
+> además es el que se va a encontrar de frente con el fallo del esquema «ID
+> Text» que el 29 dejó portado. Después, el repositorio con el tag del alfa.
+
 > **EL 30 ESTÁ HECHO: [doc/PERSONAJE_30.md](doc/PERSONAJE_30.md).** Crear
 > personaje, que es la primera pantalla del juego: **tres etapas** —elegir, quién
 > eres, con qué arma— y los personajes son **modelos**, no dibujos.

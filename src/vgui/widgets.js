@@ -145,8 +145,16 @@ export function opacidadDeFondo(t) {
 }
 
 export class Panel {
-  constructor({ x = 0, y = 0, w = 0, h = 0, transparencia = 0, clase = "" } = {}) {
+  /**
+   * `anchoPorY` porta una rareza del original que no es un fallo pero se ve:
+   * hay medidas de ANCHO calculadas con la escala VERTICAL. La columna del
+   * equipo del inventario es `#define GEARPNL_SIZE_X YRES(80)`
+   * (vgui_container.h:16). En 4:3 da lo mismo; en 16:10 la columna sale más
+   * estrecha de lo que se quiso, y ésa es la que se ve.
+   */
+  constructor({ x = 0, y = 0, w = 0, h = 0, transparencia = 0, clase = "", anchoPorY = false } = {}) {
     this.x = x; this.y = y; this.w = w; this.h = h;
+    this.anchoPorY = anchoPorY;
     this.transparencia = transparencia;
     this.borde = null;
     this.hijos = [];
@@ -177,7 +185,7 @@ export class Panel {
     const s = this.nodo.style;
     s.left = `${XRES(this.x, ancho)}px`;
     s.top = `${YRES(this.y, alto)}px`;
-    if (this.w) s.width = `${XRES(this.w, ancho)}px`;
+    if (this.w) s.width = `${this.anchoPorY ? YRES(this.w, alto) : XRES(this.w, ancho)}px`;
     if (this.h) s.height = `${YRES(this.h, alto)}px`;
     s.background = opacidadDeFondo(this.transparencia) === 0
       ? ""

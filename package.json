@@ -42,7 +42,8 @@
     "sonda:red": "node sondas/red.mjs",
     "sonda:ia28": "node sondas/ia28.mjs",
     "sonda:vgui29": "node sondas/vgui29.mjs",
-    "sonda:personaje30": "node sondas/personaje30.mjs"
+    "sonda:personaje30": "node sondas/personaje30.mjs",
+    "sonda:inventario31": "node sondas/inventario31.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

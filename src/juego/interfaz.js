@@ -17,7 +17,7 @@
 import { ATRIBUTOS, PROPIEDADES, ESCUELAS, expNecesaria, propiedadesDe, aporteDe } from "./stats.js";
 import { resumen } from "./personaje.js";
 import { exportar, importar } from "./almacen.js";
-import { colocar, carga, huellaDe, ANCHO, ALTO } from "./inventario.js";
+import { carga } from "./inventario.js";
 import { ESTADO, IMPUESTO_DE_MUERTE } from "./sesion.js";
 import { ACCIONES, nombreDeTecla } from "./teclas.js";
 import { variablesCss } from "./paleta.js";
@@ -185,7 +185,8 @@ const GRUPOS = [
  * catálogo para existir, y esa separación es a propósito.
  */
 export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos = null,
-                                 raiz = document.body, panelDePersonajes = null }) {
+                                 raiz = document.body, panelDePersonajes = null,
+                                 panelDeInventario = null }) {
   if (!sesion) throw new Error("la interfaz cuelga de una sesión");
   const almacen = sesion.almacen;
   if (!document.getElementById("mx-css")) {
@@ -650,71 +651,22 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   }
 
   // --- el inventario -------------------------------------------------------
-  function pantallaInventario(p = activo()) {
+  //
+  // RETIRADO EN EL EXPERIMENTO 31. Aquí había una rejilla estilo Diablo de 10×6
+  // con huellas de 1×1 a 3×3, y era la primera cosa de este proyecto que se
+  // apartó del original a propósito. Master Sword no tiene rejilla: tiene una
+  // columna de equipo, un contenedor con barra y un panel de información, y eso
+  // es `src/vgui/contenedor.js`.
+  //
+  // No queda suplente, a diferencia de la pantalla de personajes: mirar lo que
+  // llevas encima no es obligatorio para poder jugar, así que si el panel no
+  // está montado la `i` simplemente no hace nada, en vez de enseñar una pantalla
+  // que ya no es la del juego.
+  const pantallaInventario = (p = activo()) => {
+    if (panelDeInventario?.()) { cerrar(); return; }
     if (!p) return pantallaElegir();
-    const r = resumen(p);
-    const conFicha = p.objetos.map((o) => ({ ...o, ficha: ficha(o.id) }));
-    const { colocados, fuera, ocupacion } = colocar(conFicha);
-    const c = carga(conFicha, r.derivadas.carga);
-
-    // LA CASILLA TIENE TOPE, y sin él el inventario no cabía en la pantalla.
-    //
-    // Estaba a `minmax(52px, 1fr)`: la casilla crecía hasta llenar los 900 px
-    // del panel, y como es cuadrada (`aspect-ratio: 1`) eso son 86 px de alto
-    // por seis filas. Con el personaje encima, el panel medía más que la ventana
-    // y se iba el título fuera por arriba. No daba error: daba un inventario en
-    // el que el primer renglón estaba scrolleado fuera de la vista.
-    const rejilla = el("div", {
-      clase: "mx-rejilla",
-      style: `grid-template-columns: repeat(${ANCHO}, minmax(0, 54px)); ` +
-        `grid-template-rows: repeat(${ALTO}, auto); justify-content: center;`,
-    });
-    for (let i = 0; i < ANCHO * ALTO; i++) rejilla.appendChild(el("div", { clase: "mx-casilla" }));
-    for (const o of colocados) {
-      const clase = `mx-obj${o.ficha.vestible ? " mx-vestible" : ""}${o.ficha.arma ? " mx-arma-i" : ""}`;
-      rejilla.appendChild(el("div", {
-        clase,
-        style: `grid-column: ${o.x + 1} / span ${o.w}; grid-row: ${o.y + 1} / span ${o.h};`,
-        title: [o.ficha.nombre, o.ficha.descripcion, o.ficha.peso != null ? `weight ${o.ficha.peso}` : null,
-          o.ficha.valor != null ? `value ${o.ficha.valor}` : null].filter(Boolean).join("\n"),
-      }, [
-        el("b", { texto: o.ficha.nombre ?? o.id }),
-        el("span", { texto: o.n > 1 ? `×${o.n}` : (o.ficha.tipo ?? "") }),
-      ]));
-    }
-
-    abrir(el("div", { clase: "mx-panel" }, [
-      el("h2", { texto: `Inventory — ${p.nombre}` }),
-      // Sin el «% de la rejilla», que era una métrica nuestra que no le sirve
-      // a nadie: lo que limita en Master Sword es el PESO, y lo que el jugador
-      // quiere saber es con qué tiene las manos.
-      el("p", { clase: "mx-sub", html:
-        `Weight <b>${c.peso}</b> of <b>${c.capacidad}</b>` +
-        `${c.pasado ? " — <b>overloaded</b>" : ""} · ` +
-        `gold <b class="mx-oro">${p.oro}</b> · ` +
-        `hands: ${ficha(p.manos.derecha)?.nombre ?? "empty"} / ${ficha(p.manos.izquierda)?.nombre ?? "empty"}` }),
-      // EL PERSONAJE AL CENTRO Y LA REJILLA DEBAJO, que es como se pidió.
-      //
-      // Y con el arma en la mano manda la otra animación: `idle` si lleva algo,
-      // `attention` si no. Es la distinción que hace el original con
-      // `m_ItemInHand` (`vgui_choosecharacter.cpp:1360`), y aquí ya se sabe la
-      // respuesta porque el inventario tiene las manos delante.
-      el("div", { clase: "mx-inv-cuerpo" }, [
-        retrato({
-          genero: p.genero ?? "male",
-          animacion: (p.manos.derecha || p.manos.izquierda) ? "conArma" : "sinArma",
-        }),
-      ]),
-      rejilla,
-      fuera.length
-        ? el("p", { clase: "mx-aviso", texto: `${fuera.length} do not fit in the grid and have NOT been dropped: ${fuera.map((o) => o.ficha.nombre ?? o.id).join(", ")}` })
-        : null,
-      el("div", { clase: "mx-fila" }, [
-        el("button", { clase: "mx-boton", texto: "character sheet", onclick: () => pantallaHoja(p) }),
-        el("button", { clase: "mx-boton", texto: "close", onclick: cerrar }),
-      ]),
-    ]));
-  }
+    return pantallaHoja(p);
+  };
 
   // --- la muerte -----------------------------------------------------------
   //
@@ -857,7 +809,20 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     // cambiar. Por defecto son la **P** (`bind "p" "playerinfo"`) y la **I**.
     const accion = teclas?.accionDe(e.code);
     if (accion === "hoja") { e.preventDefault(); activo() ? pantallaHoja() : pantallaElegir(); }
-    if (accion === "inventario") { e.preventDefault(); activo() ? pantallaInventario() : pantallaElegir(); }
+    // LA `i` ES DEL REGISTRO DE VGUI cuando el panel está montado, y este
+    // escuchador NO la toca.
+    //
+    // Y no es un detalle: con los dos atendiéndola, el de `main.js` abría el
+    // panel y éste lo cerraba en la misma pulsación. El inventario aparecía y
+    // desaparecía sin que nada fallara, y en el DOM se quedaba montado y
+    // escondido — o sea que `querySelectorAll` lo encontraba y sus medidas eran
+    // todas cero. Cinco controles de `sonda:inventario31` en rojo por esto.
+    //
+    // La regla, de aquí en adelante: **una tecla, un dueño.** Si hay panel, el
+    // dueño es el registro.
+    if (accion === "inventario" && !panelDeInventario) {
+      e.preventDefault(); activo() ? pantallaInventario() : pantallaElegir();
+    }
     if (accion === "opciones") { e.preventDefault(); pantallaOpciones(); }
   });
 

@@ -16,7 +16,7 @@ import { Teclas, RANURAS } from "./juego/teclas.js";
 import {
   atributosDe, derivadas, habilidadDeArma, propiedadesDe, valorDeHabilidad,
 } from "./juego/stats.js";
-import { entrenar } from "./juego/personaje.js";
+import { entrenar, resumen } from "./juego/personaje.js";
 import { carga as cargaDe } from "./juego/inventario.js";
 import { buildView } from "./render/scene.js";
 import { atlasDe } from "./render/studio.js";
@@ -55,6 +55,7 @@ import { CSS as CSS_VGUI } from "./vgui/widgets.js";
 import { Registro, RUEDA } from "./vgui/registro.js";
 import { MenuInteractuar, ALCANCE as ALCANCE_INTERACTUAR } from "./vgui/interactuar.js";
 import { PanelDePersonaje, CSS as CSS_PERSONAJE } from "./vgui/personaje.js";
+import { PanelDeInventario, CSS as CSS_INVENTARIO } from "./vgui/contenedor.js";
 import { Retratos } from "./render/retratos.js";
 import { opcionesDe as opcionesDeNpc, opcionesDelJugador } from "./play/opciones.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
@@ -302,6 +303,7 @@ async function mainGateCity() {
     interfaz = montarInterfaz({
       sesion, catalogo, teclas, cuerpos: losCuerpos,
       panelDePersonajes: () => (vgui?.buscar("newchar") ? (vgui.abrir("newchar"), true) : false),
+      panelDeInventario: () => (vgui?.buscar("inventory") ? (vgui.abrir("inventory"), true) : false),
     });
     retratosDelPanel = new Retratos(losCuerpos);
     // ── LOS PANELES DE VGUI ───────────────────────────────────────────────
@@ -330,7 +332,7 @@ async function mainGateCity() {
     esquemaVgui = await cargarEsquema("build/gatecity/", innerWidth);
     if (!document.getElementById("vg-css")) {
       const s = document.createElement("style");
-      s.id = "vg-css"; s.textContent = CSS_VGUI + CSS_PERSONAJE;
+      s.id = "vg-css"; s.textContent = CSS_VGUI + CSS_PERSONAJE + CSS_INVENTARIO;
       document.body.appendChild(s);
     }
     const capaVgui = document.createElement("div");
@@ -394,6 +396,47 @@ async function mainGateCity() {
       },
     }));
     await refrescarCenso();
+
+    // ── EL INVENTARIO ───────────────────────────────────────────────────
+    //
+    // `VGUI_ContainerPanel`. Retira la rejilla inventada de
+    // `src/juego/inventario.js`. Ver `doc/INVENTARIO_31.md`.
+    //
+    // El «equipo» son los contenedores que llevas encima. Master Sword tiene
+    // cuatro de partida (`reg.newchar.freeitems`: dos vainas, una funda de daga
+    // y un zurrón) y aquí todavía no hay contenedores de verdad —está en el
+    // pendiente desde el 25—, así que la columna tiene una sola entrada, «Pack»,
+    // que es todo lo que llevas. Se dice y no se disimula: el panel está y la
+    // cosa que va dentro, no.
+    const fichaDeObjeto = (id) => catalogoDeObjetos?.porId?.get(id) ?? null;
+    const iconoDe = (id) => {
+      const ic = iconosDeArma?.objetos?.[id] ?? null;
+      return ic ? `${iconosDeArma.base}${ic.archivo}` : null;
+    };
+    vgui.poner(new PanelDeInventario({
+      esquema: esquemaVgui,
+      equipo: () => [{ id: "pack", nombre: "Pack", esContenedor: true }],
+      dentro: () => (sesion?.personaje?.objetos ?? []).map((o) => {
+        const f = fichaDeObjeto(o.id);
+        return {
+          id: o.uid ?? o.id, nombre: f?.nombre ?? o.id,
+          peso: f?.peso ?? 0, cantidad: o.n ?? 1, calidad: o.calidad ?? null,
+          icono: iconoDe(o.id),
+        };
+      }),
+      oro: () => sesion?.personaje?.oro ?? 0,
+      carga: () => {
+        const p = sesion?.personaje;
+        if (!p) return null;
+        const r = resumen(p);
+        const c = cargaDe(p.objetos.map((o) => ({ ...o, ficha: fichaDeObjeto(o.id) })), r.derivadas.carga);
+        return { lleva: c.peso, puede: c.capacidad };
+      },
+      // Todavía no hay a dónde sacar ni de dónde meter: un solo contenedor. El
+      // botón dice lo que pasa en vez de no hacer nada, que es lo que se hizo
+      // con las entradas apagadas del menú principal.
+      actuar: () => "Containers are not in this port yet: everything is in one pack.",
+    }));
 
     // EL PANEL SIGUE AL ESTADO DE LA SESIÓN, y no al revés.
     //
@@ -1098,6 +1141,14 @@ async function mainGateCity() {
     // número que elige una opción, el Escape que cierra— y entonces el juego no
     // la ve.
     if (vgui?.tecla(e.code, true)) { e.preventDefault(); return; }
+    // EL INVENTARIO, con la `i` de `config.cfg:22`. Va antes que el menú de la
+    // F por nada en particular: los dos son `alternar`, y el registro se
+    // encarga de que sólo haya uno abierto.
+    if (teclas.accionDe(e.code) === "inventario" && !conPanel) {
+      vgui?.alternar("inventory");
+      e.preventDefault();
+      return;
+    }
     // Y la acción que lo abre, que es `menu interact` del `config.cfg`.
     if (teclas.accionDe(e.code) === "interactuar" && !conPanel) {
       const abierto = vgui?.alternar("interact");

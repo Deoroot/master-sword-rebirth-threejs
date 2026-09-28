@@ -22,9 +22,16 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+import { esNuestro, liberarPuerto } from "./mismo.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5216;
+// Se mata a quien estuviera en el puerto ANTES de arrancar el nuestro.
+// `--strictPort` hace que el nuestro falle si esta ocupado, y con
+// `stdio: "ignore"` ese fallo no se ve: la sonda acaba midiendo el programa
+// de otro. Ver `sondas/mismo.mjs`.
+const liberados = liberarPuerto(PORT);
+if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
 const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
 await new Promise((r) => setTimeout(r, 6000));
@@ -40,6 +47,7 @@ try {
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
   await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
+  await esNuestro(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
   await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });

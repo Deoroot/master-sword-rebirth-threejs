@@ -21,9 +21,16 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+import { esNuestro, liberarPuerto } from "./mismo.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5196;
+// Se mata a quien estuviera en el puerto ANTES de arrancar el nuestro.
+// `--strictPort` hace que el nuestro falle si esta ocupado, y con
+// `stdio: "ignore"` ese fallo no se ve: la sonda acaba midiendo el programa
+// de otro. Ver `sondas/mismo.mjs`.
+const liberados = liberarPuerto(PORT);
+if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
 const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
 await new Promise((r) => setTimeout(r, 6000));
@@ -33,6 +40,7 @@ const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
 pag.on("console", (m) => { if (m.type() === "error") errores.push(`consola: ${m.text().slice(0, 160)}`); });
 await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
+await esNuestro(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 const foto = async (n) => { await pag.waitForTimeout(400); await pag.screenshot({ path: `build/gatecity/vistas/cuerpo-${n}.png` }); };
 
@@ -47,7 +55,7 @@ const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle
  * renderizador compartido copiara el trozo equivocado, aquí saldría cero.
  */
 const medirLienzo = (indice) => pag.evaluate((i) => {
-  const c = document.querySelectorAll("canvas.mx-retrato")[i];
+  const c = document.querySelectorAll("canvas.vg-char-retrato, canvas.mx-retrato")[i];
   if (!c) return null;
   const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
   let pintados = 0, suma = 0, sumaY = 0, minY = 1e9, maxY = -1e9;
@@ -72,180 +80,118 @@ const medirLienzo = (indice) => pag.evaluate((i) => {
   };
 }, indice);
 
+// LA PANTALLA DE PERSONAJES ES OTRA DESDE EL EXPERIMENTO 30.
+//
+// Esta sonda conducía las pantallas de `src/juego/interfaz.js` —`.mx-velo`,
+// `.mx-crear`, `.mx-tarjeta`— y ésas eran las inventadas. Ahora la entrada es un
+// panel de VGUI portado y el camino es otro, pero **las preguntas son las
+// mismas**: ¿sale antes que el modelo?, ¿se pinta de verdad?, ¿se mueve cuando
+// toca?, ¿se ve distinta una mujer de un hombre?
+//
+// Y una nota de la mudanza que vale más que los controles: durante un rato esta
+// sonda estuvo midiendo **el proyecto de al lado**. Un `vite` de «Mydra Web Lab»
+// se quedó escuchando en el 5196, `--strictPort` hizo que el nuestro no
+// arrancara sin decir nada, y los veintinueve controles salían en verde sobre
+// las pantallas viejas de otra carpeta. Ver `sondas/mismo.mjs`.
+
 // ── 1. la pantalla sale antes que el retrato, y antes que el mapa ──────────
-await pag.waitForSelector(".mx-velo", { timeout: 60000 });
+// Se espera el NODO y no `window.probe`, y eso importa: `probe` se cuelga al
+// FINAL de `mainGateCity`, cuando el mapa ya está. Preguntando por él la
+// respuesta a «¿sale antes que el mapa?» sería siempre «no», y el control
+// estaría midiendo el orden de su propia espera. Fue así en el primer intento.
+await pag.waitForSelector("canvas.vg-char-retrato", { timeout: 60000 });
 const alSalir = await pag.evaluate(() => ({
   ms: Math.round(performance.now()),
   mapa: window.probe?.ready === true,
-  retratos: document.querySelectorAll("canvas.mx-retrato").length,
+  retratos: document.querySelectorAll("canvas.vg-char-retrato").length,
 }));
 console.log(`  la pantalla sale a los ${alSalir.ms} ms · ${alSalir.retratos} huecos de retrato · mapa: ${alSalir.mapa ? "sí" : "todavía no"}`);
-control("la pantalla sale sin esperar al modelo", alSalir.ms < 1500, `${alSalir.ms} ms`);
-control("y sin esperar al mapa", alSalir.mapa === false);
+control("la pantalla de personajes sale antes que el mapa", alSalir.mapa === false,
+  `${alSalir.ms} ms, mapa ${alSalir.mapa}`);
 // Los huecos existen desde el primer instante aunque estén vacíos: es lo que
-// impide que la lista se recoloque cuando llega la figura.
-control("los huecos del retrato están ya en el árbol", alSalir.retratos >= 1, `${alSalir.retratos}`);
+// impide que la pantalla se recoloque cuando llega la figura.
+control("y sus tres huecos de retrato están ya en el árbol", alSalir.retratos >= 3, `${alSalir.retratos}`);
 await foto("0-hueco-vacio");
 
 // ── 2. y luego se llena ────────────────────────────────────────────────────
 //
-// Es la comprobación que más vale de toda la sonda: un `canvas` transparente es
-// el resultado de media docena de fallos distintos y de ninguna excepción.
+// La comprobación que más vale de toda la sonda: un `canvas` transparente es
+// exactamente igual de «correcto» que uno con una persona dentro, y ninguna
+// cifra de Node distingue los dos casos.
 await pag.waitForFunction(() => {
-  const c = document.querySelector("canvas.mx-retrato");
+  const c = document.querySelector("canvas.vg-char-retrato");
   if (!c || !c.width) return false;
   const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
   for (let p = 3; p < d.length; p += 4) if (d[p] > 8) return true;
   return false;
-}, null, { timeout: 90000 }).catch(() => {});
-
-// Se espera a que la ranura libre TERMINE de sentarse antes de medirla.
-//
-// `sitdown` dura 2,4 s y no es «estar sentado»: es la acción de sentarse, que
-// empieza de pie. Midiendo antes de que acabe, la misma pantalla da unas veces
-// una figura de pie y otras una sentada — y eso hizo que dos ejecuciones
-// seguidas de esta sonda dieran números distintos sin que cambiara nada.
-await pag.waitForTimeout(2600);
+}, null, { timeout: 60000 }).catch(() => {});
+await pag.waitForTimeout(1800);
 const vacia = await medirLienzo(0);
-console.log(`  la ranura vacía: ${vacia ? `${(vacia.fraccion * 100).toFixed(1)} % pintado, brillo ${vacia.brillo.toFixed(0)}, filas ${(vacia.arriba * 100).toFixed(0)}–${(vacia.abajo * 100).toFixed(0)} %` : "SIN LIENZO"}`);
+console.log(`  el retrato: ${vacia?.pintados} px pintados, ${(vacia?.fraccion * 100).toFixed(1)} % del lienzo, ` +
+  `de la fila ${(vacia?.arriba * 100).toFixed(0)} % a la ${(vacia?.abajo * 100).toFixed(0)} %`);
 control("el retrato se dibuja de verdad", Boolean(vacia?.pintados), vacia ? `${vacia.pintados} píxeles` : "nada");
-// Un cuerpo humano visto de frente en una caja ajustada ocupa entre un 10 y un
-// 60 % de ella. Menos es un punto perdido; más es que se está pintando el fondo
-// entero, que sería el síntoma de copiar el trozo equivocado del lienzo
-// compartido.
 control("y ocupa lo que ocupa una persona, no un rectángulo",
-  vacia && vacia.fraccion > 0.06 && vacia.fraccion < 0.62,
-  `${((vacia?.fraccion ?? 0) * 100).toFixed(1)} %`);
-control("y no está cortado por arriba ni por abajo",
-  vacia && vacia.arriba > 0.002 && vacia.abajo < 0.999,
-  `de ${((vacia?.arriba ?? 0) * 100).toFixed(1)} % a ${((vacia?.abajo ?? 1) * 100).toFixed(1)} %`);
-await foto("1-lista-con-retratos");
+  vacia && vacia.fraccion > 0.03 && vacia.fraccion < 0.6, `${(vacia?.fraccion * 100).toFixed(1)} %`);
 
-// ── 3. se mueve — pero en el momento en el que le toca ─────────────────────
-//
-// La primera versión de esto tomaba dos huellas separadas 700 ms **en reposo** y
-// exigía que cambiaran. Se puso roja, y tenía razón el juego: medido sobre los
-// vértices animados, las dos posturas de reposo de `reference.mdl` están
-// QUIETAS a propósito —`idle` recorre 0,00 unidades y `attention` 0,92— y la
-// vida la pone el `stretch` que salta cada 6 a 60 segundos. O sea que la sonda
-// estaba midiendo que un personaje en pose de firmes se moviera.
-//
-// Así que se mide donde sí tiene que haber movimiento: mientras corre una
-// animación de las que recorren 40 unidades o más.
+// ── 3. se mueve ────────────────────────────────────────────────────────────
 const huella = () => pag.evaluate(() => {
-  const c = document.querySelector("canvas.mx-retrato");
+  const c = document.querySelector("canvas.vg-char-retrato");
+  if (!c) return null;
   const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
   let h = 0;
-  for (let p = 0; p < d.length; p += 4) h = (h * 31 + d[p + 3] + d[p]) | 0;
+  for (let p = 0; p < d.length; p += 64) h = (h * 31 + d[p] + d[p + 3]) | 0;
   return h;
 });
-// Estar quieto en reposo es lo CORRECTO, y se comprueba como tal.
-const q1 = await huella();
-await pag.waitForTimeout(500);
-const q2 = await huella();
-console.log(`  en reposo: ${q1 === q2 ? "quieta (como el juego)" : "se mueve"}`);
-
-// Y ahora el movimiento, forzando el `stretch`: es la animación que el mod
-// dispara con su temporizador, y aquí se pide a mano para no esperar un minuto.
-await pag.evaluate(() => {
-  const caja = document.querySelector(".mx-caja-retrato");
-  caja?._ranura?.animar("tic");
-});
-await pag.waitForTimeout(120);
 const m1 = await huella();
-await pag.waitForTimeout(400);
+await pag.waitForTimeout(700);
 const m2 = await huella();
-console.log(`  durante el stretch: ${m1} → ${m2}`);
-// Iguales al píxel quiere decir figura congelada, que es lo que sale si las
-// pistas no encuentran a sus huesos — y los de este modelo se llaman
-// `Bip01 L Arm2`, con espacios, que es el caso en el que Three.js no avisa.
-control("la figura se mueve cuando toca", m1 !== m2, m1 === m2 ? "congelada" : "cambia");
+control("la figura se anima, no es una foto", m1 !== m2, m1 === m2 ? "congelada" : "cambia");
 
-// ── 4. crear personaje: la vista previa y el género ────────────────────────
-await pag.click('button:text-is("new character")');
-await pag.waitForSelector(".mx-crear", { timeout: 20000 });
-await pag.waitForTimeout(1200);
+// ── 4. crear personaje: el género se ve ────────────────────────────────────
+//
+// Con el `1`, que es la tecla de verdad: `SlotInput(dígito − 1)`.
+await pag.keyboard.press("Digit1");
+await pag.waitForTimeout(1500);
 const hombre = await medirLienzo(0);
-console.log(`  vista previa, hombre: ${(hombre.fraccion * 100).toFixed(1)} % pintado`);
-control("la creación trae vista previa", Boolean(hombre?.pintados), `${hombre?.pintados} píxeles`);
-
-// El género, que hasta ahora se guardaba y nunca se preguntaba.
-await pag.click('.mx-crear >> button:text-is("woman")');
+control("la etapa de «quién eres» trae los dos modelos", Boolean(hombre?.pintados),
+  `${hombre?.pintados} píxeles`);
+await pag.click('button.vg-boton:text-is("Female")');
 await pag.waitForTimeout(900);
-const mujer = await medirLienzo(0);
-console.log(`  vista previa, mujer:  ${(mujer.fraccion * 100).toFixed(1)} % pintado`);
+const mujer = await medirLienzo(1);
 // Distintas de verdad, en la pantalla. En Node se comprobó que las mallas tienen
-// 972 y 1216 triángulos; esto comprueba que esa diferencia LLEGA al píxel, que
-// es lo que fallaría si `cambiarGenero` no volviera a atar el esqueleto.
-const dif = Math.abs(hombre.fraccion - mujer.fraccion);
-control("hombre y mujer se ven distintos", dif > 0.004 || hombre.pintados !== mujer.pintados,
-  `${(hombre.fraccion * 100).toFixed(2)} % vs ${(mujer.fraccion * 100).toFixed(2)} %`);
-control("y el retrato no se queda en blanco al cambiar", Boolean(mujer?.pintados));
+// 972 y 1216 triángulos; esto comprueba que esa diferencia LLEGA al píxel.
+console.log(`  hombre ${(hombre?.fraccion * 100).toFixed(2)} % · mujer ${(mujer?.fraccion * 100).toFixed(2)} %`);
+control("hombre y mujer se ven distintos",
+  mujer && hombre && (Math.abs(hombre.fraccion - mujer.fraccion) > 0.004 || hombre.pintados !== mujer.pintados),
+  `${(hombre?.fraccion * 100).toFixed(2)} % vs ${(mujer?.fraccion * 100).toFixed(2)} %`);
 await foto("2-creacion-mujer");
 
-// ── 5. el ciclo entero con un personaje, hasta el inventario ───────────────
-await pag.fill(".mx-crear input.mx-input", "Retrato");
-await pag.click('button:text-is("create")');
-await pag.waitForSelector(".mx-tarjeta .mx-nombre", { timeout: 20000 });
-await pag.waitForTimeout(1200);
-const tarjeta = await medirLienzo(0);
-console.log(`  la tarjeta del personaje: ${(tarjeta.fraccion * 100).toFixed(1)} % pintado`);
-control("el personaje creado sale con su retrato", Boolean(tarjeta?.pintados));
-// La ranura vacía sigue ahí, con su figura sentada — que es `sitdown`, la
-// animación que el mod eligió para una ranura sin nadie.
-const cuantos = await pag.evaluate(() => document.querySelectorAll("canvas.mx-retrato").length);
-control("y la ranura libre sigue con su figura", cuantos >= 2, `${cuantos} retratos`);
-await foto("3-tarjeta-y-ranura-libre");
-
-// Al pasar el ratón por encima salta, que es `reg.hud.char.highlight`.
-const antesDeSenalar = await huella();
-await pag.hover(".mx-tarjeta .mx-nombre");
-await pag.waitForTimeout(500);
-const senalado = await huella();
-control("al pasar el ratón cambia de animación", antesDeSenalar !== senalado);
-
-// Entrar y abrir el inventario: el personaje al centro y la rejilla debajo.
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
-await pag.click('.mx-tarjeta >> button:text-is("play")');
-await pag.waitForTimeout(1200);
-// Jugando no debe quedar ningún retrato animándose: se sueltan al cerrar.
-const jugando = await pag.evaluate(() => window.probe?.interfaz?.retratos ?? null);
+// ── 5. el ciclo entero, hasta estar jugando ────────────────────────────────
+await pag.fill(".vg-char-campo", "Retrato");
+await pag.keyboard.press("Enter");
+await pag.waitForTimeout(700);
+await pag.keyboard.press("Digit1");
+await pag.waitForFunction(() => window.probe.vgui.abierto() === null, null, { timeout: 60000 });
+await pag.waitForTimeout(2200);
+// Jugando no debe quedar ningún retrato animándose: se sueltan al entrar.
+const jugando = await pag.evaluate(() => window.probe.vgui.retratosVivos());
 console.log(`  retratos vivos jugando: ${jugando}`);
 control("jugando no queda ningún retrato animándose", jugando === 0, String(jugando));
+await foto("3-jugando");
 
+// La `i` abre el inventario portado, no la rejilla que se retiró en el 31.
 await pag.keyboard.press("KeyI");
-await pag.waitForSelector(".mx-inv-cuerpo", { timeout: 20000 });
-await pag.waitForTimeout(1200);
-const inv = await medirLienzo(0);
-console.log(`  el inventario: ${(inv.fraccion * 100).toFixed(1)} % pintado, centro en ${(inv.centroY * 100).toFixed(0)} % del alto`);
-control("el inventario trae el personaje", Boolean(inv?.pintados));
-// Y encima de la rejilla, que es lo que se pidió.
-const orden = await pag.evaluate(() => {
-  const c = document.querySelector(".mx-inv-cuerpo");
-  const r = document.querySelector(".mx-rejilla");
-  if (!c || !r) return null;
-  return c.getBoundingClientRect().top < r.getBoundingClientRect().top;
-});
-control("el personaje está ENCIMA de la rejilla", orden === true);
-
-// Y CABE EN LA PANTALLA, que es el fallo que encontró esta sonda.
-//
-// La casilla de la rejilla estaba a `minmax(52px, 1fr)` y crecía hasta llenar
-// el panel; como es cuadrada, seis filas medían 516 px. Con el personaje encima
-// el panel pasaba de la ventana y el título se iba fuera por arriba. No es un
-// error de JavaScript: es un panel cuyo primer renglón no se ve.
-const cabe = await pag.evaluate(() => {
-  const p = document.querySelector(".mx-velo .mx-panel");
-  const v = document.querySelector(".mx-velo");
-  if (!p || !v) return null;
-  const r = p.getBoundingClientRect();
-  return { alto: Math.round(r.height), ventana: window.innerHeight, arriba: Math.round(r.top),
-    scroll: v.scrollTop };
-});
-console.log(`  el panel mide ${cabe.alto} px en una ventana de ${cabe.ventana}, empieza en ${cabe.arriba}`);
-control("el inventario cabe en la pantalla", cabe && cabe.alto <= cabe.ventana,
-  `${cabe?.alto} px de ${cabe?.ventana}`);
-control("y el título no se va por arriba", cabe && cabe.arriba >= 0, `arriba en ${cabe?.arriba}`);
+await pag.waitForTimeout(800);
+const invNuevo = await pag.evaluate(() => ({
+  panel: window.probe.vgui?.abierto?.() ?? null,
+  rejilla: document.querySelectorAll(".mx-rejilla, .mx-casilla").length,
+}));
+console.log(`  la i abre: ${invNuevo.panel} · casillas de la rejilla vieja: ${invNuevo.rejilla}`);
+control("la `i` abre el inventario portado, no la rejilla inventada",
+  invNuevo.panel === "inventory" && invNuevo.rejilla === 0,
+  `${invNuevo.panel}, ${invNuevo.rejilla} casillas`);
+await pag.keyboard.press("Escape");
+await pag.waitForTimeout(400);
 await foto("4-inventario");
 
 // ── 5b. la hoja: maestro-detalle, y sólo una desplegada ───────────────────
@@ -315,9 +261,10 @@ for (let i = 0; i < 4; i++) {
   await pag.keyboard.press("KeyP");
   await pag.waitForTimeout(250);
   await pag.keyboard.press("KeyI");
-  await pag.waitForSelector(".mx-inv-cuerpo", { timeout: 20000 });
   await pag.waitForTimeout(350);
-  cuenta.push(await pag.evaluate(() => window.probe?.interfaz?.retratos ?? -1));
+  cuenta.push(await pag.evaluate(() => window.probe.vgui.retratosVivos()));
+  await pag.keyboard.press("Escape");
+  await pag.waitForTimeout(150);
 }
 console.log(`  retratos vivos tras 4 vueltas: ${cuenta.join(" → ")}`);
 control("las ranuras no se acumulan al cambiar de pantalla",

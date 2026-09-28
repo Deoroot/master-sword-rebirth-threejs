@@ -87,8 +87,8 @@ que se pueden comprobar, y la segunda es la que más pesa:
 2. **no tienen teclas nativas**: `src/juego/interfaz.js:874` escucha `keydown` en
    la ventana, por fuera de la tabla de teclas del juego. En MSR son `CMenuPanel`
    con sus banderas y el reparto está en un sitio;
-3. **uno está inventado entero**: `src/juego/inventario.js` es una rejilla estilo
-   Diablo. MSR no tiene rejilla.
+3. **uno estaba inventado entero**: `src/juego/inventario.js` era una rejilla
+   estilo Diablo. MSR no tiene rejilla — se retiró en el 31.
 
 **Hecho:**
 
@@ -98,4 +98,7 @@ que se pueden comprobar, y la segunda es la que más pesa:
 - **30** ([doc/PERSONAJE_30.md](doc/PERSONAJE_30.md)) crear personaje
   (`personaje.js`), con sus tres etapas y sus modelos.
 
-**Pendiente:** 31 el inventario, 32 Character Info.
+- **31** ([doc/INVENTARIO_31.md](doc/INVENTARIO_31.md)) el inventario
+  (`contenedor.js`), y la rejilla inventada retirada.
+
+**Pendiente:** 32 Character Info.

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { esNuestro } from "./mismo.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PORT = 5203;
 const server = await new Promise((res, rej) => {
@@ -15,6 +16,7 @@ const browser = await chromium.launch({ headless: true, args: ["--use-gl=angle",
 const page = await browser.newPage({ viewport: { width: 320, height: 240 } });
 page.on("pageerror", (e) => console.log("ERROR:", String(e?.message ?? e)));
 await page.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
+await esNuestro(page, PORT);
 await page.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 const r = await page.evaluate(({ segundos }) => {
   const p = window.probe;

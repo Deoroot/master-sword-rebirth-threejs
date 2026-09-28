@@ -32,6 +32,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { chromium } from "playwright";
+import { esNuestro } from "./mismo.mjs";
 import { mkdirSync, rmSync, readdirSync, existsSync } from "node:fs";
 
 const PUERTO_WEB = 5211;
@@ -101,6 +102,7 @@ const abrir = async (quien) => {
     errores.push(`${quien}: ${String(e).slice(0, 160)} | ${traza.slice(0, 300)}`);
   });
   await pag.goto(`http://localhost:${PUERTO_WEB}/?map=gatecity&red=ws://localhost:${PUERTO_PARTIDA}/juego`, { waitUntil: "load" });
+  await esNuestro(pag, PUERTO_WEB);
   await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   return pag;
 };
