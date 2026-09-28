@@ -25,19 +25,21 @@ All game content is theirs; see [CREDITOS.md](CREDITOS.md).
 | **The 69 NPCs** | model, skin and animation from the `.mdl`; `npcatk_hunt`, wandering, hit reaction, monster parry, corpses that fade over 3.64 s — all simulated **on the server** |
 | **The character** | attributes, the six skill schools, experience, levels, inventory, weight, gold, quickslots, saving |
 | **Multiplayer** | a Node WebSocket server, 100 Hz ticks, delta snapshots, `ex_interp` interpolation, lag compensation with rewind |
-| **The interface** | the HUD, the event console and the main menu, ported from the game's own VGUI and text schemes |
+| **The interface** | the HUD, the event console, the main menu and the NPC interaction menu, ported from the game's own VGUI widgets and text schemes |
 
-Roughly 30 000 lines of JavaScript, **762 Node checks** and 14 browser probes that
+Roughly 30 000 lines of JavaScript, **813 Node checks** and 15 browser probes that
 drive a real Chromium and measure what is on screen. Every ported rule cites the
 engine or mod source it came from, file and line.
 
 ## What does not work yet
 
-The four character panels — create a character, the inventory, Character Info and the
-NPC interaction menu — were built from scratch instead of ported from VGUI. They work,
-but they do not match the game and they are not driven by its key bindings. They are
-being replaced; see [ESTRUCTURA.md](ESTRUCTURA.md). Also missing: shops, the NPC
-navigation graph, monster respawn, `wss://` and accounts.
+Three of the four character panels — create a character, the inventory and Character
+Info — were built from scratch instead of ported from VGUI. They work, but they do not
+match the game and they are not driven by its key bindings. The fourth, the NPC
+interaction menu, has been redone properly on a ported VGUI widget kit
+([doc/VGUI_29.md](doc/VGUI_29.md)); the other three follow. Quests are not implemented,
+so the NPC options you see are read from the game's scripts but do nothing yet. Also
+missing: shops, the NPC navigation graph, monster respawn, `wss://` and accounts.
 
 ---
 
@@ -54,7 +56,7 @@ cd -
 
 # 2. this
 npm install
-npm test                  # 762 checks, no browser needed
+npm test                  # 813 checks, no browser needed
 
 # 3. extract what the browser needs into build/ (never committed)
 npm run gatecity          # the map, its textures and its lightmap
@@ -63,6 +65,7 @@ npm run cuerpo            # the player models
 npm run sonido            # the sounds
 npm run objetos           # the item catalogue from the scripts
 npm run hud && npm run menu
+npm run vgui && npm run menus   # the VGUI text schemes and the NPC menu options
 
 # 4. play
 npm run dev               # http://localhost:5173/

@@ -74,28 +74,24 @@ Dos consecuencias que se notan leyendo:
 
 ---
 
-## Lo que viene: `src/vgui/`
-
-La carpeta que falta, y el motivo por el que la estructura se escribe ahora.
+## `src/vgui/`, y por qué se hizo
 
 Los paneles del personaje —crear, la hoja, el inventario, hablar con un NPC— se
 hicieron desde cero, con `div`s y CSS propios, en vez de portar los paneles VGUI
-que el juego ya tiene. Fue una mala decisión y se va a deshacer. Tres cosas que se
-pueden comprobar:
+que el juego ya tiene. Fue una mala decisión y se está deshaciendo. Tres cosas
+que se pueden comprobar, y la segunda es la que más pesa:
 
 1. **no combinan** con lo que sí es un porte fiel —el HUD (`src/juego/hudms.js`) y
    el menú principal (`src/juego/menums.js`), que leen `640_textscheme.txt` y usan
    `XRES`/`YRES`;
-2. **no tienen teclas nativas**: `src/juego/interfaz.js` escucha `keydown` en la
-   ventana, por fuera de la tabla de teclas del juego. En MSR son `CMenuPanel` con
-   sus banderas —`MENUFLAG_CLOSEONESC`, `MENUFLAG_TRAPNUMINPUT`,
-   `MENUFLAG_TRAPSTEPINPUT`—, se abren con órdenes (`inventory`, `playerinfo`,
-   `menu interact`), se eligen con los números y se recorren con la rueda;
+2. **no tienen teclas nativas**: `src/juego/interfaz.js:874` escucha `keydown` en
+   la ventana, por fuera de la tabla de teclas del juego. En MSR son `CMenuPanel`
+   con sus banderas y el reparto está en un sitio;
 3. **uno está inventado entero**: `src/juego/inventario.js` es una rejilla estilo
-   Diablo. MSR no tiene rejilla, tiene una lista de equipo, un contenedor con barra
-   de desplazamiento y un panel de información (`vgui_container.h`).
+   Diablo. MSR no tiene rejilla.
 
-`src/vgui/` va a ser el kit de widgets portado —el esquema de fuentes, `Panel`,
-`MSLabel`, `MSButton`, `LineBorder`, `CTransparentPanel`, el registro de paneles con
-nombre— y encima los cuatro paneles, uno por experimento: el menú de interacción
-(29), crear personaje (30), el inventario (31) y Character Info (32).
+**Hecho (experimento 29, [doc/VGUI_29.md](doc/VGUI_29.md)):** el kit —`esquema.js`,
+`widgets.js`, `registro.js`, `menubase.js`— y sobre él el menú de interacción con
+la **F** (`interactuar.js`).
+
+**Pendiente:** 30 crear personaje, 31 el inventario, 32 Character Info.

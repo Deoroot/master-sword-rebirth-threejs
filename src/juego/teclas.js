@@ -99,6 +99,10 @@ export const ACCIONES = [
   // Y las de interfaz, que NO son botones de juego.
   { clave: "hoja", nombre: "Character Sheet", cfg: "p", boton: false },
   { clave: "inventario", nombre: "Inventory", cfg: "i", boton: false },
+  // `bind "f" "menu interact"` (config.cfg:19, kb_def.lst:61), y su nombre sale
+  // de `kb_act.lst:41`. Faltaba: los paneles que teníamos no pasaban por esta
+  // tabla, así que la F no existía. Ver `src/vgui/interactuar.js`.
+  { clave: "interactuar", nombre: "Interact with NPC", cfg: "f", boton: false },
   { clave: "opciones", nombre: "Options", cfg: "g", boton: false },
   { clave: "menu", nombre: "Main Menu", cfg: "ESCAPE", boton: false },
   { clave: "marcador", nombre: "Scoreboard", cfg: "TAB", boton: false },

@@ -45,6 +45,11 @@ const PANTALLA = [
   "src/play/menu.js",
   "src/play/hud.js",
   "src/main.js",
+  // Los paneles de VGUI, desde el experimento 29. Enseñan «Interact», «Cancel»
+  // y el motivo por el que una opción está apagada.
+  "src/vgui/interactuar.js",
+  "src/vgui/menubase.js",
+  "src/play/opciones.js",
 ];
 
 /**

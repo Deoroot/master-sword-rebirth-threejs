@@ -24,6 +24,8 @@
     "escudos": "node tools/escudos.mjs",
     "hud": "node tools/hud.mjs",
     "menu": "node tools/menu.mjs",
+    "vgui": "node tools/vgui.mjs",
+    "menus": "node tools/menus.mjs",
     "sonda:mundo": "node sondas/mundo.mjs",
     "sonda:mapa": "node sondas/mapa.mjs",
     "sonda:cuerpo": "node sondas/cuerpo.mjs",
@@ -37,7 +39,8 @@
     "sonda:escudo": "node sondas/escudo.mjs",
     "sonda:arco": "node sondas/arco.mjs",
     "sonda:red": "node sondas/red.mjs",
-    "sonda:ia28": "node sondas/ia28.mjs"
+    "sonda:ia28": "node sondas/ia28.mjs",
+    "sonda:vgui29": "node sondas/vgui29.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

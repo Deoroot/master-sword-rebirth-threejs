@@ -1,5 +1,31 @@
 # Dónde se quedó esto
 
+> **EL 29 ESTÁ HECHO: [doc/VGUI_29.md](doc/VGUI_29.md).** El kit de VGUI portado
+> —esquema de fuentes, `Panel`, `MSLabel`, `MSButton`, `LineBorder`, el registro
+> de paneles— y encima el menú de interacción con la **F**, que es el primero de
+> los cuatro paneles que había que rehacer. **813 pruebas y 30 de 30 en la sonda.**
+> `npm run sonda:vgui29`.
+>
+> **LO QUE ESTABA MAL ERAN LAS TECLAS, no sólo el aspecto.** `interfaz.js:874`
+> escuchaba `keydown` en la ventana por su cuenta, así que sus pantallas no eran
+> del juego: no había tecla reasignable, no respetaban el `config.cfg` y el `1` no
+> elegía nada. En Master Sword el reparto está en UN sitio
+> (`vgui_teamfortressviewport.cpp:1875-1911`) y eso es lo que se ha portado.
+>
+> Cuatro fallos del motor van **con el fallo**: el último esquema del archivo no
+> recibe sus valores por defecto, `BorderColor` marca la variable de otro color,
+> el botón décimo no se puede elegir con el teclado (el `0` da la ranura −1), y
+> `GetCenteredItemX` tiene el `−1` fuera del paréntesis. Y uno de los scripts del
+> juego: el `if` sin llaves del armero guarda sólo el título, así que «Ask about
+> broken axe» sale dos veces.
+>
+> **Antes de esto, la mudanza.** El port salió de «Mydra Web Lab» a su propia
+> carpeta; los experimentos 01-09 se quedaron allí. Ver [ESTRUCTURA.md](ESTRUCTURA.md).
+>
+> **Lo siguiente son los otros tres paneles**: 30 crear personaje (tres etapas,
+> con los personajes en 3D), 31 el inventario de verdad (se retira la rejilla
+> inventada), 32 Character Info.
+
 > **El 28 está hecho: [IA_28.md](doc/IA_28.md).** El paso 5 de PROYECTO_10.md
 > empezado por donde tocaba: **los 69 bichos de Gate City los decide el
 > servidor**. **1 059 pruebas y 15 de 15 controles con dos navegadores.**

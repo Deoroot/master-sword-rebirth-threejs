@@ -50,6 +50,11 @@ import { Audio } from "./play/audio.js";
 import { montarInterfaz } from "./juego/interfaz.js";
 import { montarHud, cargaDelTiro } from "./juego/hudms.js";
 import { montarMenu } from "./juego/menums.js";
+import { cargarEsquema } from "./vgui/esquema.js";
+import { CSS as CSS_VGUI } from "./vgui/widgets.js";
+import { Registro, RUEDA } from "./vgui/registro.js";
+import { MenuInteractuar, ALCANCE as ALCANCE_INTERACTUAR } from "./vgui/interactuar.js";
+import { opcionesDe as opcionesDeNpc, opcionesDelJugador } from "./play/opciones.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
 import { AlmacenLocal, AlmacenMemoria } from "./juego/almacen.js";
 import { Sesion, ESTADO, guardarAlCerrar } from "./juego/sesion.js";
@@ -100,6 +105,8 @@ function say(text) {
 // decir QUÉ clase de suceso es.
 let hudMs = null;
 let menuMs = null;
+/** El registro de paneles de VGUI. `src/vgui/registro.js`. */
+let vgui = null;
 /**
  * La munición que el jugador ha elegido a mano con el ciclador, o `null` para
  * la que el motor da de balde. Vive aquí y no en el personaje porque en el
@@ -313,7 +320,12 @@ async function mainGateCity() {
   const { renderer, camera, resize } = buildView(canvas, {
     far: 600, anchoInterno: null, espacioDelMotor: true,
   });
-  addEventListener("resize", resize);
+  addEventListener("resize", () => {
+    resize();
+    // Los paneles se recolocan: sus medidas son las de 640x480 y `XRES`/`YRES`
+    // las convierten al tamaño de ahora. Ver `src/vgui/widgets.js`.
+    vgui?.medir(innerWidth, innerHeight);
+  });
 
   say(`loading ${level.manifiesto.texturas.length} textures and the lightmap…`);
   const { texturas, faltan } = await cargarTexturasBsp(level.manifiesto, {
@@ -693,6 +705,85 @@ async function mainGateCity() {
     },
   });
 
+  // ── LOS PANELES DE VGUI, y el menú de la F ────────────────────────────────
+  //
+  // El kit está en `src/vgui/`: es `vgui_mscontrols.h` y `vgui_menubase.cpp`
+  // portados, con el registro de paneles que reparte las teclas. Ver
+  // `ESTRUCTURA.md` y `doc/VGUI_29.md`.
+  //
+  // Lo que cambia respecto a los paneles que había: **las teclas entran por la
+  // tabla del juego**. `interfaz.js` escuchaba `keydown` en la ventana por su
+  // cuenta, así que sus pantallas no eran del juego, eran páginas encima del
+  // juego. Éste se abre con la acción `interactuar`, que vale `f` porque lo dice
+  // `config.cfg:19`, y se reasigna en las opciones como cualquier otra.
+  let fichaDeMenus = null;
+  try {
+    const m = await fetch("build/gatecity/menus.json").then((r) => (r.ok ? r.json() : null));
+    if (m) fichaDeMenus = m;
+  } catch (e) {
+    console.warn("las opciones de los NPC no están extraídas (`npm run menus`):", e);
+  }
+  const esquemaVgui = await cargarEsquema("build/gatecity/", innerWidth);
+  if (!document.getElementById("vg-css")) {
+    const s = document.createElement("style");
+    s.id = "vg-css"; s.textContent = CSS_VGUI;
+    document.body.appendChild(s);
+  }
+  const capaVgui = document.createElement("div");
+  capaVgui.style.cssText = "position:absolute; inset:0; z-index:30; pointer-events:none;";
+  document.body.appendChild(capaVgui);
+
+  vgui = new Registro({
+    esquema: esquemaVgui,
+    raiz: capaVgui,
+    reloj: () => reloj,
+    sonar: (cual) => menuMs?.sonar?.(cual),
+  });
+  vgui.medir(innerWidth, innerHeight);
+
+  vgui.poner(new MenuInteractuar({
+    esquema: esquemaVgui,
+    // A quién tengo delante: `GetEntInFrontOfMe(72)`, o sea 72 unidades del
+    // motor. Se reutiliza `elegirObjetivo`, que es el mismo cono con el que se
+    // pega — y eso es a propósito: si el menú mirara con otra regla, habría NPC
+    // a los que se les puede pegar y no hablar.
+    aQuien: () => {
+      // `candidatosDeGolpe()` Y `elegirObjetivo` — los MISMOS que usa la espada,
+      // no una copia. Es la regla del 21 y del 22: si el menu mirara con otra
+      // regla habria NPC a los que se les puede pegar y no hablar, y al reves.
+      //
+      // Todo va en unidades del motor, no en metros: `centro` de cada candidato
+      // ya viene multiplicado por U y `ALCANCE` son las 72 unidades de
+      // `GetEntInFrontOfMe(72)` tal cual. Multiplicar aqui por U otra vez daba
+      // un alcance de 2 835 unidades y hablar con un NPC a setenta metros.
+      const mirada = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+      const pies = player.feet;
+      const centro = [pies[0] * U, (pies[1] + player.perfil.height / 2) * U, pies[2] * U];
+      const r = elegirObjetivo({
+        desde: centro, centro, mirando: [mirada.x, mirada.y, mirada.z],
+        alcance: ALCANCE_INTERACTUAR,
+        candidatos: candidatosDeGolpe(),
+        libre: trazaLibre,
+      });
+      const i = r?.objetivo?.id ?? null;
+      return i ? { id: i.id, nombre: i.ficha?.nombre ?? "Someone", script: i.ficha?.script ?? null } : null;
+    },
+    async pedir(id) {
+      const quien = id === null ? null : bichos.manada?.de?.(id);
+      if (!quien) {
+        return { nombre: "You", opciones: opcionesDelJugador(sesion?.personaje ?? null) };
+      }
+      return {
+        nombre: quien.ficha?.nombre ?? "Someone",
+        opciones: opcionesDeNpc(fichaDeMenus, quien.ficha?.script ?? "", sesion?.personaje ?? null),
+      };
+    },
+    elegido(id, indice) {
+      if (indice === null) return;                 // cancelar: el −1 del original
+      suceso("aviso", "That is not implemented yet: quests are not in this port.");
+    },
+  }));
+
   // ── EL CICLADOR Y LAS DOCE RANURAS ────────────────────────────────────────
   //
   // La regla está en `src/play/ranuras.js`. Aquí sólo se le dice qué hay: qué
@@ -890,12 +981,37 @@ async function mainGateCity() {
     // el menú puesto no corre nada del juego, y con un panel del juego delante
     // la Escape la atiende el panel —cierra lo que está abierto— que es el
     // orden en que uno espera que funcione una tecla que sirve para salir.
-    if (e.code === "Escape" && !interfaz?.abierta) {
+    // Y `!vgui?.abierto` es lo que faltaba: con un panel de VGUI delante, el
+    // Escape es del panel. Sin esa condición abría el menú principal ENCIMA del
+    // panel y a partir de ahí el `if (menuMs?.abierto) return;` de dos líneas más
+    // abajo se comía todas las teclas: la F no cerraba, el 1 no elegía, nada.
+    // Cuatro controles de `sonda:vgui29` en rojo de una vez, todos por esto.
+    if (e.code === "Escape" && !interfaz?.abierta && !vgui?.abierto) {
       menuMs?.alternar(Boolean(sesion?.personaje));
       e.preventDefault();
       return;
     }
     if (menuMs?.abierto) return;
+
+    // ── LOS PANELES DE VGUI ───────────────────────────────────────────────
+    //
+    // Aquí y no en el panel: el reparto de teclas está en UN sitio, que es lo
+    // que hace el motor (`vgui_teamfortressviewport.cpp:1875-1911`) y lo que no
+    // hacían los paneles que había. El registro contesta si se la ha quedado —un
+    // número que elige una opción, el Escape que cierra— y entonces el juego no
+    // la ve.
+    if (vgui?.tecla(e.code, true)) { e.preventDefault(); return; }
+    // Y la acción que lo abre, que es `menu interact` del `config.cfg`.
+    if (teclas.accionDe(e.code) === "interactuar" && !conPanel) {
+      const abierto = vgui?.alternar("interact");
+      // `QueryNPC()` va DESPUÉS de abrir, como en el original: el panel se
+      // enseña con «Interact» y el nombre del NPC llega cuando contesta el
+      // servidor. En una red lenta eso se ve, y se ve en el juego también.
+      abierto?.preguntar?.();
+      e.preventDefault();
+      return;
+    }
+    if (vgui?.abierto) return;
     if (conPanel) return;
 
     // ── CICLAR Y LAS DOCE RANURAS ─────────────────────────────────────────
@@ -1043,9 +1159,19 @@ async function mainGateCity() {
     // Con una pantalla obligatoria delante —elegir personaje, o la muerte— no
     // se captura el raton: si se captura, los botones de esa pantalla dejan de
     // poder pulsarse y el jugador se queda encerrado.
-    if (interfaz?.abierta) return;
+    if (interfaz?.abierta || vgui?.atrapaElRaton) return;
     canvas.requestPointerLock();
   });
+  // LA RUEDA. En el juego es `mwheelup`/`mwheeldn` -> `hud_scroll` ->
+  // `HUD_StepInput`, y el reparto tiene un orden que importa: con un panel
+  // abierto la rueda es del panel, y **al HUD sólo llega si no hay ninguno**
+  // (`else if (!m_pCurrentMenu)`, vgui_teamfortressviewport.cpp:2233). O sea que
+  // con el inventario delante la rueda no cambia de arma, y eso es del motor.
+  addEventListener("wheel", (e) => {
+    const arriba = e.deltaY < 0;
+    if (vgui?.rueda(arriba ? RUEDA.ARRIBA : RUEDA.ABAJO)) { e.preventDefault(); return; }
+    hudMs?.desplazar(!arriba);
+  }, { passive: false });
   addEventListener("mousemove", (e) => {
     if (document.pointerLockElement !== canvas) return;
     player.yaw -= e.movementX * MOUSE;
@@ -2227,6 +2353,10 @@ async function mainGateCity() {
   function frame(now) {
     requestAnimationFrame(frame);
     if (!running) { last = now; return; }
+    // El desvanecido de los paneles de VGUI: medio segundo, con el reloj del
+    // juego. `UpdateFade()` va en el `Think()` del panel (vgui_menubase.cpp:64)
+    // y aquí también, porque es lo que hace que el menú ENTRE en vez de aparecer.
+    vgui?.pensar();
     // El `dt` del FOTOGRAMA, que no es el paso de la física: lo usa lo que
     // dibuja —la animación de los otros jugadores— y no lo que simula.
     const dtFotograma = Math.min((now - last) / 1000, 0.25);
@@ -2245,7 +2375,8 @@ async function mainGateCity() {
     // Quien no esta JUGANDO no se mueve: ni eligiendo personaje ni muerto. Se
     // le sigue dando fisica con las teclas a cero para que no flote —la
     // gravedad y el suelo siguen corriendo— pero no acepta intencion.
-    const manda = (!sesion || sesion.estado === ESTADO.JUGANDO) && !interfaz?.abierta;
+    const manda = (!sesion || sesion.estado === ESTADO.JUGANDO)
+      && !interfaz?.abierta && !vgui?.atrapaElRaton;
     const q = teclas.intencion();
     const before = player.feet;
     while (accumulator >= DT) {
@@ -2577,6 +2708,13 @@ async function mainGateCity() {
     // justo lo que apaga la barra. Ver `cargaVisible()` en `src/play/hud.js`.
     const at = brazo?.ataque ?? null;
     hudMs.paso(dt, {
+      // Y AQUI **NO** VAN LOS PANELES DE VGUI, que fue un error de una tarde.
+      //
+      // `panelAbierto` esconde el HUD entero, y eso vale para las pantallas de
+      // `interfaz` —elegir personaje, la muerte— que ocupan la pantalla. Un panel
+      // de VGUI no: es una ventanita en una esquina y el HUD sigue debajo. En
+      // Master Sword las dos cosas son paneles de VGUI hermanos y ninguno esconde
+      // al otro; esconder el HUD al hablar con un NPC lo cazo `sonda:vgui29`.
       panelAbierto: Boolean(interfaz?.abierta),
       vivo: !sesion || sesion.estado === ESTADO.JUGANDO,
       cargado: Boolean(p),
@@ -2720,6 +2858,7 @@ async function mainGateCity() {
     get golpesRecibidos() { return golpesRecibidos; },
     get grupos() { return grupos; },
     get gruposDetalle() { return gruposDetalle; },
+    get vgui() { return vgui; },
     get hudMs() { return hudMs; },
     get huidas() { return huidas; },
     get impactos() { return impactos; },

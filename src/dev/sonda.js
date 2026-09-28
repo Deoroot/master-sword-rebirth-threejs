@@ -545,6 +545,83 @@ export function montarSonda(S) {
       estatus: () => ({ escondida: S.status.hidden, texto: S.status.textContent }),
     },
     /**
+     * LOS PANELES DE VGUI. Esto SÓLO LEE, y es a propósito.
+     *
+     * No hay aquí ningún `abrir()`: el panel se abre pulsando la F de verdad con
+     * el teclado del navegador, que es la única forma de comprobar lo que este
+     * experimento vino a arreglar —que la tecla entra por la tabla del juego—.
+     * Una puerta `probe.vgui.abrir("interact")` daría todos los controles en
+     * verde con la tecla desconectada, que es exactamente el fallo que se está
+     * quitando.
+     */
+    vgui: {
+      hay: () => Boolean(S.vgui),
+      /** Qué panel está abierto, o null. Es `m_pCurrentMenu`. */
+      abierto: () => S.vgui?.abierto?.nombre ?? null,
+      /** ¿El juego deja de moverse? `m_NoMouse` es la excepción. */
+      atrapaElRaton: () => Boolean(S.vgui?.atrapaElRaton),
+      /** El archivo de esquema que se ha elegido para este ancho de pantalla. */
+      esquema: () => ({
+        resolucion: S.vgui?.esquema?.resolucion ?? null,
+        sml: S.vgui?.esquema?.fuenteCss("Briefing Text") ?? null,
+        titulo: S.vgui?.esquema?.fuenteCss("Title Font") ?? null,
+      }),
+      /**
+       * El panel abierto, medido en la pantalla de verdad: lo que dice el DOM,
+       * no lo que cree el objeto. Si un panel está «abierto» y su nodo sigue
+       * escondido, esto lo dice.
+       */
+      panel() {
+        const p = S.vgui?.abierto;
+        if (!p) return null;
+        const caja = p.ventana?.nodo?.getBoundingClientRect?.() ?? null;
+        const estilo = p.ventana ? getComputedStyle(p.ventana.nodo) : null;
+        return {
+          nombre: p.nombre,
+          titulo: p.titulo?.texto ?? null,
+          fuenteDelTitulo: p.titulo ? getComputedStyle(p.titulo.nodo).fontSize : null,
+          visible: Boolean(p.raiz?.nodo && !p.raiz.nodo.hidden),
+          ventana: caja ? { x: Math.round(caja.x), y: Math.round(caja.y), w: Math.round(caja.width), h: Math.round(caja.height) } : null,
+          fondo: estilo?.backgroundColor ?? null,
+          borde: estilo?.borderTopColor ?? null,
+          grosorDelBorde: estilo?.borderTopWidth ?? null,
+        };
+      },
+      /** Los botones que se ven, con su texto, su color y si sirven. */
+      botones() {
+        const p = S.vgui?.abierto;
+        if (!p?.botones) return [];
+        return p.botones
+          .map((b, i) => ({
+            i, texto: b.texto, sirve: b.sirve,
+            visible: !b.nodo.hidden,
+            color: getComputedStyle(b.nodo).color,
+            arriba: Math.round(b.nodo.getBoundingClientRect().y),
+            centro: Math.round(b.nodo.getBoundingClientRect().x + b.nodo.getBoundingClientRect().width / 2),
+          }))
+          .filter((b) => b.visible);
+      },
+      /** Las opciones que el «servidor» ha mandado, y por qué están como están. */
+      opciones: () => (S.vgui?.abierto?.opciones ?? []).map((o) => ({
+        titulo: o.titulo, tipo: o.tipo, porque: o.porque ?? "",
+      })),
+      /** A quién ve delante el panel, con la misma regla con la que se pega. */
+      delante: () => S.vgui?.buscar?.("interact")?.aQuien?.() ?? null,
+      /**
+       * Los NPC vivos con su script y su sitio, para poder ponerse delante de
+       * uno. Va aquí y no en la sonda de fuera porque `S.bichos.instancias` es
+       * estado del juego y la sonda de fuera no tiene que saber su forma.
+       */
+      npcs: () => (S.bichos?.instancias ?? [])
+        .filter((i) => !i.muerto)
+        .map((i) => ({
+          id: i.id, nombre: i.ficha?.nombre ?? null, script: i.ficha?.script ?? null,
+          hostil: i.ficha?.hostil ?? null, donde: [...i.donde],
+        })),
+      /** Lo que se le ha dicho al jugador al elegir una opción. */
+      ultimoSuceso: () => S.hudMs?.estado().consola?.at?.(-1) ?? null,
+    },
+    /**
      * EL CICLADOR Y LAS DOCE RANURAS, por la misma puerta que el bucle.
      *
      * `avanzar()` es `probe.hud.avanzar`: el mismo `pasoDelHud` que corre el
