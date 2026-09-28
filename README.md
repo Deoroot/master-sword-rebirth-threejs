@@ -33,12 +33,11 @@ engine or mod source it came from, file and line.
 
 ## What does not work yet
 
-Quests. The NPC interaction menu reads its options from the game's own scripts, but
-choosing one does nothing yet: there is no quest state, no payment, no script
-callbacks. Also missing: shops, the NPC navigation graph, monster respawn, lighting on
-remote players, `wss://` and accounts. Quests are not implemented,
-so the NPC options you see are read from the game's scripts but do nothing yet. Also
-missing: shops, the NPC navigation graph, monster respawn, `wss://` and accounts.
+Quests. The NPC interaction menu reads its options from the game's own scripts — the
+mayor really does offer «Give Goblin's Head» — but choosing one does nothing yet:
+there is no quest state, no payment, no script callbacks. Also missing: shops, item
+containers, the NPC navigation graph, monster respawn, lighting on remote players,
+`wss://` and accounts.
 
 ---
 
