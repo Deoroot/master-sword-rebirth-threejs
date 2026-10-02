@@ -1,10 +1,10 @@
-// Extrae `gatecity.bsp` a `build/gatecity/` para poder dibujarlo.
+// Extrae un `.bsp` de Master Sword a `build/<mapa>/` para poder dibujarlo.
 //
-//   node tools/gatecity.mjs [ruta.bsp]
+//   node tools/gatecity.mjs [ruta.bsp | --mapa <nombre>]
 //
 // ── Dónde va lo que sale, y por qué importa ─────────────────────────────────
 //
-// **Todo a `build/gatecity/`, que no se publica y está en `.gitignore`.** El
+// **Todo a `build/<mapa>/`, que no se publica y está en `.gitignore`.** El
 // `.bsp` se queda donde está, en `../MSC/assets/msr/maps/`; no se copia, no entra
 // en el repo y no se redistribuye nada sacado de él. La regla del 02 —ningún
 // asset sin licencia al lado— no se relaja: lo que es nuestro es el LECTOR, que
@@ -38,6 +38,11 @@ import {
 } from "../src/bsp/luz.js";
 import { emitirMalla, conEntidad, reservarLuxeles, MODOS_RENDER } from "../src/bsp/malla.js";
 import { leerLlegada, sePuedeEstar, contenidoEn } from "../src/bsp/arbol.js";
+import { monsterclipDeMapa, piezasEnEscena, OCUPADO, SOLIDO, CLIP_MINS, CLIP_MAXS } from "../src/bsp/clip.js";
+import { usoDeTriggerstate, objetivosDeManager } from "../src/play/disparadores.js";
+// EL 76: la regla de «¿se dibuja?» en el único sitio donde está escrita, para
+// que el extractor y el visor no puedan contestarla distinto.
+import { seDibuja as seDibujaAdorno } from "../src/play/aspecto.js";
 import { leerSpr, tiraDeSpr, rectanguloDeCuadro } from "../src/bsp/sprite.js";
 import { SUSTITUTOS } from "../src/bsp/halo.js";
 import { tablasDeGamma, AJUSTES } from "../src/bsp/gamma.js";
@@ -46,12 +51,16 @@ import { leerMdl, texturasDe, mallaDe, matrizDeAngulos, porMatriz, direccionPorM
 import { leerSecuencias, leerHuesos, clavesDeSecuencia, matricesEnFotograma, recorridoDeModelo, SE_MUEVE } from "../src/bsp/mdlanim.js";
 import { extraerBicho } from "./bicho.mjs";
 import { escribirPng } from "./png.mjs";
+import { mapaDeArgv, bspDe, salidaDe, creditoDe } from "./mapa.mjs";
 
 // La ruta es el primer argumento que acabe en `.bsp`, no `argv[2]`: con
 // `--gamma 3.4` delante, `argv[2]` es «--gamma» y el lector intentaba abrirlo.
-const RUTA = process.argv.slice(2).find((a) => a.endsWith(".bsp")) ??
-  "../MSC/assets/msr/maps/gatecity.bsp";
-const SALIDA = resolve("build/gatecity");
+// El 47: la salida sale del MAPA, no de una cadena. Antes se le podía dar
+// `edana.bsp` y lo escribía igualmente en `build/gatecity/`, que es el peor de
+// los dos fallos posibles: no avisa y deja un mapa pisado por otro.
+const MAPA = mapaDeArgv();
+const RUTA = bspDe(MAPA);
+const SALIDA = salidaDe(MAPA);
 const U = UNIDADES_POR_METRO;
 const m2 = (u) => u / (U * U);
 
@@ -160,8 +169,48 @@ console.log(`  modos de dibujo ${[...porModo].sort((a, b) => b[1].area - a[1].ar
 // con el de entidades `func_door_rotating`, el horneado para — porque quitarlas
 // de la colisión sin darles la suya deja nueve agujeros por los que se pasa
 // andando, y eso no da error.
-const SOLIDAS = new Set(["func_wall", "func_breakable"]);
+// Y `func_breakable` TAMPOCO está aquí desde el 69, por la misma razón y con la
+// misma consecuencia: un almiar horneado en el trimesh del mundo es una pared
+// que resulta que tiene forma de almiar. Los cuatro de Edana y los dieciséis de
+// Gate City existían como dibujo y como obstáculo y **no como algo que se
+// rompe**, que es la mitad de para qué están puestos: uno abre la cloaca y
+// cuatro de Gate City sueltan las crías de rata.
+// Y `func_door` TAMPOCO desde el 70, con una diferencia que conviene decir
+// entera porque cambia lo que es un arreglo y lo que es un estreno: las
+// deslizantes **no estaban en la colisión de nadie**. `solidas` es el modelo 0
+// más `func_wall`, así que una `func_door` nunca entró ahí. Estaban sólo
+// dibujadas, quietas y atravesables: la tapa de la cloaca de Edana era una
+// lámina de 4 unidades por la que se pasaba andando. O sea que esto no las saca
+// del trimesh —nunca estuvieron— sino que les da **el colisionador que les
+// faltaba** y además las mueve.
+const SOLIDAS = new Set(["func_wall"]);
 const MOVIBLES = new Set(["func_door_rotating"]);
+const CORREDERAS = new Set(["func_door"]);
+const ROMPIBLES = new Set(["func_breakable"]);
+// Las que se llevan su malla y su colisionador APARTE, por moverse o por poder
+// desaparecer. El reparto son tres listas y no dos —ver el comentario de
+// `dibujables`— y quien entra aquí tiene que salir de las OTRAS DOS: de la
+// colisión, para poder dejar de chocar, y de la malla quieta, para no dejar un
+// fantasma dibujado en su sitio.
+const APARTE = new Set([...MOVIBLES, ...CORREDERAS, ...ROMPIBLES]);
+
+// LOS 101 `func_monsterclip`, leídos del ÁRBOL y no de las caras.
+//
+// No tienen caras —el compilador se las come, y hay una prueba desde el 12 que lo
+// dice— así que no hay forma de sacarlos de `caras`. Están en el árbol de
+// colisión de su modelo, que es de donde los saca `src/bsp/clip.js`.
+const red5 = (v) => Math.round(v * 1e5) / 1e5;
+const monsterclip = monsterclipDeMapa(bsp, entidades);
+console.log(`  monsterclip     ${monsterclip.brushes.length} brushes en ` +
+  `${monsterclip.brushes.reduce((a, b) => a + b.piezas.length, 0)} piezas convexas` +
+  `${monsterclip.vacias ? `, ${monsterclip.vacias} entidades sin una hoja sólida` : ""}` +
+  ` — la valla de los bichos, fuera de la colisión del jugador a propósito`);
+if (!monsterclip.brushes.length) {
+  // Un mapa puede no tener ninguno; Gate City tiene 101. Cero con 101 entidades
+  // en el `.bsp` sería el lector roto, y eso NO se ve en ninguna captura.
+  const cuantos = entidades.filter((e) => e.classname === "func_monsterclip").length;
+  if (cuantos) { console.error(`  FALLO: ${cuantos} func_monsterclip en el .bsp y 0 leídos`); process.exit(1); }
+}
 const solidas = caras.filter((c) => c.modelo === 0 || SOLIDAS.has(c.clase));
 // Y LO QUE SE DIBUJA, que es donde se me quedó el trabajo a medias.
 //
@@ -173,10 +222,10 @@ const solidas = caras.filter((c) => c.modelo === 0 || SOLIDAS.has(c.clase));
 //
 // El reparto correcto son tres listas y no dos: lo que choca, lo que se dibuja
 // quieto, y lo que se lleva las dos cosas aparte porque se mueve.
-const dibujables = caras.filter((c) => !MOVIBLES.has(c.clase));
+const dibujables = caras.filter((c) => !APARTE.has(c.clase));
 console.log(`  chocan          ${solidas.length} caras: el mundo más ${[...SOLIDAS].join(", ")}`);
-console.log(`  aparte          ${caras.length - dibujables.length} caras de ${[...MOVIBLES].join(", ")}, ` +
-  `que se mueven: fuera de la malla quieta Y fuera de la colisión, con las suyas`);
+console.log(`  aparte          ${caras.length - dibujables.length} caras de ${[...APARTE].join(", ")}, ` +
+  `que se mueven o se rompen: fuera de la malla quieta Y fuera de la colisión, con las suyas`);
 
 const mundoSpawn = entidades.find((e) => e.classname === "worldspawn") ?? {};
 // El color del cielo sale de `light_environment`, que es lo que el compilador usó
@@ -254,11 +303,14 @@ if (vivas / imagenes.length < 0.9 || medColores < 16) {
 }
 
 // --- 3. el mapa de luz -------------------------------------------------------
-const cuentas = contabilidad(caras, bsp.lumps.luz.len);
+const cuentas = contabilidad(caras, bsp.lumps.luz.len, bsp.lumps.luz.datos);
 console.log(`\n  mapa de luz     ${(bsp.lumps.luz.len / 1048576).toFixed(2)} MB en el archivo`);
 console.log(`    caras con luz ${cuentas.caras}; sin luz ${cuentas.sinLuz} (${cuentas.sinLuzPorMenosUno} con lightofs=-1, ${cuentas.sinLuzPorEstilos} con styles a 255)`);
 console.log(`    contabilidad  ${cuentas.bytes} bytes sumados contra ${cuentas.bytesDelLump} del lump ` +
-  `-> ${cuentas.cuadra ? "CUADRA EXACTO" : `FALLO: sobran ${cuentas.sobran}, ${cuentas.solapes} solapes, ${cuentas.huecos} huecos`}`);
+  `-> ${cuentas.cuadra
+    ? (cuentas.cola === 0 ? "CUADRA EXACTO" : `CUADRA (${cuentas.cola} B de cola, todos ceros)`)
+    : `FALLO: ${cuentas.solapes} solapes, ${cuentas.huecos} huecos, ${cuentas.desbordan} se salen` +
+      (cuentas.colaCeros === false ? `, y la cola de ${cuentas.cola} B NO es ceros` : "")}`);
 console.log(`    luxels        ${cuentas.luxels}, parche mayor ${cuentas.parcheMayor}×${cuentas.parcheMayor}`);
 if (!cuentas.cuadra) {
   console.error(`\n  El mapa de luz no se está leyendo bien. Sin esto lo demás no vale.`);
@@ -585,6 +637,11 @@ for (let i = 1; i < modelos.length; i++) {
   puertas.push({
     modelo: i,
     tramo: `puerta${i}`,
+    // EL 70: el índice en el lump de entidades y el nombre, que hasta ahora no
+    // salían porque nadie las disparaba. Son lo que empareja la hoja con su
+    // fila del cableado — `door2` de Edana son DOS hojas con el mismo nombre.
+    entidad: entidades.indexOf(e),
+    nombre: e.targetname ?? null,
     bisagra: aEscena(o),
     // Los tres números de la entidad. `distance` en grados, `speed` en grados
     // por segundo y `wait` en segundos antes de volver a cerrarse.
@@ -614,6 +671,9 @@ for (let i = 1; i < modelos.length; i++) {
     unaSolaDireccion: Boolean(num(e.spawnflags, 0) & 16),
     empiezaAbierta: Boolean(num(e.spawnflags, 0) & 1),
     atravesable: Boolean(num(e.spawnflags, 0) & 8),
+    // Y OJO: `soloUsar` NO es lo único que impide abrirla al tocarla. Ver
+    // `nombre`, arriba, y `src/play/puertas.js`: `CBaseDoor::DoorTouch` sale en
+    // la primera línea si la puerta tiene `targetname` (doors.cpp:533-538).
     soloUsar: Boolean(num(e.spawnflags, 0) & 256),
     caja: cajaDeModelo(modelos[i], o),
     grupos: m.groups,
@@ -702,83 +762,404 @@ for (let i = 1; i < modelos.length; i++) {
     `y el .bsp ilumina ${conLuzEnElBsp} de ${carasDePuerta.length} caras (${(esperadoIluminado * 100).toFixed(0)} %)`);
 }
 
-/**
- * LOS PLANOS de un volumen, que es lo que hace falta para preguntar si estás
- * dentro — y no su caja.
- *
- * Aquí me equivoqué primero y lo cazó el control: escribí que los volúmenes de
- * Gate City eran «brushes rectangulares, así que su caja ES el volumen», y el
- * estanque grande **no lo es**. Sus caras tienen normales como (−0,65, −0,76, 0)
- * y (0,51, −0,86, 0): es un contorno irregular de 19,7 × 8,9 m. Preguntar con
- * la envolvente habría dado «estás en el agua» sobre un rectángulo mucho mayor
- * que la charca, o sea nadar en la orilla. Y eso nadie lo achaca a esto.
- *
- * Un brush de GoldSrc es convexo por construcción, así que basta con sus planos:
- * dentro es estar detrás de todos. La distancia sale de cualquier punto de la
- * cara, porque todos están en su plano.
- *
- * Devuelve `null` si el modelo no trae caras —las escaleras y el `trigger_hurt`
- * son invisibles y el compilador se las comió—, y entonces manda la caja, que
- * para un brush sin caras es lo único que hay y lo que el motor usa como casco.
- */
-function planosDe(caras, { epsilon = 0.2 } = {}) {
-  if (!caras.length) return null;
-  const planos = [];
-  for (const c of caras) {
-    const d = c.normal[0] * c.puntos[0][0] + c.normal[1] * c.puntos[0][1] + c.normal[2] * c.puntos[0][2];
-    // Dos caras del mismo plano —el compilador parte las grandes— cuentan una.
-    const ya = planos.some((p) =>
-      Math.abs(p.n[0] - c.normal[0]) < 1e-4 && Math.abs(p.n[1] - c.normal[1]) < 1e-4 &&
-      Math.abs(p.n[2] - c.normal[2]) < 1e-4 && Math.abs(p.d - d) < 1e-2);
-    if (!ya) planos.push({ n: [...c.normal], d });
-  }
-  // CONVEXIDAD, comprobada y no supuesta: todos los vértices detrás de todos
-  // los planos. Si fallara, el test de «dentro» recortaría de más y habría
-  // trozos de agua que no mojan.
-  let peor = 0;
-  for (const c of caras) {
-    for (const p of c.puntos) {
-      for (const q of planos) {
-        peor = Math.max(peor, q.n[0] * p[0] + q.n[1] * p[1] + q.n[2] * p[2] - q.d);
-      }
+// LO QUE SE ROMPE (el 69): `func_breakable`, con su malla y su colisionador.
+//
+// El molde es el de las puertas y por la misma razón, pero un rompible es más
+// fácil que una puerta: no gira. Así que la malla se emite en coordenadas del
+// MUNDO y el nodo se queda en el origen — que es lo que sale solo de restar
+// `aEscena(origin)` cuando la entidad no trae `origin`, y ninguno de los veinte
+// de los dos mapas lo trae. Si algún día uno lo trae, esto sigue valiendo: la
+// malla queda local a su origen y el nodo se coloca ahí.
+//
+// ── Los números, y el primero engaña ──────────────────────────────────────
+//
+//   health    la vida, y se resta de verdad (`pev->health -= flDamage`,
+//             func_break.cpp:575). Los almiares de Edana traen 5, 8, 10 y 11.
+//   material  el sonido y los cascotes al romperse, y **el comentario del
+//             propio mod miente**: dice «0:glass, 1:metal, 2:flesh, 3:wood»
+//             (func_break.cpp:92) y el enum es otro (func_break.h:24-35).
+//   spawnflags cómo se puede romper, y sin ninguna sólo a golpes.
+const MATERIALES = ["cristal", "madera", "metal", "carne", "bloque",
+  "placa", "ordenador", "cristal_irrompible", "roca", "ninguno"];
+const rompibles = [];
+const mallasDeRompible = [];
+for (let i = 1; i < modelos.length; i++) {
+  const e = porModelo.get(i);
+  if (!e || !ROMPIBLES.has(e.classname)) continue;
+  const o = origen(e) ?? [0, 0, 0];
+  // LAS MISMAS caras que ya pasaron por el empaquetado de luz, por identidad de
+  // objeto: releerlas del `.bsp` las mandaría al luxel negro sin dar error. Es
+  // el mismo aviso que llevan las puertas encima, y se cumple igual.
+  const suyas = caras.filter((c) => c.modelo === i);
+  const m = emitirMalla(suyas, texturas, listaCubos.map((c) => c.atlas), { conCielo: true, sinLuzAl: SINLUZ_AL });
+  const choque = emitirMalla(suyas, texturas, null, { conCielo: true });
+  const anc = aEscena(o);
+  for (const malla of [m, choque]) {
+    for (let k = 0; k < malla.positions.length; k += 3) {
+      malla.positions[k] -= anc[0];
+      malla.positions[k + 1] -= anc[1];
+      malla.positions[k + 2] -= anc[2];
     }
   }
-  return { planos, convexo: peor <= epsilon, peor };
+  const mat = num(e.material, 1);
+  rompibles.push({
+    modelo: i,
+    tramo: `rompible${i}`,
+    // El índice en el lump de entidades, que es la misma `entidad` que lleva su
+    // fila del cableado. Es por donde se emparejan la malla y la regla: sin él
+    // habría que casarlas por posición, y los rompibles sin nombre ni objetivo
+    // NO están en la lista del cableado, así que los índices no coinciden.
+    entidad: entidades.indexOf(e),
+    ancla: anc,
+    // `material`: fuera de rango vuelve a madera, y no es un valor por omisión
+    // inventado — lo hace el mod: `if ((i < 0) || (i >= matLastMaterial))
+    // m_Material = matWood;` (func_break.cpp:89-94). `material 8` de Gate City
+    // sí está en rango: es `matRocks`.
+    material: mat >= 0 && mat < MATERIALES.length ? mat : 1,
+    materialNombre: MATERIALES[mat >= 0 && mat < MATERIALES.length ? mat : 1],
+    vida: num(e.health, 0),
+    caja: cajaDeModelo(modelos[i], o),
+    grupos: m.groups,
+    triangulos: m.triangleCount,
+  });
+  mallasDeRompible.push({ dibujo: m, choque });
 }
 
-/** Un plano del `.bsp` en coordenadas de escena. */
-//
-// El cambio de ejes es un giro, así que conserva el producto escalar: la normal
-// pasa por `vectorAEscena` y la distancia sólo se divide por las unidades por
-// metro. Escalar la normal en vez de la distancia daría un plano desplazado.
-const planoAEscena = (p) => ({ n: vectorAEscena(p.n), d: p.d / U });
+// EL MISMO CONTROL que las puertas, y por el mismo motivo: sacar veinte brushes
+// de la colisión sin emitirlos deja veinte agujeros por los que se pasa andando,
+// y eso no da error — da un pueblo con boquetes.
+{
+  const cuantos = entidades.filter((e) => ROMPIBLES.has(e.classname)).length;
+  if (rompibles.length !== cuantos) {
+    console.error(`  FALLO: hay ${cuantos} func_breakable en el .bsp y se han emitido ${rompibles.length}. ` +
+      `Quitarlos de la colisión sin emitirlos deja agujeros por los que se pasa andando.`);
+    process.exit(1);
+  }
+  const sinTriangulos = rompibles.filter((p) => !p.triangulos);
+  if (sinTriangulos.length) {
+    console.error(`  FALLO: ${sinTriangulos.length} func_breakable sin un solo triángulo.`);
+    process.exit(1);
+  }
+  // Y EL FANTASMA, que en los rompibles se ve al revés que en las puertas: una
+  // puerta emitida dos veces deja la copia quieta al abrirse; un almiar emitido
+  // dos veces se rompe, suena, dispara la cloaca **y sigue ahí**. El jugador no
+  // ve un fallo de reparto: ve que romper el almiar no hace nada.
+  //
+  // ── Y el control de las puertas NO se puede copiar aquí ───────────────────
+  //
+  // Lo copié, y se puso rojo en la primera pasada de Gate City con la emisión
+  // BIEN. El heurístico de las puertas —«si la mayoría de sus vértices están
+  // además en la malla quieta, está emitida dos veces»— se sostiene en que una
+  // hoja cuelga en el vano y no comparte esquinas con el marco. Un rompible es
+  // lo contrario: es un TAPÓN metido en un hueco. Medido en el `.bsp` crudo,
+  // antes de pasar por nada de esto: **12 de los 18 vértices del `*61` de Gate
+  // City ya están en el modelo 0**, o sea en el mundo. Es una caja de
+  // 36 × 42 × 16 unidades encajada en un agujero de la pared, y comparte las
+  // esquinas por construcción.
+  //
+  // Así que aquí se hace la pregunta EXACTA en vez de la parecida, que además es
+  // la que describe el fallo de verdad: ¿han quedado caras de rompible en alguna
+  // de las otras dos listas? Si la respuesta es cero, no hay fantasma, y no hace
+  // falta ningún umbral.
+  const enLaQuieta = caras.filter((c) => ROMPIBLES.has(c.clase) && dibujables.includes(c)).length;
+  const enLaColision = solidas.filter((c) => ROMPIBLES.has(c.clase)).length;
+  if (enLaQuieta || enLaColision) {
+    console.error(`  FALLO: ${enLaQuieta} caras de func_breakable siguen en la malla quieta y ` +
+      `${enLaColision} en la de colisión. Emitido dos veces: al romperlo se queda puesto.`);
+    process.exit(1);
+  }
+  if (rompibles.length) {
+    console.log(`  se rompen       ${rompibles.length} func_breakable ` +
+      `(${rompibles.reduce((a, p) => a + p.triangulos, 0)} tri), vida ` +
+      `${[...new Set(rompibles.map((p) => p.vida))].sort((a, b) => a - b).join("/")}, ` +
+      `de ${[...new Set(rompibles.map((p) => p.materialNombre))].join(" y ")}`);
+    console.log(`    sin fantasma  0 de sus ${caras.filter((c) => ROMPIBLES.has(c.clase)).length} caras ` +
+      `están además en la malla quieta o en la de colisión`);
+  }
+}
 
-/** Los volúmenes de una clase, con sus planos y las claves que se le pidan. */
-const volumenesDe = (clase, extra = () => ({})) => entidades
+// LO QUE SE DESLIZA (el 70): `func_door`, que es la puerta LINEAL.
+//
+// Tres en Edana y cero en Gate City, y el cero vuelve a ser el motivo de que
+// nadie las echara de menos en dos años de port. Son:
+//
+//   door1      *11, 80×12×128, movedir +x, lip 8, wait 3, dmg 50000
+//   sewer_door *150, 128×144×4, movedir −x, wait −1 — la TAPA de la cloaca
+//   sewerbeam  *154, 128×144×276, movedir −x, wait −1, spawnflags 8 y
+//              rendermode 5: el haz de luz que baja al alcantarillado
+//
+// ── El recorrido, que no es un número de la entidad ────────────────────────
+//
+//     m_vecPosition2 = m_vecPosition1 + (pev->movedir *
+//       (fabs(movedir.x * (size.x - 2)) + fabs(movedir.y * (size.y - 2))
+//        + fabs(movedir.z * (size.z - 2)) - m_flLip));      doors.cpp:300
+//
+// O sea: **una puerta lineal se mete dentro de sí misma**. Recorre su propio
+// tamaño en la dirección en que abre, menos el `lip` que deja asomando, menos
+// 2 unidades — y ese −2 lo explica el propio comentario de Valve en esa línea:
+// *«the engine expands bboxes by 1 in all directions»*. Escribirlo sin el −2
+// deja la tapa 2 unidades corrida y no da error: da una rendija.
+//
+// `lip` NO tiene valor por omisión en el código, aunque el comentario QUAKED de
+// arriba del archivo diga «lip 8 default» (doors.cpp:261). `m_flLip` sale de
+// `CBaseToggle::KeyValue` (subs.cpp:392-396) y si la clave no está se queda en
+// cero. Es el mismo caso del 64: el comentario y el código no dicen lo mismo, y
+// aquí manda el código. `door1` trae `lip 8`; las otras dos no traen ninguno.
+const correderas = [];
+const mallasDeCorredera = [];
+for (let i = 1; i < modelos.length; i++) {
+  const e = porModelo.get(i);
+  if (!e || !CORREDERAS.has(e.classname)) continue;
+  const o = origen(e) ?? [0, 0, 0];
+  // LAS MISMAS caras que ya pasaron por el empaquetado de luz, por identidad de
+  // objeto. Mismo aviso que llevan encima las puertas y los rompibles.
+  const suyas = caras.filter((c) => c.modelo === i);
+  const m = emitirMalla(suyas, texturas, listaCubos.map((c) => c.atlas), { conCielo: true, sinLuzAl: SINLUZ_AL });
+  const choque = emitirMalla(suyas, texturas, null, { conCielo: true });
+  const anc = aEscena(o);
+  for (const malla of [m, choque]) {
+    for (let k = 0; k < malla.positions.length; k += 3) {
+      malla.positions[k] -= anc[0];
+      malla.positions[k + 1] -= anc[1];
+      malla.positions[k + 2] -= anc[2];
+    }
+  }
+  const sf = num(e.spawnflags, 0);
+  const md = direccionDe((e.angles ?? "0 0 0").trim().split(/\s+/).map(Number));
+  const tam = [0, 1, 2].map((j) => modelos[i].maxs[j] - modelos[i].mins[j]);
+  const labio = num(e.lip, 0);
+  const recorrido = Math.abs(md[0] * (tam[0] - 2)) + Math.abs(md[1] * (tam[1] - 2)) +
+    Math.abs(md[2] * (tam[2] - 2)) - labio;
+  correderas.push({
+    modelo: i,
+    tramo: `corredera${i}`,
+    entidad: entidades.indexOf(e),
+    nombre: e.targetname ?? null,
+    ancla: anc,
+    // La dirección en ejes de escena, ya unitaria. Se redondea porque un yaw de
+    // 180 da un seno de 1,2e−16 y arrastrar eso a la escena no es más fiel: es
+    // más ruido. El RECORRIDO se calcula antes, con el vector crudo, que es lo
+    // que hace el motor.
+    direccion: vectorAEscena(md).map((v) => Math.round(v * 1e6) / 1e6),
+    // En metros y en metros por segundo, que es en lo que mide la escena. El
+    // `.bsp` los da en unidades de GoldSrc.
+    recorrido: recorrido / U,
+    recorridoUnidades: recorrido,
+    labio,
+    // `if (pev->speed == 0) pev->speed = 100` (doors.cpp:295).
+    velocidad: (num(e.speed, 0) || 100) / U,
+    // `wait` sin valor por omisión en el código: cero si no está. −1 es «no
+    // vuelve nunca» (doors.cpp:657-661), y lo traen dos de las tres.
+    espera: num(e.wait, 0),
+    // `pev->dmg`: lo que hace al que la traba (doors.cpp:735-737). `door1` trae
+    // 50 000, que es matar a cualquiera.
+    dano: num(e.dmg, 0),
+    banderas: sf,
+    empiezaAbierta: Boolean(sf & 1),
+    // `SF_DOOR_PASSABLE` → `pev->solid = SOLID_NOT` (doors.cpp:277-281). El haz
+    // de luz la trae: se dibuja y no choca, así que no lleva colisionador.
+    atravesable: Boolean(sf & 8),
+    sinRetorno: Boolean(sf & 32),   // SF_DOOR_NO_AUTO_RETURN
+    soloUsar: Boolean(sf & 256),    // SF_DOOR_USE_ONLY
+    // El modo de dibujo, que en el haz de luz es lo que lo hace un haz: sacarlo
+    // de la malla del mundo y montarlo opaco lo convertiría en un pilar.
+    render: { modo: num(e.rendermode, 0), cantidad: num(e.renderamt, 255) },
+    sonido: num(e.movesnd, 0) ? `doors/doormove${num(e.movesnd, 0)}.wav` : null,
+    caja: cajaDeModelo(modelos[i], o),
+    grupos: m.groups,
+    triangulos: m.triangleCount,
+  });
+  mallasDeCorredera.push({ dibujo: m, choque });
+}
+
+// EL MISMO CONTROL, con la pregunta EXACTA y no con el umbral de las puertas
+// rotatorias: una `func_door` es un TAPÓN metido en un hueco, igual que un
+// rompible, y comparte esquinas con el mundo por construcción. El heurístico de
+// la hoja que cuelga en el vano no vale aquí — es la lección del 69 y está
+// escrita entera en el control de los rompibles, veinte líneas más arriba.
+{
+  const cuantas = entidades.filter((e) => CORREDERAS.has(e.classname)).length;
+  if (correderas.length !== cuantas) {
+    console.error(`  FALLO: hay ${cuantas} func_door en el .bsp y se han emitido ${correderas.length}.`);
+    process.exit(1);
+  }
+  const sinTriangulos = correderas.filter((p) => !p.triangulos);
+  if (sinTriangulos.length) {
+    console.error(`  FALLO: ${sinTriangulos.length} func_door sin un solo triángulo.`);
+    process.exit(1);
+  }
+  const enLaQuieta = caras.filter((c) => CORREDERAS.has(c.clase) && dibujables.includes(c)).length;
+  const enLaColision = solidas.filter((c) => CORREDERAS.has(c.clase)).length;
+  if (enLaQuieta || enLaColision) {
+    console.error(`  FALLO: ${enLaQuieta} caras de func_door siguen en la malla quieta y ` +
+      `${enLaColision} en la de colisión. Emitida dos veces: al abrirla queda un fantasma.`);
+    process.exit(1);
+  }
+  // Y UN CONTROL QUE NO TIENEN LAS OTRAS DOS CLASES: que el recorrido sea
+  // POSITIVO. `ASSERTSZ(m_vecPosition1 != m_vecPosition2, "door start/end
+  // positions are equal")` está en el motor (doors.cpp:301) y es exactamente el
+  // fallo que se puede colar aquí: un `lip` mayor que el tamaño, o un `angles`
+  // mal leído que deje la componente grande a cero, da una puerta que «se abre»
+  // sin moverse. No da error: da una puerta que no hace nada, que es el verde
+  // vacío del apartado 4 con forma de puerta.
+  //
+  // Y se pregunta por el SIGNO y no por `Math.abs`, que es como lo escribí
+  // primero. Al romperlo a propósito —`lip` doscientas unidades de más— salió
+  // **−130/−74/−74** y el control **se quedó verde**: con el valor absoluto, un
+  // recorrido dado la vuelta es un recorrido grande. Y un recorrido negativo no
+  // es un caso teórico ni un error del mapa que haya que respetar: es la puerta
+  // metiéndose en la pared en vez de en su hueco, o sea la señal de que el
+  // `lip` o el `angles` se han leído mal aquí. El control tenía la forma del
+  // apartado 4: medía que el número era grande, no que era el bueno.
+  const quietas = correderas.filter((p) => p.recorridoUnidades < 1);
+  if (quietas.length) {
+    console.error(`  FALLO: ${quietas.length} func_door con recorrido nulo o invertido ` +
+      `(${quietas.map((p) => `${p.nombre ?? p.tramo}: ${p.recorridoUnidades.toFixed(2)} u`).join(", ")}). ` +
+      `Se abrirían sin moverse, o hacia dentro de la pared.`);
+    process.exit(1);
+  }
+  if (correderas.length) {
+    console.log(`  se deslizan     ${correderas.length} func_door ` +
+      `(${correderas.reduce((a, p) => a + p.triangulos, 0)} tri), recorren ` +
+      `${correderas.map((p) => p.recorridoUnidades.toFixed(0)).join("/")} u a ` +
+      `${correderas.map((p) => (p.velocidad * U).toFixed(0)).join("/")} u/s, ` +
+      `${correderas.filter((p) => p.espera < 0).length} sin retorno, ` +
+      `${correderas.filter((p) => p.atravesable).length} atravesable`);
+    // Y LO QUE DECIDE SI SE PUEDEN TOCAR, que es la sorpresa del 70 y no una
+    // bandera: `CBaseDoor::DoorTouch` sale en la primera línea si la puerta
+    // tiene `targetname` —*«If door is somebody's target, then touching does
+    // nothing»*, doors.cpp:533-538—. Las TRES de Edana lo tienen, así que
+    // ninguna se abre al acercarse, traiga o no traiga `SF_DOOR_USE_ONLY`
+    // (que no lo trae ninguna).
+    console.log(`    por disparo   ${correderas.filter((p) => p.nombre).length} de ${correderas.length} ` +
+      `tienen targetname, así que NINGUNA se abre al tocarla (doors.cpp:533-538)`);
+  }
+}
+
+/**
+ * LA FORMA de un volumen, que es lo que hace falta para preguntar si estás
+ * dentro — y no su caja.
+ *
+ * Aquí me equivoqué dos veces, y las dos las cazó el mismo control.
+ *
+ * **La primera** fue escribir que los volúmenes de Gate City eran «brushes
+ * rectangulares, así que su caja ES el volumen». El estanque grande **no lo
+ * es**: es un contorno irregular de 19,7 × 8,9 m con normales como
+ * (−0,65, −0,76, 0). Preguntar con la envolvente daba «estás en el agua» sobre
+ * un rectángulo mucho mayor que la charca, o sea nadar en la orilla.
+ *
+ * **La segunda, corregida en el 48**, fue sacar los planos de las CARAS del
+ * modelo y exigir que el resultado fuera convexo. Se sostenía en que «un brush
+ * de GoldSrc es convexo por construcción», que es verdad — pero **una entidad
+ * no es un brush: es un modelo, y puede tener varios**. En Gate City daba la
+ * casualidad de que cada `func_water` era uno solo; en Edana hay un
+ * `func_water` de seis brushes y otro de diez, y la guarda de convexidad
+ * paraba el horneado entero. Con razón: la unión de seis brushes no es convexa
+ * y meterla en una sola lista de planos habría dado un volumen vacío.
+ *
+ * Y el mismo error tapaba otro más callado: **los volúmenes invisibles se
+ * contestaban con la caja**. Las escaleras, los `trigger_hurt` y las
+ * `msarea_*` vienen sin caras —el compilador se las come— así que no había
+ * planos que sacar. Pero sí los tienen: el `trigger_hurt` de Gate City son
+ * CINCO brushes, y `msarea_music *287` son cuatro. Se estaban respondiendo con
+ * una envolvente que los cubre a todos y al hueco entre ellos.
+ *
+ * Ahora la forma sale del sitio donde el motor la tiene: **el árbol BSP del
+ * modelo**. Cada hoja ocupada es una pieza convexa —la intersección de los
+ * medios espacios que se cruzan para llegar a ella— y «dentro» es estar dentro
+ * de ALGUNA. Ver `src/bsp/clip.js`, que ya lo hacía para los
+ * `func_monsterclip`.
+ *
+ * ── Y NO HAY UNA REGLA, HAY DOS. Esto tampoco lo sabía ─────────────────────
+ *
+ * Al ir a buscar la cita para justificar «hull 0» resultó que el agua y los
+ * disparadores no se prueban igual, y la diferencia es de un jugador de ancho.
+ *
+ *   **EL AGUA** — `PM_LinkContents`, pmovetst.cpp:134-156:
+ *
+ *       if (pmove->physents[i].solid || model == NULL) continue;
+ *       if (PM_HullPointContents(model->hulls, model->hulls[0].firstclipnode, test) != -1)
+ *           return pe->skin;
+ *
+ *   O sea: **hull 0**, dentro es **cualquier contenido que no sea vacío**, y
+ *   lo que vale como contenido no es la hoja sino el `skin` DE LA ENTIDAD. Eso
+ *   es exactamente `OCUPADO`, y explica por qué en Edana hay `func_water` con
+ *   las hojas en −2 y otros en −3: da igual, manda el `skin`.
+ *
+ *   **LOS DISPARADORES** — `SV_TouchLinks`, world.cpp:362-377:
+ *
+ *       if (!BoundsIntersect(...)) continue;
+ *       hull = SV_HullForBsp(touch, ent->v.mins, ent->v.maxs, offset);
+ *       VectorSubtract(ent->v.origin, offset, localPosition);
+ *       if (SV_HullPointContents(hull, hull->firstclipnode, localPosition) != CONTENTS_SOLID)
+ *           continue;
+ *
+ *   O sea: la caja primero —de ahí que `caja` se conserve, y no es sólo un
+ *   filtro barato: es parte de la regla—, y luego **el casco del tamaño del
+ *   que toca**, con `CONTENTS_SOLID` exacto. `SV_HullForBsp` (world.cpp:177-212)
+ *   elige por el tamaño: un jugador de pie (32×32×72) cae en el **hull 1** y
+ *   agachado (32×32×36) en el **hull 3**. Y el `offset` sale cero para los dos,
+ *   porque `clip_mins` del casco es el `mins` del jugador, así que el punto que
+ *   se prueba es **el `origin` del jugador tal cual** — el centro de su caja,
+ *   36 unidades por encima de los pies, o 18 agachado.
+ *
+ * La diferencia no es cosmética: el hull 1 es el brush **engordado media caja
+ * de jugador**, así que con él disparas al TOCAR la zona y con el hull 0 sólo
+ * cuando tu centro está dentro. Preguntar con el 0 encoge cada zona del mapa
+ * en 16 unidades por lado, y eso es un bordillo entero.
+ */
+
+/** Los volúmenes de una clase, con sus piezas y las claves que se le pidan. */
+const volumenesDe = (clase, extra = () => ({}), { hulls = null } = {}) => entidades
   .filter((e) => e.classname === clase && /^\*\d+$/.test(e.model ?? ""))
   .map((e) => {
     const i = Number(e.model.slice(1));
-    const o = origen(e);
-    const suyas = leerCaras(bsp, modelos[i], texinfos);
-    const forma = planosDe(suyas);
-    if (forma && !forma.convexo) {
-      console.error(`  FALLO: el modelo *${i} de ${clase} no es convexo (${forma.peor.toFixed(1)} u fuera).`);
-      process.exit(1);
-    }
-    // Con `origin` los planos habría que desplazarlos; ninguno de estos lo
-    // trae, y si algún día lo trajera esto lo dice en vez de colocarlos mal.
-    if (o && forma && (o[0] || o[1] || o[2])) {
-      console.error(`  FALLO: ${clase} *${i} tiene origin y planos, y eso no está contemplado.`);
+    const o = origen(e) ?? [0, 0, 0];
+    // `piezasEnEscena` ya gira los ejes, divide por las unidades por metro y
+    // suma el `origin` ANTES de girar, que es el orden que importa.
+    //
+    // Y se VOLTEAN los planos. `clip.js` dice «dentro es `n·p >= dist`» porque
+    // así es el árbol; `volumenes.js` pregunta «`n·p - d <= 0`» porque así
+    // estaban los planos sacados de las caras, que miran hacia fuera. Las dos
+    // formas son la misma multiplicada por −1, y confundirlas no da error: da
+    // un volumen del revés, que es todo el mapa menos el charco.
+    const saca = (hull, contenidos) => piezasEnEscena(bsp, i, { hull, origin: o, contenidos })
+      .piezas.map((ps) => ps.map((p) => ({ n: [-p.n[0], -p.n[1], -p.n[2]], d: -p.dist })));
+
+    const piezas = hulls
+      ? saca(hulls.dePie, (c) => c === SOLIDO)
+      : saca(0, OCUPADO);
+    if (!piezas.length) {
+      console.error(`  FALLO: el modelo *${i} de ${clase} no tiene ni una hoja ocupada en su árbol. ` +
+        `Un volumen vacío no da error en el juego: no moja, no hace daño y no suena.`);
       process.exit(1);
     }
     return {
       modelo: i,
-      caja: cajaDeModelo(modelos[i], o),
-      // Los planos, o `null` si el modelo es invisible y sólo hay caja.
-      planos: forma ? forma.planos.map(planoAEscena) : null,
+      // LA CAJA, y para los disparadores también se engorda.
+      //
+      // No es un filtro barato que se pueda estrechar sin consecuencias: el
+      // motor prueba `BoundsIntersect(caja del jugador, caja de la entidad)`
+      // ANTES del casco, y «la caja del jugador toca la de la entidad» es lo
+      // mismo que «el origin del jugador está en la caja de la entidad
+      // engordada media caja de jugador». Dejarla sin engordar recortaría
+      // justo lo que el casco 1 añade.
+      caja: hulls
+        ? cajaDeModelo({
+            mins: modelos[i].mins.map((v, k) => v - CLIP_MAXS[hulls.dePie][k]),
+            maxs: modelos[i].maxs.map((v, k) => v - CLIP_MINS[hulls.dePie][k]),
+          }, origen(e))
+        : cajaDeModelo(modelos[i], origen(e)),
+      // Una lista de listas de planos: dentro es estar dentro de alguna.
+      piezas,
+      // El casco de agachado, sólo para lo que se prueba con el del jugador.
+      ...(hulls ? { piezasAgachado: saca(hulls.agachado, (c) => c === SOLIDO) } : {}),
       ...extra(e),
     };
   });
+
+/** Las clases que el motor prueba con el casco del jugador. Ver arriba. */
+const COMO_DISPARADOR = { hulls: { dePie: 1, agachado: 3 } };
 
 const agua = volumenesDe("func_water", (e) => ({
   // `skin` es el contenido: −3 es `CONTENTS_WATER`. Se guarda porque −4
@@ -787,11 +1168,11 @@ const agua = volumenesDe("func_water", (e) => ({
   oleaje: num(e.WaveHeight, 0),
 }));
 const escaleras = volumenesDe("func_ladder");
-const dano = volumenesDe("trigger_hurt", (e) => ({ dano: num(e.dmg, 0) }));
+const dano = volumenesDe("trigger_hurt", (e) => ({ dano: num(e.dmg, 0) }), COMO_DISPARADOR);
 
 // Las zonas que todavía no hacen nada, emitidas igual: el dato es del mapa.
 const zonas = [
-  ...volumenesDe("msarea_town", (e) => ({ clase: "msarea_town", nombre: e.targetname ?? null })),
+  ...volumenesDe("msarea_town", (e) => ({ clase: "msarea_town", nombre: e.targetname ?? null }), COMO_DISPARADOR),
   // LA MÚSICA, y la clave no se llama como yo pensaba: salía `null` en las once.
   //
   // `CAreaMusic::KeyValue` (msmapents.cpp:611) acepta DOS formas, y Gate City
@@ -813,11 +1194,358 @@ const zonas = [
     clase: "msarea_music",
     musica: e.song ?? Object.keys(e).find((k) => /\.(mp3|ogg)$/i.test(k)) ?? null,
     grupo: e.targetname ?? null,
-  })),
+  }), COMO_DISPARADOR),
   ...volumenesDe("msarea_transition", (e) => ({
-    clase: "msarea_transition", destino: e.destmap ?? null, comoSeLlama: e.destname ?? null })),
-  ...volumenesDe("trigger_once", (e) => ({ clase: "trigger_once", dispara: e.target ?? null })),
+    clase: "msarea_transition", destino: e.destmap ?? null, comoSeLlama: e.destname ?? null }), COMO_DISPARADOR),
+  ...volumenesDe("trigger_once", (e) => ({ clase: "trigger_once", dispara: e.target ?? null }), COMO_DISPARADOR),
 ];
+
+// --- 3c. EL CABLEADO: quién nombra a quién ----------------------------------
+//
+// Todo lo de arriba son volúmenes: sitios donde estás o no estás. Esto es la
+// otra mitad de cómo se programa un mapa de GoldSrc — una entidad que nombra a
+// otra y la **usa**— y hasta el 49 no había nada.
+//
+// Aquí sólo se LEE y se coloca. La regla está en `src/play/disparadores.js`,
+// que es puro y cita el motor línea a línea.
+//
+// El `spawnflags`, el `delay` y el `killtarget` se sacan siempre, de cualquier
+// clase, porque el bus los necesita de todas: son de `CBaseDelay`, no de una
+// entidad concreta.
+const CLASES_CON_CABLE = new Set([
+  "trigger_once", "trigger_multiple", "trigger", "trigger_relay", "mstrig_relay",
+  "multi_manager", "mstrig_multi", "multisource", "trigger_changetarget",
+  "env_render", "trigger_teleport", "trigger_push", "trigger_hurt",
+  "msarea_monsterspawn", "ms_monsterspawn", "msarea_transition", "msarea_music",
+  "msarea_town", "func_door", "func_door_rotating", "func_breakable",
+  "func_button", "msitem_spawn",
+  "func_wall", "func_rotating", "func_pendulum", "func_ladder",
+  "func_water", "trigger_changelevel", "trigger_counter", "ms_counter",
+  // El 67. `LINK_ENTITY_TO_CLASS(ms_npcscript, NPCScript)` y
+  // `LINK_ENTITY_TO_CLASS(mstrig_act, NPCScript)` son la MISMA clase
+  // (`npcact.cpp:54-55`), así que las dos entran.
+  "ms_npcscript", "mstrig_act",
+]);
+
+/** Los destinos de un teletransporte: `info_teleport_destination` con ese nombre. */
+const destinosDeTele = (nombre) => entidades
+  .filter((x) => x.classname === "info_teleport_destination" && x.targetname === nombre)
+  .map((x) => ({
+    unidades: origen(x) ?? [0, 0, 0],
+    escena: aEscena(origen(x) ?? [0, 0, 0]),
+    angulos: (x.angles ?? "0 0 0").trim().split(/\s+/).map(Number),
+  }));
+
+/**
+ * `SetMovedir`, `subs.cpp:333-349`: de dónde mira una entidad a hacia dónde
+ * empuja. Los dos ángulos mágicos son de QuakeEd, que sólo escribía un número.
+ */
+function direccionDe(angulos) {
+  const [p, y, r] = angulos;
+  if (p === 0 && y === -1 && r === 0) return [0, 0, 1];
+  if (p === 0 && y === -2 && r === 0) return [0, 0, -1];
+  const rad = Math.PI / 180;
+  return [
+    Math.cos(y * rad) * Math.cos(p * rad),
+    Math.sin(y * rad) * Math.cos(p * rad),
+    -Math.sin(p * rad),
+  ];
+}
+
+/** Las clases cuyo disparo llega por TOCARLAS y no por que las usen. */
+const TOCABLES = new Set(["trigger_once", "trigger_multiple", "trigger",
+  "trigger_teleport", "trigger_push"]);
+
+const conCable = entidades
+  .map((e, i) => ({ e, i }))
+  .filter(({ e }) => CLASES_CON_CABLE.has(e.classname ?? "") &&
+    (e.targetname || e.target || e.killtarget || e.classname === "multi_manager" ||
+     e.classname === "mstrig_multi" || e.classname === "multisource" ||
+     // El 69: los rompibles y los aparecedores de objetos entran TODOS, con
+     // nombre o sin él. Once de los dieciséis `func_breakable` de Gate City no
+     // tienen ni `targetname` ni `target` —son rocas, no disparan nada— y aun
+     // así hay que saber su vida y su material para poder romperlos. Y tres de
+     // los cuatro `msitem_spawn` de Edana no tienen nombre, que es un resultado
+     // y no una falta: entran para poder contarlos.
+     ROMPIBLES.has(e.classname) || e.classname === "msitem_spawn"));
+
+const disparadores = conCable.map(({ e, i }, k) => {
+  const brush = /^\*\d+$/.test(e.model ?? "");
+  const modelo = brush ? Number(e.model.slice(1)) : null;
+  const o = origen(e) ?? [0, 0, 0];
+  const angulos = (e.angles ?? "0 0 0").trim().split(/\s+/).map(Number);
+  const d = {
+    k,                                   // índice dentro de esta lista
+    entidad: i,                          // índice dentro del lump de entidades
+    clase: e.classname,
+    nombre: e.targetname ?? null,
+    objetivo: e.target ?? null,
+    matar: e.killtarget ?? null,
+    retraso: num(e.delay, 0),
+    banderas: num(e.spawnflags, 0),
+    maestro: e.master ?? null,
+    mensaje: e.message ?? null,
+    evento: e.scriptevent ?? null,       // FEB2010_23: dispara un evento de guion
+    sonido: e.noise ?? null,
+    unidades: o,
+    escena: aEscena(o),
+  };
+  // Los tres filtros que ninguno de los dos mapas usa. Se sacan igual, porque
+  // si algún día un mapa los trae, el bus tiene que poder decir que no los hace
+  // en vez de ignorarlos en silencio.
+  if (e.reqhp) d.reqhp = e.reqhp;
+  if (e.reqavghp) d.reqavghp = e.reqavghp;
+  if (e.reqplayers) d.reqjugadores = e.reqplayers;
+  if (e.reqelsetarget) d.objetivoSiNo = e.reqelsetarget;
+
+  switch (e.classname) {
+    case "trigger_once":
+      // `CTriggerOnce::Spawn` pone `m_flWait = -1` SIEMPRE, ignorando el `wait`
+      // del mapa (triggers.cpp:1253). Edana tiene un `trigger_multiple` con
+      // `wait 4` y un `trigger_once` con `style 32`; el `wait` del once no
+      // existiría aunque lo pusiera.
+      d.espera = -1;
+      break;
+    case "trigger_multiple":
+    case "trigger":
+      // `if (m_flWait == 0) m_flWait = 0.2` (triggers.cpp:1206-1207).
+      d.espera = num(e.wait, 0) || 0.2;
+      break;
+    case "trigger_relay":
+    case "mstrig_relay":
+      d.uso = usoDeTriggerstate(e.triggerstate);
+      d.probabilidad = num(e.random, 0);
+      break;
+    case "multi_manager":
+    case "mstrig_multi":
+      d.objetivos = objetivosDeManager(Object.entries(e));
+      d.alAzar = num(e.random, 0);
+      break;
+    case "trigger_changetarget":
+      d.objetivoNuevo = e.m_iszNewTarget ?? null;
+      break;
+    case "ms_npcscript":
+    case "mstrig_act":
+      // EL DIRECTOR DE ESCENAS DE LOS NPC (el 67). Un `scripted_sequence` de
+      // Half-Life, pero de Master Sword: coge al NPC que nombra su `target` y le
+      // hace moverse, poner una animación o **lanzar un evento de su guion**.
+      //
+      //     enum { SCRIPT_MOVE = 0, SCRIPT_PLAYANIM, SCRIPT_RUNEVENT,
+      //            SCRIPT_MOVE_PLAYANIM, SCRIPT_MOVE_RUNEVENT };
+      //                                            npcact.cpp:17-23
+      //
+      // Los 18 de Edana son sus misiones: el libro (`askbook`/`bookfound`), la
+      // sidra (`cider`..`cider4`), las pruebas del alcalde (`evidence_found`),
+      // el jabalí del viejo (`trig_boarsdead`, que es el `killtarget` del jefe)
+      // y Edrin con su flor. **15 de los 18 son del tipo 2**, el que sólo lanza
+      // un evento, y por eso ése es el que se porta entero.
+      d.tipo = num(e.type, 0);
+      // EL 77: el rumbo con el que acaba el NPC. `MoveThink` se lo copia al
+      // llegar (`pMonster->pev->angles = pev->angles`, npcact.cpp:249) y
+      // `PlayAnim` también (`:193`), así que es parte de la escena y no
+      // decoración de la entidad. Va aquí y no en el bloque común porque sólo
+      // esta clase lo usa para algo.
+      d.angulos = angulos;
+      // `target` ya va en `d.objetivo`, y aquí ES EL NPC, no una entidad a la
+      // que disparar. Se le pone nombre propio para que el bus no lo confunda
+      // con un objetivo de `FireTargets`: disparar al NPC sería otra cosa.
+      d.npc = e.target ?? null;
+      // Y `scriptevent` ya ocupa `d.evento`, que es otra cosa (FEB2010_23), así
+      // que el evento del NPC va aparte.
+      d.eventoDelNpc = e.eventname ?? null;
+      d.animDeAndar = e.moveanim ?? null;
+      d.animDeAccion = e.actionanim ?? null;
+      d.alAcabar = e.firewhendone ?? null;
+      d.alCortarse = e.fireonbreak ?? null;
+      d.retrasoAlAcabar = num(e.firedelay, 0);
+      // `m_fStopAI`: si para la IA mientras corre. Sin esto, `Act` se niega a
+      // empezar cuando el NPC tiene enemigo.
+      d.paraLaIa = Boolean(num(e.stopai, 0));
+      break;
+    case "ms_counter":
+    case "trigger_counter":
+      // `count` -> `m_cTriggersLeft` (triggers.cpp:688-691), y el DOS de
+      // repuesto lo pone el `Spawn`, no el mapa:
+      //
+      //     if (m_cTriggersLeft == 0) m_cTriggersLeft = 2;   triggers.cpp:1655
+      //
+      // Se resuelve aquí porque es el valor con el que nace la entidad. El de
+      // Edana trae `count 8`: los ocho parroquianos que hay que matar.
+      d.cuenta = num(e.count, 0) || 2;
+      break;
+    case "env_render":
+      d.renderfx = num(e.renderfx, 0);
+      d.renderamt = num(e.renderamt, 0);
+      d.rendermode = num(e.rendermode, 0);
+      d.rendercolor = (e.rendercolor ?? "0 0 0").trim().split(/\s+/).map(Number);
+      break;
+    case "trigger_teleport":
+      d.destinos = destinosDeTele(e.target ?? "");
+      break;
+    case "trigger_push":
+      // `if (pev->angles == g_vecZero) pev->angles.y = 360` ANTES de
+      // `SetMovedir` (triggers.cpp:2193-2194), y un yaw de 360 es un yaw de 0.
+      d.direccion = direccionDe(angulos.every((v) => v === 0) ? [0, 360, 0] : angulos);
+      d.velocidad = num(e.speed, 0) || 100;
+      break;
+    case "msarea_monsterspawn":
+    case "ms_monsterspawn":
+      d.reiniciarCuando = num(e.resetwhen, 0);
+      d.porDisparo = Boolean(num(e.spawntrigger, 0));
+      break;
+    case "func_door":
+    case "func_door_rotating":
+      // EL 70. Lo que el BUS necesita de una puerta, que es poco: cuánto tarda
+      // en abrirse, cuánto espera arriba y si vuelve sola. El recorrido, la
+      // dirección y la malla están en `interactivas.correderas` / `puertas`,
+      // porque son de dibujar y de chocar; esto es de disparar.
+      //
+      //   `CBaseDoor::Use` sólo hace algo si está ABAJO, o arriba con
+      //   `SF_DOOR_NO_AUTO_RETURN` — y entonces cierra (doors.cpp:549-553).
+      //   `DoorHitTop` y `DoorHitBottom` disparan su `target` al LLEGAR
+      //   (doors.cpp:680 y :715), no al arrancar. Por eso el almiar de la
+      //   cloaca no se lleva a sus tres hermanos hasta que la tapa termina.
+      d.espera = num(e.wait, 0);
+      d.velocidad = num(e.speed, 0) || 100;
+      d.sinRetorno = Boolean(num(e.spawnflags, 0) & 32);
+      d.empiezaAbierta = Boolean(num(e.spawnflags, 0) & 1);
+      // El tiempo que tarda, que para la deslizante sale del recorrido y para
+      // la rotatoria de los grados. Se calcula aquí y no en el bus porque el
+      // bus no conoce la geometría — y no se escribe a mano: es una cuenta.
+      if (e.classname === "func_door" && brush) {
+        const md = direccionDe(angulos);
+        const t = [0, 1, 2].map((j) => modelos[modelo].maxs[j] - modelos[modelo].mins[j]);
+        const rec = Math.abs(md[0] * (t[0] - 2)) + Math.abs(md[1] * (t[1] - 2)) +
+          Math.abs(md[2] * (t[2] - 2)) - num(e.lip, 0);
+        d.recorrido = rec;
+        d.duracion = Math.abs(rec) / d.velocidad;
+      } else if (e.classname === "func_door_rotating") {
+        d.recorrido = num(e.distance, 90);
+        d.duracion = Math.abs(d.recorrido) / d.velocidad;
+      }
+      break;
+    case "func_breakable":
+      // EL 69. `pev->health -= flDamage` (func_break.cpp:575): la vida SÍ se
+      // resta, al contrario que en el botón de abajo.
+      d.vida = num(e.health, 0);
+      d.material = num(e.material, 1);
+      // `explosion` NO es «explota»: `KeyValue` compara con las CADENAS
+      // "directed" y "random" y cualquier otra cosa cae en `expRandom`
+      // (func_break.cpp:78-87), que es además el valor por omisión. Y estallar
+      // depende de otra clave: `Explodable()` es `pev->impulse > 0`
+      // (func_break.h:66-67) y el impulso lo pone `explodemagnitude`. Los cinco
+      // de Gate City traen `explosion 1` y ningún `explodemagnitude`: **no
+      // explotan**. Se saca para poder decir que no hace nada.
+      d.explosionDirigida = String(e.explosion ?? "").toLowerCase() === "directed";
+      d.magnitud = num(e.explodemagnitude, 0);
+      // `spawnobject` está MUERTO en este mod: `KeyValue` tiene la asignación
+      // comentada y se lo pasa a `CBaseDelay::KeyValue` (func_break.cpp:115-121),
+      // que no conoce la clave. Así que `m_iszSpawnObject` es siempre nulo y la
+      // línea que lo usa en `Die` (func_break.cpp:827) no se ejecuta nunca.
+      // Ninguno de los dos mapas la trae; se saca para que se vea si aparece.
+      d.objetoAlRomperse = e.spawnobject ?? null;
+      break;
+    case "func_button":
+      // EL 69, Y `health` NO ES VIDA AQUÍ. `CBaseButton::TakeDamage`
+      // (buttons.cpp:439-466) no toca `pev->health` en ninguna de sus 28 líneas:
+      // sólo mira si puede responder y activa. `pev->health > 0` es lo único que
+      // hace que el botón acepte daño (`pev->takedamage = DAMAGE_YES`,
+      // buttons.cpp:531-534), o sea que es una BANDERA de «se puede golpear», y
+      // el botón de la manzana se abre con **un** golpe de cualquier tamaño
+      // teniendo `health 2`.
+      d.vida = num(e.health, 0);
+      // `if (m_flWait == 0) m_flWait = 1` (buttons.cpp:536). Y el −1 es lo que
+      // hace `m_fStayPushed = TRUE` (buttons.cpp:552): se queda pulsado, o sea
+      // que dispara UNA vez y no vuelve.
+      d.espera = num(e.wait, 0) || 1;
+      // `if (pev->speed == 0) pev->speed = 40` (buttons.cpp:528).
+      d.velocidad = num(e.speed, 0) || 40;
+      break;
+    case "msitem_spawn":
+      // EL 69, y `spawnstart` vuelve a significar LO CONTRARIO de lo que suena,
+      // igual que en los aparecedores de bichos del 68 y con la misma línea:
+      //
+      //     m_fSpawnOnTrigger = (atoi(pkvd->szValue)) ? true : false;
+      //                                                gispawn.cpp:94-98
+      //
+      // y `Spawn` sólo pone el `Think` que coloca el objeto **si NO está
+      // puesta** (gispawn.cpp:26-33). Los cuatro de Edana traen 1: ninguno sale
+      // solo.
+      d.porDisparo = Boolean(num(e.spawnstart, 0));
+      d.guion = e.scriptfile ?? null;
+      // `container`: en vez de en el suelo, dentro de la mochila del objeto que
+      // se llame así (gispawn.cpp:64-83). Ninguno de los dos mapas lo usa.
+      d.contenedor = e.container ?? null;
+      // `duration` NO LA LEE NADIE. `CBaseGISpawn::KeyValue` conoce tres claves
+      // —`scriptfile`, `container` y `spawnstart`— y lo demás va a
+      // `CBaseEntity::KeyValue` (gispawn.cpp:84-104), que sólo asigna campos de
+      // `entvars_t`, y `duration` no es uno. Dos de los cuatro de Edana la
+      // traen (90 000 y 60) y en el juego original tampoco hacían nada. Se saca
+      // para poder decirlo en vez de suponerlo.
+      d.duracionIgnorada = e.duration ?? null;
+      // EL 71: el objeto hereda también los ÁNGULOS del aparecedor
+      // (`pItem->pev->angles = pev->angles`, gispawn.cpp:57), y los va a
+      // perder casi enteros en cuanto toque el suelo —`FallThink` pone a cero
+      // el cabeceo y el alabeo (genericitem.cpp:1403-1404)— pero el rumbo se
+      // queda. Los cuatro de Edana traen `0 0 0`; se saca igual, porque un
+      // valor por omisión escrito en el que dibuja es un sitio donde el día que
+      // un mapa gire un objeto no se entera nadie.
+      d.angulos = (e.angles ?? "0 0 0").trim().split(/\s+/).map(Number);
+      break;
+    default: break;
+  }
+  // LA CAJA de lo que se rompe y se pulsa (el 69), que hace falta para saber
+  // DÓNDE está. Su `origin` no sirve: un brush no lo trae, así que `escena` sale
+  // el cero del mapa — y un botón en el cero es un botón que nadie encuentra.
+  if (brush && (ROMPIBLES.has(e.classname) || e.classname === "func_button")) {
+    d.caja = cajaDeModelo(modelos[modelo], o);
+  }
+  // Los volúmenes que se TOCAN: con el casco del jugador, como el 48.
+  if (brush && TOCABLES.has(e.classname)) {
+    const r = piezasEnEscena(bsp, modelo, { hull: 1, origin: o, contenidos: (c) => c === SOLIDO });
+    const r3 = piezasEnEscena(bsp, modelo, { hull: 3, origin: o, contenidos: (c) => c === SOLIDO });
+    d.caja = cajaDeModelo({
+      mins: modelos[modelo].mins.map((v, j) => v - CLIP_MAXS[1][j]),
+      maxs: modelos[modelo].maxs.map((v, j) => v - CLIP_MINS[1][j]),
+    }, origen(e));
+    const voltea = (ps) => ps.map((p) => ({ n: [-p.n[0], -p.n[1], -p.n[2]], d: -p.dist }));
+    d.piezas = r.piezas.map(voltea);
+    d.piezasAgachado = r3.piezas.map(voltea);
+  }
+  return d;
+});
+
+
+// EL INFORME DEL CABLEADO, y lo que de verdad importa de él es la última
+// línea: **a cuántos nombres citados no responde nadie**. Un `target` que no
+// existe no da error en el motor —`FireTargets` recorre cero entidades— así que
+// es el fallo de lectura que se vería igual que «funciona».
+{
+  const nombres = new Map();
+  for (const d of disparadores) if (d.nombre) nombres.set(d.nombre, (nombres.get(d.nombre) ?? 0) + 1);
+  const citados = new Set();
+  for (const d of disparadores) {
+    if (d.objetivo) citados.add(d.objetivo);
+    if (d.matar) citados.add(d.matar);
+    for (const o of d.objetivos ?? []) citados.add(o.nombre);
+  }
+  // Los nombres que existen en el mapa entero, no sólo entre los disparadores:
+  // un `target` puede apuntar a un `env_model` o a un monstruo.
+  const todosLosNombres = new Set(entidades.map((e) => e.targetname).filter(Boolean));
+  const huerfanos = [...citados].filter((t) => !todosLosNombres.has(t));
+  const porClase = new Map();
+  for (const d of disparadores) porClase.set(d.clase, (porClase.get(d.clase) ?? 0) + 1);
+  const tocables = disparadores.filter((d) => d.piezas);
+  console.log(`\n  cableado        ${disparadores.length} entidades con nombre u objetivo, ` +
+    `${nombres.size} nombres distintos, ${citados.size} citados`);
+  console.log(`    por clase     ${[...porClase].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${c}`).join(", ")}`);
+  console.log(`    se tocan      ${tocables.length} con volumen ` +
+    `(${tocables.reduce((a, d) => a + d.piezas.length, 0)} brushes de pie)`);
+  const repes = [...nombres].filter(([, n]) => n > 1);
+  console.log(`    nombres repetidos ${repes.length}` +
+    (repes.length ? `: ${repes.map(([n, c]) => `${n}×${c}`).join(", ")} — FireTargets los usa a TODOS` : ""));
+  console.log(`    sin destinatario ${huerfanos.length}${huerfanos.length ? `: ${huerfanos.join(", ")}` : ""}`);
+}
 
 // EL AMBIENTE, que no es un volumen sino un PUNTO.
 //
@@ -838,6 +1566,207 @@ const ambiente = entidades
     sinAtenuar: Boolean(num(e.spawnflags, 0) & 1),
   }));
 
+// ── EL 82: LAS TRES CLASES QUE EDANA CONTABA Y NADIE LEÍA ──────────────────
+//
+// Las tres son entidades de PUNTO y las tres estaban contadas desde el 67 sin
+// hornearse. Gate City tiene **cero de las tres**, y eso es justo la trampa del
+// 50: con un mapa el valor correcto y el valor de reposo son la misma lista
+// vacía. Por eso se hornean leyendo `entidades`, que es el `.bsp` crudo, y por
+// eso las cuentas de abajo se imprimen SIEMPRE, también cuando son cero: un
+// cero dicho es un dato, un cero callado es el sitio donde vive una regla
+// muerta (el 69).
+
+// LA REVERBERACIÓN: `env_sound`, 333 en 29 mapas, 11 en Edana.
+//
+// No emite ningún sonido: le pone al JUGADOR su `room_type`, que es el preset
+// del DSP del motor. Las dos claves son todo lo que el motor lee de la entidad
+// (`CEnvSound::KeyValue`, sound.cpp:879-891, las dos con `atof`), y el resto de
+// la regla —quién gana cuando dos alcanzan al jugador— es de
+// `src/play/reverberacion.js`, que la cita línea a línea.
+//
+// `roomtype` puede FALTAR: 56 de los 333 no la traen, y el valor de reposo de
+// un `float` sin inicializar en el motor es el 0 del `pev` recién puesto a
+// cero, o sea el preset «off». Dos de los once de Edana están así, y eso **no
+// es un descuido del mapeador**: es cómo se apaga la reverberación de una zona
+// metiendo un `env_sound` sin tipo dentro de otro más grande.
+const reverberacion = entidades
+  .filter((e) => e.classname === "env_sound")
+  .map((e) => ({
+    unidades: origen(e) ?? [0, 0, 0],
+    donde: aEscena(origen(e) ?? [0, 0, 0]),
+    // `m_flRadius`, en unidades. Se guardan las dos porque la regla compara en
+    // unidades (es una longitud de traza del motor) y el dibujo va en metros.
+    radio: num(e.radius, 0),
+    radioEnMetros: num(e.radius, 0) / U,
+    tipo: num(e.roomtype, 0),
+    // Que la clave viniera o no, dicho y no deducido del cero: si no se
+    // distingue, un mapa sin `roomtype` y un mapa con `roomtype 0` son la
+    // misma cosa y no se puede medir que se leyó.
+    declaraTipo: e.roomtype !== undefined,
+  }));
+
+// LAS COLUMNAS DE HUMO: `env_beam`, 83 en 20 mapas, 2 en Edana.
+//
+// Un haz entre DOS entidades que se nombran por `LightningStart` y
+// `LightningEnd`:
+//
+//     edict_t *pStart = FIND_ENTITY_BY_TARGETNAME(NULL, STRING(m_iszStartEntity));
+//     edict_t *pEnd   = FIND_ENTITY_BY_TARGETNAME(NULL, STRING(m_iszEndEntity));
+//     ...
+//     if (beamType == BEAM_POINTS || ...) { SetStartPos(pStart->v.origin);
+//                                           SetEndPos(pEnd->v.origin); }
+//                                            effects.cpp:850-887
+//
+// Y AQUÍ ESTABA EL RIESGO, que se comprobó ANTES de escribir el bucle: las dos
+// puntas son `info_target`, y un `info_target` **no es un adorno**. Si se
+// buscaran en la lista de adornos horneados no se encontraría ninguna, porque
+// los adornos se hornean casi todos sin nombre —el fallo del `env_render` del
+// 69, 0 de 46— y el bucle recorrería cero elementos sin decir nada. Se
+// resuelven contra `entidades`, el `.bsp` crudo, igual que `destinosDeTele`.
+// Los cuatro `info_target` de Edana (`smoke1a`/`smoke1b`/`smoke2a`/`smoke2b`)
+// traen su `targetname` ahí, y por eso esto puede existir.
+//
+// `life 0` no es «dura cero»: es lo que hace que el haz sea PERMANENTE.
+//
+//     inline BOOL ServerSide(void) {
+//       if (m_life == 0 && !(pev->spawnflags & SF_BEAM_RING)) return TRUE;
+//       return FALSE; }                       effects.cpp:365-370
+//
+// Un haz `ServerSide` se monta una vez en `Activate` y se queda; el otro es el
+// del rayo que golpea cada `m_restrike`. **Las dos de Edana no traen `life`**,
+// o sea que son de las permanentes, que es lo que hace de ellas una columna de
+// humo quieta y no un relámpago.
+const SF_BEAM = { ARRANCA_ENCENDIDO: 1, CONMUTA: 2, AL_AZAR: 4, ANILLO: 8, ENTRA: 0x80, SALE: 0x100 };
+const puntaDeHaz = (nombre) => {
+  const e = entidades.find((x) => x.targetname === nombre && origen(x));
+  return e ? { nombre, unidades: origen(e), donde: aEscena(origen(e)), clase: e.classname } : null;
+};
+const haces = entidades
+  .filter((e) => e.classname === "env_beam" || e.classname === "env_lightning")
+  .map((e) => {
+    const banderas = num(e.spawnflags, 0);
+    const vida = num(e.life, 0);
+    return {
+      objetivo: e.targetname ?? null,
+      unidades: origen(e) ?? [0, 0, 0],
+      inicio: puntaDeHaz(e.LightningStart ?? ""),
+      fin: puntaDeHaz(e.LightningEnd ?? ""),
+      // `SetTexture(m_spriteTexture)`: el `.spr` con el que se pinta. El de las
+      // dos de Edana es `sprites/smoke.spr`.
+      sprite: e.texture ?? null,
+      // ── EL ANCHO VA EN DÉCIMAS, Y LA DÉCIMA NO ESTÁ EN NINGÚN `.cpp` ───
+      //
+      // Esto decía «el motor lo guarda en décimas (`m_boltWidth = atoi * 0.1`)»
+      // y **era falso**: `KeyValue` hace `m_boltWidth = atoi(szValue)` a pelo
+      // (effects.cpp:511) y `SetWidth` lo copia tal cual —
+      // `inline void SetWidth(int width) { pev->scale = width; }`,
+      // effects.h:133—. Buscar el 0,1 en el C++ no lo encuentra, porque no está
+      // ahí: está en un **asset del juego**.
+      //
+      //     custom_entity_state_t gamedll Custom_Encode
+      //     {
+      //       ...
+      //       DEFINE_DELTA_POST( scale, DT_FLOAT, 8, 1.0, 0.1 ),
+      //                                      assets/msr/delta.lst:219-231
+      //
+      // `custom_entity_state_t` es el bloque de delta de las entidades
+      // personalizadas, que es lo que ES un haz (`pev->flags |= FL_CUSTOMENTITY`,
+      // effects.cpp:858, y el cliente lo coge por `ET_BEAM`). O sea que el
+      // `scale` viaja en **8 bits con posmultiplicador 0,1**, y lo que el
+      // dibujante recibe (`ent->curstate.scale`, gl_beams.c:1195) es la décima
+      // parte de lo que escribió el mapeador.
+      //
+      // **Y el dato lo confirma:** las dos de Edana traen `BoltWidth 255`, que
+      // es exactamente el máximo de un campo de 8 bits. Con la lectura literal
+      // el medio ancho serían 255 unidades —una columna de humo de trece metros
+      // de ancha y cuatro y medio de alta—; con la décima son 25,5, o sea metro
+      // y pico. *El número redondo del mapa era la pista de cuántos bits tiene
+      // el campo.*
+      //
+      // Se hornea el valor CRUDO y la décima la aplica quien dibuja, que es
+      // donde el motor la aplica.
+      ancho: num(e.BoltWidth, 0),
+      ruido: num(e.NoiseAmplitude, 0),
+      // `pev->renderamt` es el brillo 0..255 y `rendercolor` el tinte.
+      brillo: num(e.renderamt, 0),
+      color: (e.rendercolor ?? "255 255 255").trim().split(/\s+/).map(Number),
+      // `SetScrollRate(m_speed)`: a qué velocidad corre la textura por el haz.
+      // Es lo que hace que el humo SUBA sin que el haz se mueva.
+      desplazamiento: num(e.TextureScroll, 0),
+      fotogramas: num(e.framerate, 0),
+      fotogramaInicial: num(e.framestart, 0),
+      vida,
+      // La palabra del motor, no una nuestra: `ServerSide()`.
+      permanente: vida === 0 && !(banderas & SF_BEAM.ANILLO),
+      recarga: num(e.StrikeTime, 0),
+      dano: num(e.damage, 0),
+      banderas,
+      arrancaEncendido: Boolean(banderas & SF_BEAM.ARRANCA_ENCENDIDO),
+      // `BEAM_FSHADEIN`/`BEAM_FSHADEOUT`, effects.cpp:902-905: el haz se
+      // desvanece por un extremo. Las dos de Edana traen `ENTRA` (129 = 1|128),
+      // y es lo que hace que el humo se deshaga arriba en vez de cortarse.
+      fundeEntrando: Boolean(banderas & SF_BEAM.ENTRA),
+      fundeSaliendo: Boolean(banderas & SF_BEAM.SALE),
+    };
+  });
+
+// EL PREGONERO: `speaker`, **1 en los 93 mapas** y está en Edana.
+//
+// `message` no es un `.wav`: es el nombre de un GRUPO de frases de
+// `sound/sentences.txt`, y el motor saca una al azar del grupo:
+//
+//     if (szSoundFile[0] == '!') { ...una sola, y se apaga... }
+//     else { if (SENTENCEG_PlayRndSz(ENT(pev), szSoundFile, flvolume,
+//                                    flattenuation, flags, pitch) < 0) ... }
+//                                            sound.cpp:1884-1899
+//
+// El volumen sale de `health`, que no es vida: `float flvolume = pev->health *
+// 0.1` (:1827). El de Edana trae `health 5`, o sea medio volumen, y
+// `message "WILD"`, que son las 19 frases de ambiente de campo abierto del
+// `sentences.txt` del mod —codornices, abejas, halcones, viento y un chochín—.
+//
+// Los tiempos son dos y los dos al azar: la primera a `RANDOM_FLOAT(5, 15)`
+// segundos de nacer (:1821) y las demás cada `RANDOM_FLOAT(0.25*60, 2.25*60)`
+// (:1901), o sea entre 15 segundos y dos minutos y cuarto.
+const SPEAKER_START_SILENT = 1;                             // util.h:437
+const pregoneros = entidades
+  .filter((e) => e.classname === "speaker")
+  .map((e) => ({
+    objetivo: e.targetname ?? null,
+    unidades: origen(e) ?? [0, 0, 0],
+    donde: aEscena(origen(e) ?? [0, 0, 0]),
+    grupo: e.message ?? null,
+    // Una sola frase, no un grupo, si empieza por `!`. Ninguno del juego lo
+    // hace —hay uno— pero la rama existe en el motor y se dice cuál se tomó.
+    unaSola: String(e.message ?? "").startsWith("!"),
+    volumen: num(e.health, 0) * 0.1,
+    atenuacion: 0.3,                                        // sound.cpp:1828
+    tono: 100,                                              // sound.cpp:1830
+    empiezaCallado: Boolean(num(e.spawnflags, 0) & SPEAKER_START_SILENT),
+  }));
+
+console.log(
+  `  punto y oído    ${ambiente.length} ambient_generic, ${reverberacion.length} env_sound, ` +
+  `${haces.length} env_beam, ${pregoneros.length} speaker`
+);
+if (reverberacion.length) {
+  const tipos = [...new Set(reverberacion.map((r) => r.tipo))].sort((a, b) => a - b);
+  console.log(`    env_sound     tipos ${tipos.join(", ")}` +
+    ` · ${reverberacion.filter((r) => !r.declaraTipo).length} sin declarar tipo`);
+}
+// Las dos puntas de cada haz, DICHAS. Un haz al que le falta una punta no se
+// puede dibujar, y callarlo es el bucle que recorre cero del 69.
+for (const h of haces) {
+  const falta = [!h.inicio && "inicio", !h.fin && "fin"].filter(Boolean);
+  console.log(`    env_beam      ${h.objetivo ?? "(sin nombre)"} ${h.sprite ?? "(sin sprite)"}` +
+    ` ${h.permanente ? "permanente" : `rayo cada ${h.recarga} s`}` +
+    (falta.length ? `  ¡SIN ${falta.join(" ni ")}!` : ` ${h.inicio.nombre}→${h.fin.nombre}`));
+}
+for (const p of pregoneros) {
+  console.log(`    speaker       grupo ${p.grupo} a ${p.volumen.toFixed(1)} de volumen` +
+    `${p.empiezaCallado ? ", empieza callado" : ""}`);
+}
+
 console.log(
   `  se comportan    ${puertas.length} puertas (${puertas.reduce((a, p) => a + p.triangulos, 0)} tri), ` +
   `${agua.length} de agua, ${escaleras.length} escaleras, ${dano.length} de daño, ${zonas.length} zonas`
@@ -851,12 +1780,38 @@ console.log(
 // Se mide muestreando: cuántos puntos de la caja están de verdad dentro del
 // poliedro. Para una caja daría el 100 %; el estanque grande da bastante menos,
 // y ese resto es el agua que habríamos inventado en la orilla.
+//
+// **EL DADO VA CON SEMILLA, y eso lo destapó el 47.** Estaba con `Math.random`
+// suelto, así que dos horneados del mismo `.bsp` daban `llenaLaCaja` 0.808 y
+// 0.804 — y con ellos dos `malla.json` distintos. Lo encontré comparando el
+// archivo de antes y el de después de parametrizar el extractor, para
+// comprobar que el refactor no había cambiado nada: **no se podía comprobar**,
+// porque el ruido del muestreo tapaba cualquier cambio de verdad.
+//
+// Es el fallo del experimento 28 otra vez —un `Math.random` sin inyectar donde
+// dos partes tienen que ver lo mismo—, aquí entre dos extracciones en vez de
+// entre dos jugadores. Un generador de una línea basta: lo que se quiere es
+// que la estimación sea la misma, no que sea imprevisible.
+/** `mulberry32`: un generador de 32 bits, determinista y suficiente para esto. */
+function dadoDe(semilla) {
+  let a = semilla >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function cuantoSobra(v, n = 20000) {
-  if (!v.planos) return null;
+  if (!v.piezas?.length) return null;
+  // La semilla es fija: la misma caja da siempre la misma estimación.
+  const azar = dadoDe(0x5eed);
+  const enPieza = (ps, p) => ps.every((q) => q.n[0] * p[0] + q.n[1] * p[1] + q.n[2] * p[2] - q.d <= 0.01);
   let dentro = 0;
   for (let i = 0; i < n; i++) {
-    const p = [0, 1, 2].map((k) => v.caja.min[k] + Math.random() * (v.caja.max[k] - v.caja.min[k]));
-    if (v.planos.every((q) => q.n[0] * p[0] + q.n[1] * p[1] + q.n[2] * p[2] - q.d <= 0.01)) dentro++;
+    const p = [0, 1, 2].map((k) => v.caja.min[k] + azar() * (v.caja.max[k] - v.caja.min[k]));
+    if (v.piezas.some((ps) => enPieza(ps, p))) dentro++;
   }
   return dentro / n;
 }
@@ -866,20 +1821,23 @@ for (const a of agua) {
   a.llenaLaCaja = f === null ? null : Number(f.toFixed(3));
   console.log(
     `    agua          ${t} m, contenido ${a.contenido}, oleaje ${a.oleaje} · ` +
-    `${a.planos.length} planos, llena el ${(f * 100).toFixed(0)} % de su caja`
+    `${a.piezas.length} ${a.piezas.length === 1 ? "brush" : "brushes"}, ` +
+    `${a.piezas.reduce((s, ps) => s + ps.length, 0)} planos, llena el ${(f * 100).toFixed(0)} % de su caja`
   );
 }
 for (const e of escaleras) {
   const t = e.caja.max.map((v, k) => (v - e.caja.min[k]).toFixed(2)).join(" × ");
-  console.log(`    escalera      ${t} m · sin caras (invisible), manda la caja`);
+  const f = cuantoSobra(e);
+  console.log(`    escalera      ${t} m · ${e.piezas.length} brushes del árbol ` +
+    `(sin caras: el compilador se las comió), llena el ${(f * 100).toFixed(0)} % de su caja`);
 }
 
-// EL CONTROL: que usar los planos en vez de la caja cambie algo de verdad.
+// EL CONTROL: que usar las piezas en vez de la caja cambie algo de verdad.
 //
 // Si todos los volúmenes llenaran su caja, los planos serían trabajo para nada
 // y bastaría la envolvente. El estanque grande dice que no.
 {
-  const conPlanos = agua.filter((a) => a.planos);
+  const conPlanos = agua.filter((a) => a.piezas?.length);
   const peor = Math.min(...conPlanos.map((a) => a.llenaLaCaja));
   if (!(peor < 0.9)) {
     console.error(
@@ -891,6 +1849,43 @@ for (const e of escaleras) {
   console.log(
     `    los planos    hacen falta: el peor volumen llena el ${(peor * 100).toFixed(0)} % de su caja, ` +
     `o sea que con la envolvente el ${((1 - peor) * 100).toFixed(0)} % sería agua inventada`
+  );
+}
+
+// LO QUE EL 48 CORRIGIÓ, medido: los volúmenes INVISIBLES.
+//
+// Hasta el 48 éstos se contestaban con la caja, porque sus planos se sacaban de
+// las caras y el compilador se las come. La cifra de abajo es cuánto de esa
+// caja no es el volumen: daño que se cobraba fuera del `trigger_hurt`, música
+// que sonaba fuera de su zona. No se ve, y por eso hay que contarlo.
+{
+  const todos = [...agua, ...escaleras, ...dano, ...zonas];
+  const varios = todos.filter((v) => v.piezas.length > 1);
+  const conHueco = todos
+    .map((v) => ({ v, f: cuantoSobra(v) }))
+    .filter((x) => x.f !== null && x.f < 0.99)
+    .sort((a, b) => a.f - b.f);
+  console.log(
+    `    piezas        ${todos.length} volúmenes, ${todos.reduce((s, v) => s + v.piezas.length, 0)} brushes; ` +
+    `${varios.length} tienen más de uno (el mayor, ${Math.max(...todos.map((v) => v.piezas.length))})`
+  );
+  // EL CONTROL DEL SIGNO, que es el fallo más barato de cometer aquí: los
+  // planos del árbol miran hacia DENTRO y los que espera `volumenes.js` hacia
+  // fuera. Voltearlos mal no da error, da el volumen del revés —todo el mapa
+  // menos el charco— y en pantalla es agua que no moja y música que suena en
+  // todas partes. Con el signo cambiado, TODOS los volúmenes salen vacíos.
+  const vacios = todos.filter((v) => cuantoSobra(v) === 0).length;
+  if (vacios > todos.length / 2) {
+    console.error(`  FALLO: ${vacios} de ${todos.length} volúmenes no contienen ni uno de los ` +
+      `20 000 puntos de su propia caja. Eso es tener los planos del revés.`);
+    process.exit(1);
+  }
+  console.log(
+    `    no son su caja ${conHueco.length} de ${todos.length}` +
+    (conHueco.length
+      ? `; el peor llena el ${(conHueco[0].f * 100).toFixed(0)} % ` +
+        `(${conHueco[0].v.clase ?? "agua/escalera/daño"}, modelo *${conHueco[0].v.modelo})`
+      : "")
   );
 }
 
@@ -957,8 +1952,15 @@ console.log(`  luces           ${luces.length}`);
 // Existe porque quien lo anduvo dijo «el lugar de inicio está fuera de los
 // interiores», y tenía razón a medias: Gate City deja 40 m de cueva entre la
 // llegada y la primera casa, a propósito. Lo que faltaba era poder IR a mirarlas.
+// EL CIELO NO ES UN SUELO, y mira hacia arriba igual que uno (experimento 78).
+// La cara de abajo de la caja de cielo cumple `normal[2] > 0.7` y es de las más
+// grandes del mapa, así que encabezaba esta lista ordenada por área. Encima de
+// ella está el propio brush de cielo —sólido— y debajo está el mundo —hueco—:
+// **contesta justo al revés que un suelo**. Se filtra por nombre de textura,
+// que es como lo identifica ya `tools/gatecity_shot.mjs:145`.
 const suelosDelMundo = caras
-  .filter((c) => c.modelo === 0 && c.normal[2] > 0.7)
+  .filter((c) => c.modelo === 0 && c.normal[2] > 0.7 &&
+    (texturas[c.miptex]?.nombre ?? "").toLowerCase() !== "sky")
   .sort((a, b) => b.area - a.area);
 const pueblos = entidades
   .filter((e) => e.classname === "msarea_town" && /^\*\d+$/.test(e.model ?? ""))
@@ -991,30 +1993,78 @@ const pueblos = entidades
 const alPueblo = pueblos.length
   ? Math.min(...pueblos.map((p) => Math.hypot(p.pies[0] - entrada[0], p.pies[1] - entrada[1]) / U))
   : null;
-// El control del árbol, que sin él esto no dice nada: un punto claramente fuera
-// del mapa tiene que salir SÓLIDO, y un palmo por encima de una cara de suelo,
-// VACÍO. Sale 182 de 200 en lo segundo: las 18 que fallan son caras de suelo que
-// miran a un hueco cerrado, y el umbral está puesto donde discrimina.
+// EL CONTROL DEL ÁRBOL, que sin él nada de lo de arriba dice nada.
+//
+// Tres preguntas cuya respuesta se sabe de antemano: fuera del mapa tiene que
+// salir SÓLIDO, un palmo por ENCIMA de una cara de suelo VACÍO, y un palmo por
+// DEBAJO otra vez SÓLIDO.
+//
+// La tercera es del 48 y es la que faltaba. Antes sólo se pedía «encima sale
+// vacío al menos 150 de 200 veces», y eso es dos cosas malas a la vez: es un
+// número afinado sobre Gate City —que da 182— y **no distingue un árbol que
+// funciona de un árbol que contesta VACÍO a todo**. Edana da 141 y paraba el
+// horneado; mirando por qué se ve que no es peor lectura sino otro mapa:
+// tiene sótanos y alcantarillas, y muchas caras de suelo miran a un hueco
+// cerrado. Bajar el 150 habría sido tapar el agujero del control con el
+// síntoma; lo que hay que exigir es que las dos preguntas se contesten
+// DISTINTO, y eso no depende del mapa.
+//
+// ── CORRECCIÓN DEL 78: el umbral estaba bien y LA MUESTRA estaba mal ────────
+//
+// Lo de arriba sigue siendo cierto y no era suficiente. La muestra eran **las
+// 200 caras de suelo más grandes**, y la más grande de un mapa al aire libre
+// es el cielo, que contesta al revés (ver `suelosDelMundo`). De once mapas
+// medidos, SEIS fallaban este control con el árbol leyendo perfectamente:
+// gertenheld_forest2 daba −19 y paraba el horneado, hemlock −2, deralia 7,
+// helena 14, thornlands_north 22, old_helena 28. Y **Edana pasaba por un
+// punto**: 51 con las 200 mayores, 84 con todas.
+//
+// Dos cambios, y hacen falta los dos:
+//
+//   1. el cielo sale de `suelosDelMundo`, porque no es un suelo;
+//   2. **no se muestrea**. Preguntar sólo por las mayores era elegir las caras
+//      menos representativas que hay; el árbol se recorre entero, que son unos
+//      miles de preguntas y no se nota. Así la muestra deja de ser un número
+//      afinado sobre un mapa, que es el mismo fallo que el 48 arregló en el
+//      umbral y dejó aquí al lado.
+//
+// Con los dos: 61 (gatecity), 84 (edana), 94 (gertenheld_forest2), y el peor
+// de los once es 61.
 {
   const fuera = contenidoEn(bsp, [modelos[0].maxs[0] + 500, modelos[0].maxs[1] + 500, modelos[0].maxs[2] + 500]);
-  const encima = suelosDelMundo.slice(0, 200)
-    .filter((c) => { const t = centroDeCara(c); return sePuedeEstar(bsp, [t[0], t[1], t[2] + 24]); }).length;
+  const muestra = suelosDelMundo.map(centroDeCara);
+  const n = muestra.length;
+  const encima = muestra.filter((t) => sePuedeEstar(bsp, [t[0], t[1], t[2] + 24])).length;
+  const debajo = muestra.filter((t) => sePuedeEstar(bsp, [t[0], t[1], t[2] - 24])).length;
+  const separa = (encima - debajo) / n;
   console.log(`  árbol BSP       ${bsp.lumps.nodos.len / 24} nodos, ${bsp.lumps.hojas.len / 28} hojas`);
-  console.log(`    control       fuera del mapa -> ${fuera.nombre}; encima de las 200 caras de suelo mayores -> ${encima}/200 vacío`);
-  if (fuera.vacio || encima < 150) {
-    console.error(`    FALLO: el recorrido del árbol no discrimina.`);
+  console.log(`    control       fuera del mapa -> ${fuera.nombre}; de ${n} caras de suelo, ` +
+    `${encima} tienen hueco encima y ${debajo} debajo -> separa ${(separa * 100).toFixed(0)} puntos`);
+  if (fuera.vacio || separa < 0.5) {
+    console.error(`    FALLO: el recorrido del árbol no discrimina. Un árbol que contesta lo mismo ` +
+      `encima y debajo de un suelo no está leyendo el árbol.`);
     process.exit(1);
   }
 }
-console.log(`  pueblos         ${pueblos.length} de 8 con un suelo donde estar; el más cercano a la llegada, a ${alPueblo?.toFixed(0)} m`);
-console.log(`                  el mayor: ${pueblos[0].area.toFixed(0)} m² de caja, ${pueblos[0].suelo.toFixed(0)} m² de suelo en ${pueblos[0].suelos} caras`);
+// Los `msarea_town` son de Gate City: Edana no tiene ni uno, y eso no es un
+// fallo del extractor. Se dice el denominador que trae el mapa en vez del 8 de
+// Gate City, y con cero no se inventa un «el mayor».
+{
+  const hay = entidades.filter((e) => e.classname === "msarea_town" && /^\*\d+$/.test(e.model ?? "")).length;
+  console.log(`  pueblos         ${pueblos.length} de ${hay} msarea_town con un suelo donde estar` +
+    (alPueblo === null ? "" : `; el más cercano a la llegada, a ${alPueblo.toFixed(0)} m`));
+  if (pueblos.length) {
+    console.log(`                  el mayor: ${pueblos[0].area.toFixed(0)} m² de caja, ` +
+      `${pueblos[0].suelo.toFixed(0)} m² de suelo en ${pueblos[0].suelos} caras`);
+  }
+}
 
 // --- los carteles: las antorchas ---------------------------------------------
 //
 // `env_sprite` apunta a un `.spr` que NO está dentro del `.bsp`, pero SÍ está al
 // lado, en `../MSC/assets/msr/sprites/`. Así que se aplica la misma regla que al
 // mapa: **se escribe el lector, no se copia el contenido** — el lector vale para
-// cualquier `.spr` de GoldSrc y lo extraído va a `build/gatecity/spr/`.
+// cualquier `.spr` de GoldSrc y lo extraído va a `build/<mapa>/spr/`.
 //
 // Y esto es lo que contesta a «el mapa original emitía luces desde antorchas».
 // La luz ya estaba —`pi_lantern` tiene el mapa de luz a 181 sobre 255 de mediana
@@ -1118,6 +2168,74 @@ for (const [m, porque] of spritesSustituidos) {
 }
 if (spritesQueFaltan.size) {
   console.log(`    FALTAN        ${[...spritesQueFaltan].join(", ")} — no están en ${RAIZ_ASSETS}`);
+}
+
+// --- EL 82: EL SPRITE DE UN `env_beam`, QUE ES DE HALF-LIFE ------------------
+//
+// El haz no se pinta con un modelo sino con un `.spr` estirado entre sus dos
+// puntas, y el nombre lo trae la clave `texture` y no `model`: por eso el bucle
+// de arriba, que mira `env_sprite`/`env_glow`, no lo veía.
+//
+// **Y AQUÍ VUELVE EL AVISO DE LAS DOS BUILDS, por segunda vez en el mismo
+// experimento.** Las dos columnas de humo de Edana piden `sprites/smoke.spr`, y
+// en `assets/msr/sprites/` **no está**: hay un `bigsmoke.spr`, que es otro. La
+// conclusión fácil —«el mod no trae el sprite del humo»— es la equivocada:
+// `smoke.spr` es de Half-Life y vive en `valve/sprites/`, que el motor monta
+// detrás siempre. Medido aquí: 32×64, **5 cuadros y mezcla ADITIVA**, que es
+// exactamente lo que hace falta para una columna de humo.
+//
+// Así que se busca en los dos sitios y en el orden de GoldSrc —primero el mod,
+// después `valve/`—, igual que `traer()` en `tools/sonido.mjs` y que el bloque
+// de `tools/efectos.mjs`. Y si no está, se dice CUÁL falta y DE DÓNDE sale, no
+// un «falta un sprite»: lo que distingue un hueco del puerto de un fichero que
+// esta instalación no trae es poder leer la frase.
+const HL_PEDIDA = process.env.HALFLIFE;
+const HL_CANDIDATOS = HL_PEDIDA === "none" ? []
+  : HL_PEDIDA ? [HL_PEDIDA]
+  : ["C:/Juegos/Steam/steamapps/common/Half-Life",
+     "C:/Program Files (x86)/Steam/steamapps/common/Half-Life"];
+const VALVE_SPR = HL_CANDIDATOS.map((d) => `${d}/valve/`).find((d) => existsSync(`${d}sprites`)) ?? null;
+
+const spritesDeHaz = new Map();
+for (const h of haces) {
+  if (!h.sprite) continue;
+  if (!spritesDeHaz.has(h.sprite)) {
+    const enMod = RAIZ_ASSETS + h.sprite;
+    const enValve = VALVE_SPR ? VALVE_SPR + h.sprite : null;
+    const ruta = existsSync(enMod) ? enMod : (enValve && existsSync(enValve) ? enValve : null);
+    if (!ruta) {
+      spritesDeHaz.set(h.sprite, null);
+      console.log(`    HAZ SIN SPRITE ${h.sprite}: no está en ${RAIZ_ASSETS}sprites/ ni en valve/sprites/`);
+      console.log(`                  es de Half-Life. Para traerlo: HALFLIFE=<raíz> npm run mapa`);
+    } else {
+      const spr = leerSpr(ruta);
+      if (!spr.cuadra) {
+        console.error(`    FALLO: ${h.sprite} no cuadra: acaba en ${spr.fin} de ${spr.bytes} bytes`);
+        process.exit(1);
+      }
+      const tira = tiraDeSpr(spr);
+      // Por la rampa de textura, como los carteles: el `.spr` trae su paleta en
+      // el espacio del motor y saltarse la rampa deja el humo gris plano.
+      for (let i = 0; i < tira.rgba.length; i += 4) {
+        tira.rgba[i] = RAMPA_TEX[tira.rgba[i]];
+        tira.rgba[i + 1] = RAMPA_TEX[tira.rgba[i + 1]];
+        tira.rgba[i + 2] = RAMPA_TEX[tira.rgba[i + 2]];
+      }
+      const archivo = `spr/${h.sprite.replace(/^.*[\\/]/, "").replace(/\.spr$/i, "")}.png`;
+      escribirPng(`${SALIDA}/${archivo}`, tira.rgba, tira.ancho, tira.alto);
+      spritesDeHaz.set(h.sprite, {
+        archivo, cuadros: tira.cuadros,
+        anchoCuadro: tira.anchoCuadro, altoCuadro: tira.altoCuadro,
+        mezcla: spr.mezcla, deValve: ruta === enValve,
+      });
+    }
+  }
+  h.textura = spritesDeHaz.get(h.sprite);
+}
+if (haces.length) {
+  for (const [n, s] of spritesDeHaz) {
+    console.log(`    haz           ${n.padEnd(22)} ${s ? `${s.anchoCuadro}×${s.altoCuadro}, ${s.cuadros} cuadros, ${s.mezcla}${s.deValve ? " — DE HALF-LIFE (valve/)" : ""}` : "NO ESTÁ"}`);
+  }
 }
 
 // --- LOS ADORNOS: los 101 `env_model` ----------------------------------------
@@ -1232,8 +2350,9 @@ for (const e of entidades) {
     // modelo al revés no desaparece, sale APOLILLADO, y eso pasa por «el adorno
     // es raro» en cualquier captura.
     if (!ml.bobinadoBien) {
-      console.error(`    FALLO: ${e.model}: ${ml.contraNormal} de ${ml.contraNormal + ml.aFavor} ` +
-        `triángulos (${(ml.contraNormalFrac * 100).toFixed(0)} %) giran en contra de su normal`);
+      console.error(`    FALLO: ${e.model}: ${ml.sueltos} de ${ml.contraNormal + ml.aFavor} ` +
+        `triángulos giran en contra de su normal y NO son de doble cara ` +
+        `(${ml.contraNormal} en contra, ${ml.gemelos} con gemelo)`);
       process.exit(1);
     }
     info.mallas.set(clave, ml);
@@ -1256,6 +2375,23 @@ for (const e of entidades) {
   }
   colocaciones.push({
     modelo: e.model, cuerpo: clave, origen: o,
+    // EL 69: su `targetname`, que hacía falta y no estaba.
+    //
+    // `env_render` está portado desde el 49 y **seis de los siete de Edana
+    // apuntan a un `env_model`**: los cuatro platos de sopa de la taberna
+    // (`patronNsoup`) y la manzana del huerto (`apple5`). Los adornos se
+    // horneaban sin nombre, o sea 0 de 46, así que `_render` recorría cero
+    // entidades y no daba ningún error: daba una regla portada, citada y en
+    // verde que no había alcanzado nunca a nadie. Gate City tiene **cero**
+    // `env_render`, y por eso no se veía.
+    nombre: e.targetname ?? null,
+    // El modo de dibujo con el que NACE, que es con el que hay que volver si
+    // algo lo enciende: `rendermode 4` y `renderamt 255` es la manzana visible,
+    // y el `env_render` la deja en 0.
+    render: {
+      modo: num(e.rendermode, 0), cantidad: num(e.renderamt, 255),
+      fx: num(e.renderfx, 0),
+    },
     R: matrizDeAngulos(a[0] || 0, a[1] || 0, a[2] || 0),
     escala,
     luz: luzEnSuelo(carasDelMundo, bsp.lumps.luz.datos, o),
@@ -1305,7 +2441,7 @@ if (vivos.length) {
     const rel = v.modelo.replace(/^models[\/]/, "").replace(/\.mdl$/i, "");
     const clave = `${nombreArchivo(rel)}${v.cuerpo ? `_b${v.cuerpo}` : ""}`;
     if (!emitidos.has(clave)) {
-      const r = extraerBicho(rel, { cuerpo: v.cuerpo, base: `${RAIZ_MODELOS}models`, salida: `${SALIDA}/bichos`, callar: true });
+      const r = extraerBicho(rel, { cuerpo: v.cuerpo, base: `${RAIZ_MODELOS}models`, salida: `${SALIDA}/bichos`, raizSalida: SALIDA, callar: true });
       if (!r) continue;
       emitidos.set(clave, r);
       console.log(`      ${rel.padEnd(34)} ${String(r.triangulos).padStart(5)} tri, ${String(r.huesos).padStart(2)} huesos, ` +
@@ -1322,7 +2458,7 @@ if (vivos.length) {
     `${torcidos.length} con pitch o roll${torcidos.length ? " — ESTE CAMINO SOLO APLICA EL YAW" : " (o sea ninguno: sólo hace falta el yaw)"}`);
   writeFileSync(`${SALIDA}/adornosvivos.json`, JSON.stringify({
     mapa: bsp.nombre,
-    procedencia: "derivado local de gatecity.bsp y de los .mdl de Master Sword Rebirth. No redistribuible.",
+    procedencia: `derivado local de ${creditoDe(MAPA)} y de los .mdl de Master Sword Rebirth. No redistribuible.`,
     unidadesPorMetro: UNIDADES_POR_METRO,
     modelos: [...emitidos].map(([clave, r]) => ({ clave, ...r })),
     colocados: vivos.filter((v) => v.clave).map((v) => ({
@@ -1339,23 +2475,92 @@ if (vivos.length) {
   }, null, 1));
 }
 
-// Un tramo por textura de modelo, con TODAS las colocaciones ya fundidas dentro:
+/**
+ * El PNG de una textura de `.mdl`, escrito si no estaba, y su ruta relativa.
+ *
+ * Se saca aquí porque desde el **76** hay dos caminos que lo necesitan —los
+ * adornos fundidos y los que van sueltos— y una textura usada sólo por un
+ * adorno con nombre tiene que escribirse igual. Cuando esto estaba dentro del
+ * bucle del fundido, un adorno suelto con textura propia habría salido con el
+ * material en gris y sin dar error.
+ */
+function pngDeTextura(modelo, textura) {
+  const archivo = `mdl/${nombreArchivo(modelo.replace(/^.*[\\/]/, "").replace(/\.mdl$/i, "") + "_" + textura.nombre.replace(/\.[a-z]+$/i, ""))}.png`;
+  if (!existsSync(`${SALIDA}/${archivo}`)) {
+    // La rampa de gamma también aquí: un adorno sin ella al lado de una pared con
+    // ella se ve como una calcomanía oscura pegada encima. Y la misma excepción
+    // que en el mundo: `Image_LoadMDL` manda las texturas con
+    // `STUDIO_NF_MASKED` por `LUMP_MASKED`, que NO pasa por `texgammatable`
+    // (`engine/common/imagelib/img_wad.c`, línea 192).
+    const rgba = Uint8Array.from(textura.rgba);
+    if (!textura.recortado) {
+      for (let i = 0; i < rgba.length; i += 4) {
+        rgba[i] = RAMPA_TEX[rgba[i]];
+        rgba[i + 1] = RAMPA_TEX[rgba[i + 1]];
+        rgba[i + 2] = RAMPA_TEX[rgba[i + 2]];
+      }
+    }
+    escribirPng(`${SALIDA}/${archivo}`, rgba, textura.ancho, textura.alto);
+  }
+  return archivo;
+}
+
+// Un tramo por textura de modelo, con las colocaciones ya fundidas dentro:
 // 101 adornos de 17 ficheros caben en un puñado de `drawcalls` en vez de 101.
+//
+// ── Y DESDE EL 76, UN ADORNO CON NOMBRE NO SE FUNDE ─────────────────────────
+//
+// Porque en GoldSrc cada `env_model` es su propia entidad con su propio estado
+// de dibujo, y fundirlos es una optimización NUESTRA. El que puede cambiar de
+// estado es justo el que no puede ir fundido: esconder uno de los 46 no es
+// apagar un nodo, es saber qué trozo de la geometría es suyo.
+//
+//     if (!R_ModelOpaque(clent->curstate.rendermode) && CL_FxBlend(clent) <= 0)
+//             return true;    // invisible          ref/gl/gl_rmain.c:252
+//
+// `R_ModelOpaque(rm)` es `rm == kRenderNormal` (gl_local.h:87), o sea que un
+// adorno con `rendermode 4` —`kRenderTransAlpha`, const.h:693— y `renderamt 0`
+// **ni se añade a la lista de dibujo**. Y eso no es un caso de laboratorio: los
+// cuatro platos de sopa de la taberna de Edana NACEN así, y su `env_render` los
+// pone a 255 cuando se sienta el parroquiano. En la otra dirección, la manzana
+// del huerto nace a 255 y el suyo la pone a 0.
+//
+// Son 9 de 46 en Edana y 0 de 101 en Gate City, que es por donde esto llevaba
+// cuatro experimentos sin verse.
 const gruposAdorno = new Map();
+const nombrados = [];
 for (let i = 0; i < colocaciones.length; i++) {
   const c = colocaciones[i];
   const info = mdlLeidos.get(c.modelo);
   const ml = info.mallas.get(c.cuerpo);
   const uv1 = uvAdornos[i];
+  // El que tiene `targetname` se lleva sus propios arrays; el resto, al fundido.
+  const suyo = c.nombre
+    ? { nombre: c.nombre, modelo: c.modelo, cuerpo: c.cuerpo, origen: c.origen,
+        escena: aEscena(c.origen), luz: c.luz, render: c.render,
+        pos: [], nor: [], uv: [], uvl: [], grupos: [] }
+    : null;
+  if (suyo) nombrados.push(suyo);
   for (const g of ml.grupos) {
-    const clave = `${c.modelo}#${g.textura.nombre}`;
-    if (!gruposAdorno.has(clave)) {
-      gruposAdorno.set(clave, {
-        clave, modelo: c.modelo, textura: g.textura,
-        pos: [], nor: [], uv: [], uvl: [],
+    let d;
+    if (suyo) {
+      d = suyo;
+      suyo.grupos.push({
+        // Relativo a SU malla; el desplazamiento al buffer común se suma luego.
+        start: suyo.pos.length / 3, count: g.pos.length / 3,
+        textura: g.textura.nombre, archivo: pngDeTextura(c.modelo, g.textura),
+        recortado: g.textura.recortado, aditivo: g.textura.aditivo, plenaLuz: g.textura.plenaLuz,
       });
+    } else {
+      const clave = `${c.modelo}#${g.textura.nombre}`;
+      if (!gruposAdorno.has(clave)) {
+        gruposAdorno.set(clave, {
+          clave, modelo: c.modelo, textura: g.textura,
+          pos: [], nor: [], uv: [], uvl: [],
+        });
+      }
+      d = gruposAdorno.get(clave);
     }
-    const d = gruposAdorno.get(clave);
     for (let k = 0; k < g.pos.length; k += 3) {
       // hueso -> modelo ya está hecho; aquí van escala, rotación y origen, todo
       // en unidades de GoldSrc, y el cambio de ejes al final.
@@ -1376,26 +2581,9 @@ const adPos = [], adNor = [], adUv = [], adUvl = [], adGrupos = [];
 for (const d of gruposAdorno.values()) {
   const inicio = adPos.length / 3;
   adPos.push(...d.pos); adNor.push(...d.nor); adUv.push(...d.uv); adUvl.push(...d.uvl);
-  const archivo = `mdl/${nombreArchivo(d.modelo.replace(/^.*[\\/]/, "").replace(/\.mdl$/i, "") + "_" + d.textura.nombre.replace(/\.[a-z]+$/i, ""))}.png`;
-  if (!existsSync(`${SALIDA}/${archivo}`)) {
-    // La rampa de gamma también aquí: un adorno sin ella al lado de una pared con
-    // ella se ve como una calcomanía oscura pegada encima. Y la misma excepción
-    // que en el mundo: `Image_LoadMDL` manda las texturas con
-    // `STUDIO_NF_MASKED` por `LUMP_MASKED`, que NO pasa por `texgammatable`
-    // (`engine/common/imagelib/img_wad.c`, línea 192).
-    const rgba = Uint8Array.from(d.textura.rgba);
-    if (!d.textura.recortado) {
-      for (let i = 0; i < rgba.length; i += 4) {
-        rgba[i] = RAMPA_TEX[rgba[i]];
-        rgba[i + 1] = RAMPA_TEX[rgba[i + 1]];
-        rgba[i + 2] = RAMPA_TEX[rgba[i + 2]];
-      }
-    }
-    escribirPng(`${SALIDA}/${archivo}`, rgba, d.textura.ancho, d.textura.alto);
-  }
   adGrupos.push({
     start: inicio, count: adPos.length / 3 - inicio,
-    modelo: d.modelo, textura: d.textura.nombre, archivo,
+    modelo: d.modelo, textura: d.textura.nombre, archivo: pngDeTextura(d.modelo, d.textura),
     recortado: d.textura.recortado, aditivo: d.textura.aditivo, plenaLuz: d.textura.plenaLuz,
   });
 }
@@ -1407,12 +2595,44 @@ const mallaAdornos = {
   grupos: adGrupos,
 };
 
+// Y los nombrados, al MISMO binario y en un solo juego de arrays: cada uno sabe
+// dónde empieza lo suyo, y el visor les monta una malla por colocación. Son
+// nueve `drawcalls` más en Edana y cero en Gate City.
+const nomPos = [], nomNor = [], nomUv = [], nomUvl = [];
+for (const s of nombrados) {
+  const base = nomPos.length / 3;
+  nomPos.push(...s.pos); nomNor.push(...s.nor); nomUv.push(...s.uv); nomUvl.push(...s.uvl);
+  for (const g of s.grupos) g.start += base;
+  s.vertices = s.pos.length / 3;
+  delete s.pos; delete s.nor; delete s.uv; delete s.uvl;
+}
+const mallaNombrados = {
+  positions: Float32Array.from(nomPos),
+  normals: Float32Array.from(nomNor),
+  uvs: Float32Array.from(nomUv),
+  uvs1: Float32Array.from(nomUvl),
+};
+
 const conLuz = colocaciones.filter((c) => c.luz).length;
 const brillos = colocaciones.filter((c) => c.luz)
   .map((c) => 0.2126 * c.luz[0] + 0.7152 * c.luz[1] + 0.0722 * c.luz[2])
   .sort((a, b) => a - b);
 console.log(`\n  adornos         ${colocaciones.length} colocados de ${mdlLeidos.size} ficheros .mdl leídos, ` +
   `${adPos.length / 9} triángulos en ${adGrupos.length} grupos`);
+// EL 76: los que van sueltos y en qué estado nacen. Se dice aunque sean cero,
+// porque «cero» aquí significa «este mapa no tiene ninguno» y es un dato: Gate
+// City no tiene ni un `env_model` con nombre, y por eso esto no se veía.
+{
+  const apagados = nombrados.filter((s) => !seDibujaAdorno(s.render));
+  console.log(`    sueltos       ${nombrados.length} con targetname, ` +
+    `${nomPos.length / 9} triángulos (no se funden: pueden cambiar de aspecto)` +
+    `${nombrados.length ? `\n                  nacen APAGADOS ${apagados.length}: ${apagados.map((s) => s.nombre).join(", ") || "ninguno"}` : ""}`);
+  for (const s of nombrados) {
+    console.log(`      ${s.nombre.padEnd(22)} ${s.modelo.replace(/^models[\\/]/, "").padEnd(22)} ` +
+      `modo ${s.render?.modo ?? 0} amt ${String(s.render?.cantidad ?? 255).padStart(3)} ` +
+      `-> ${seDibujaAdorno(s.render) ? "se dibuja" : "INVISIBLE"}`);
+  }
+}
 for (const [f, info] of mdlLeidos) {
   if (!info) continue;
   const n = colocaciones.filter((c) => c.modelo === f).length;
@@ -1446,7 +2666,7 @@ if (mdlQueFaltan.size) {
 //
 // ── El detalle: qué es y qué NO es ─────────────────────────────────────────
 //
-// `maps/gatecity_detail.txt` empareja texturas del mundo con un `.tga` y dos
+// `maps/<mapa>_detail.txt` empareja texturas del mundo con un `.tga` y dos
 // escalas. `opengl.cfg` trae `r_detailtextures "1"`, así que el juego las dibuja.
 //
 // El motor las mezcla en una SEGUNDA pasada sobre la misma geometría
@@ -1549,6 +2769,9 @@ const partes = [
   ["choquePositions", choque.positions], ["choqueIndices", choque.indices],
   ["adornoPositions", mallaAdornos.positions], ["adornoNormals", mallaAdornos.normals],
   ["adornoUvs", mallaAdornos.uvs], ["adornoUvs1", mallaAdornos.uvs1],
+  // Los adornos CON NOMBRE (el 76), que no van fundidos. Mismo binario.
+  ["adornoNomPositions", mallaNombrados.positions], ["adornoNomNormals", mallaNombrados.normals],
+  ["adornoNomUvs", mallaNombrados.uvs], ["adornoNomUvs1", mallaNombrados.uvs1],
   // Cada puerta, su malla de dibujo y su malla de choque. Van en el mismo
   // binario que todo lo demás y no en nueve ficheros: son 4 KB entre las nueve.
   ...puertas.flatMap((p, k) => [
@@ -1559,6 +2782,26 @@ const partes = [
     [`${p.tramo}Indices`, mallasDePuerta[k].dibujo.indices],
     [`${p.tramo}ChoquePositions`, mallasDePuerta[k].choque.positions],
     [`${p.tramo}ChoqueIndices`, mallasDePuerta[k].choque.indices],
+  ]),
+  // Y cada deslizante (el 70), igual. Mismo binario y mismos siete tramos.
+  ...correderas.flatMap((p, k) => [
+    [`${p.tramo}Positions`, mallasDeCorredera[k].dibujo.positions],
+    [`${p.tramo}Normals`, mallasDeCorredera[k].dibujo.normals],
+    [`${p.tramo}Uvs`, mallasDeCorredera[k].dibujo.uvs],
+    [`${p.tramo}Uvs1`, mallasDeCorredera[k].dibujo.uvs1],
+    [`${p.tramo}Indices`, mallasDeCorredera[k].dibujo.indices],
+    [`${p.tramo}ChoquePositions`, mallasDeCorredera[k].choque.positions],
+    [`${p.tramo}ChoqueIndices`, mallasDeCorredera[k].choque.indices],
+  ]),
+  // Y cada rompible, igual. Mismo binario y mismos siete tramos.
+  ...rompibles.flatMap((p, k) => [
+    [`${p.tramo}Positions`, mallasDeRompible[k].dibujo.positions],
+    [`${p.tramo}Normals`, mallasDeRompible[k].dibujo.normals],
+    [`${p.tramo}Uvs`, mallasDeRompible[k].dibujo.uvs],
+    [`${p.tramo}Uvs1`, mallasDeRompible[k].dibujo.uvs1],
+    [`${p.tramo}Indices`, mallasDeRompible[k].dibujo.indices],
+    [`${p.tramo}ChoquePositions`, mallasDeRompible[k].choque.positions],
+    [`${p.tramo}ChoqueIndices`, mallasDeRompible[k].choque.indices],
   ]),
 ];
 for (const [nombre, arr] of partes) {
@@ -1574,7 +2817,7 @@ writeFileSync(`${SALIDA}/malla.bin`, bin);
 const cajaMin = [...aEscena(modelos[0].mins)], cajaMax = [...aEscena(modelos[0].maxs)];
 const manifiesto = {
   mapa: bsp.nombre,
-  procedencia: "derivado local de gatecity.bsp (DrKill). No redistribuible. Ver PROCEDENCIA.md",
+  procedencia: `derivado local de ${creditoDe(MAPA)}. No redistribuible. Ver PROCEDENCIA.md`,
   unidadesPorMetro: U,
   bin: { archivo: "malla.bin", tramos },
   // Cada grupo se lleva su textura de detalle, si la tiene: el grupo ya es
@@ -1588,8 +2831,35 @@ const manifiesto = {
       ...p,
       grupos: p.grupos.map((g) => (DETALLE.has(g.texture) ? { ...g, detalle: DETALLE.get(g.texture) } : g)),
     })),
+    correderas: correderas.map((p) => ({
+      ...p,
+      grupos: p.grupos.map((g) => (DETALLE.has(g.texture) ? { ...g, detalle: DETALLE.get(g.texture) } : g)),
+    })),
+    rompibles: rompibles.map((p) => ({
+      ...p,
+      grupos: p.grupos.map((g) => (DETALLE.has(g.texture) ? { ...g, detalle: DETALLE.get(g.texture) } : g)),
+    })),
     agua, escaleras, dano, zonas, ambiente,
+    // El 82. Las tres de Edana: la reverberación, las columnas de humo y el
+    // pregonero. Van dentro de `interactivas` y no en `disparadores` porque
+    // ninguna de las tres es cableado: son puntos que actúan por cercanía.
+    reverberacion, haces, pregoneros,
   },
+  // EL CABLEADO. Ver la sección 3c y `src/play/disparadores.js`.
+  disparadores,
+  // LA VALLA DE LOS MONSTRUOS, que faltaba entera hasta el 39.
+  //
+  // 101 `func_monsterclip` y ni uno estaba en el mundo, porque el compilador les
+  // quita las caras y esta malla se construye de caras. No se dibujan ni en el
+  // juego, así que no había nada que ver: había 101 paredes que no existían y
+  // bichos paseándose por donde el mapeador les había prohibido pasar. Ver
+  // src/bsp/clip.js, que explica también por qué NO entran en `colision`: el
+  // jugador las atraviesa (`world.cpp:1196`) y meterlas en la malla de todos lo
+  // dejaría tapiado en mitad de la calle.
+  monsterclip: monsterclip.brushes.map((b) => ({
+    mins: b.mins.map(red5), maxs: b.maxs.map(red5),
+    piezas: b.piezas.map((ps) => ps.map((p) => ({ n: p.n.map(red5), dist: red5(p.dist) }))),
+  })),
   texturas: imagenes.map((t) => ({
     nombre: t.nombre, archivo: `tex/${nombreArchivo(t.nombre)}.png`,
     ancho: t.ancho, alto: t.alto, clase: t.clase, calada: t.calada,
@@ -1612,6 +2882,10 @@ const manifiesto = {
   },
   adornos: {
     grupos: mallaAdornos.grupos,
+    // LOS QUE VAN SUELTOS porque tienen `targetname` (el 76): uno por
+    // colocación, con sus grupos ya desplazados al buffer común y con el estado
+    // de dibujo de nacimiento. Nueve en Edana, cero en Gate City.
+    nombrados,
     // Dónde está cada uno, en ejes de escena. Hace falta para poder encuadrar UNO
     // y no el promedio de veintisiete: el primer intento puso la cámara en el
     // centroide del grupo entero —que abarca 72 metros— y el fotograma salió de
@@ -1621,6 +2895,10 @@ const manifiesto = {
       escena: aEscena(c.origen),
       luz: c.luz,
       solido: c.solido ?? null,
+      // El 69: su nombre y su modo de dibujo de nacimiento, para que un
+      // `env_render` pueda alcanzarlo. Cinco de los 46 de Edana tienen nombre.
+      nombre: c.nombre ?? null,
+      render: c.render ?? null,
     })),
     colocados: colocaciones.length,
     ficheros: mdlLeidos.size,
@@ -1675,11 +2953,11 @@ const manifiesto = {
 writeFileSync(`${SALIDA}/malla.json`, JSON.stringify(manifiesto, null, 1));
 writeFileSync(`${SALIDA}/PROCEDENCIA.md`, PROCEDENCIA(bsp, RUTA));
 
-console.log(`\n  escrito en build/gatecity/`);
+console.log(`\n  escrito en build/${MAPA}/`);
 console.log(`    malla.bin     ${(bin.length / 1048576).toFixed(2)} MB`);
 console.log(`    luz/*.png     ${(bytesLuzTotal / 1024).toFixed(0)} KB en ${listaCubos.reduce((s, c) => s + c.variantes.length, 0)} atlas (los estados del parpadeo)`);
 console.log(`    tex/          ${imagenes.length} PNG, ${(bytesTex / 1024).toFixed(0)} KB`);
-console.log(`\n  y a mirarlo:  npm run dev  ->  ?map=gatecity\n`);
+console.log(`\n  y a mirarlo:  npm run dev  ->  ?map=${MAPA}\n`);
 
 // --- utilidades --------------------------------------------------------------
 
@@ -1720,7 +2998,7 @@ autores, a los que el propio fichero nombra en su ruta interna de compilación.
 Desde el experimento 06 hay además dos familias de \`.tga\`, también del mod y
 también leídas de \`../MSC/assets/msr/gfx/\`:
 
-- \`detail/*.png\` — las 14 texturas de DETALLE que \`maps/gatecity_detail.txt\`
+- \`detail/*.png\` — las texturas de DETALLE que \`maps/${MAPA}_detail.txt\`
   empareja con 58 de las 80 texturas del mundo.
 - \`env/nature1*.png\` — las seis caras del cielo que declara \`skyname\`.
 

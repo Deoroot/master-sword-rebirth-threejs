@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interfaz 73 — los cinco paneles, tres estilos</title>
+<!--
+  EL MOCKUP DEL EXPERIMENTO 73: todos los paneles del menú, en tres estilos.
+
+  Esto no es el juego: es un maquetado para ELEGIR, y por eso los tres estilos
+  están en la misma página y se cambian en vivo. El tercero —«Bisel»— es el que
+  hay hoy, y está aquí a propósito: un estilo no se puede juzgar sin lo que
+  sustituye al lado, igual que un control no vale sin su control positivo.
+
+  ── Lo que este archivo NO lleva, y no es un olvido ───────────────────────────
+
+  **La pintura de Anders Finér no está aquí.** Ni ella, ni el `game_menu.tga`,
+  ni los tres wav de `sound/ui/`. Un maquetado vive en el repositorio y el
+  repositorio no lleva contenido del juego (CLAUDE.md §2, regla 3: servirlo es
+  redistribuirlo). Donde va la pintura hay un degradado que imita sus valores
+  —medidos del original: cielo ocre 150-190, roca 20-32— con un aviso encima.
+  Así que esto sirve para juzgar la DISPOSICIÓN y el PESO del texto sobre una
+  imagen oscura, que es lo que se está eligiendo, y no el color de la pintura.
+
+  ── Los números de las tablas se calcularon, no se escribieron ───────────────
+
+      node -e "import('./src/play/ajustes.js').then(m=>console.log(m.cuenta()))"
+      → Options:       30 controles, 9 vivos, 21 apagados
+      node -e "import('./src/play/crearpartida.js').then(m=>console.log(m.cuenta()))"
+      → Create Server: 13 ajustes,   2 vivos, 11 apagados
+
+  Si alguien enciende uno, estas tablas se quedan viejas. Son un maquetado, no
+  la verdad: la verdad es `cuenta()`, y hay pruebas que la vigilan.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --tinta: #e9e2d4;
+    --tinta-baja: #a39a88;
+    --oro: #e8c88a;
+    --fondo: #14110e;
+    --panel-ancho: min(100%, 560px);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--tinta);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  /* ── EL ANDAMIO del maquetado (en español: es el cuaderno, no el juego) ──── */
+  header.andamio { padding: 18px clamp(16px, 4vw, 40px) 10px; border-bottom: 1px solid #2b241c; }
+  header.andamio h1 { margin: 0 0 6px; font: 600 19px/1.3 Georgia, serif; letter-spacing: .02em; }
+  header.andamio p { margin: 0; max-width: 78ch; color: var(--tinta-baja); font-size: 13px; }
+  .mandos { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-end;
+    padding: 14px clamp(16px, 4vw, 40px); border-bottom: 1px solid #2b241c; }
+  .grupo { display: flex; flex-direction: column; gap: 6px; }
+  .grupo > span { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: #7d7466; }
+  .grupo div { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mandos button { font: inherit; font-size: 13px; padding: 5px 11px; cursor: pointer;
+    background: #1e1a15; color: var(--tinta-baja); border: 1px solid #39301f; border-radius: 3px; }
+  .mandos button[aria-pressed="true"] { background: #342a1b; color: var(--oro); border-color: #6b5631; }
+
+  main { padding: clamp(16px, 4vw, 40px); display: flex; flex-direction: column; gap: 40px; }
+
+  /* El marco que simula el ancho de la ventana del juego. */
+  .escenario { margin: 0 auto; width: 100%; max-width: var(--simulado, 1600px);
+    transition: max-width .2s ease; }
+  .escenario > figcaption { color: #7d7466; font-size: 12px; padding: 0 0 7px;
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+  /* ── EL LIENZO: donde va la pintura, que aquí no está ─────────────────────── */
+  .lienzo { position: relative; aspect-ratio: 16/9; min-height: 340px; overflow: hidden;
+    border: 1px solid #2b241c; border-radius: 2px;
+    /* Los valores del original, medidos: cielo ocre claro arriba a la derecha,
+       roca casi negra abajo a la izquierda. Es el reparto de luz lo que importa
+       para decidir dónde se puede poner texto blanco. */
+    background:
+      radial-gradient(ellipse 70% 60% at 72% 26%, #b9955e 0%, #7d6440 38%, #3d3324 70%, #221c14 100%),
+      linear-gradient(to bottom, #2a2318 0%, #171309 100%); }
+  /* La silueta de la torre, para que el bloque de texto tenga algo que respetar. */
+  .lienzo::before { content: ""; position: absolute; left: 63%; top: 16%; width: 7%; height: 46%;
+    background: linear-gradient(to bottom, #241e15, #15110b); clip-path: polygon(22% 0, 78% 0, 100% 100%, 0 100%); }
+  .sinpintura { position: absolute; top: 9px; right: 11px; z-index: 5; max-width: 42%;
+    font-size: 10.5px; line-height: 1.45; color: #cbbd9f; background: rgba(10,8,5,.74);
+    border: 1px solid #4a3d27; border-radius: 3px; padding: 5px 8px; }
+
+  .vineta { position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(90deg, rgba(6,13,12,.62) 0%, rgba(6,13,12,.24) 30%, transparent 55%),
+                linear-gradient(to top, rgba(6,13,12,.58) 0%, transparent 26%); }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     EL MENÚ PRINCIPAL. La disposición es la del 52 y no se discute aquí: el
+     bloque abajo a la izquierda es lo único que el menú del original hacía
+     bien. Lo que cambia con el estilo es el PESO de la letra y el marcador.
+     ════════════════════════════════════════════════════════════════════════ */
+  .bloque { position: absolute; left: 6%; bottom: 8%; display: flex; flex-direction: column;
+    align-items: flex-start; z-index: 2; }
+  .marca { font: 700 clamp(22px, 3.1vw, 40px)/1 Cinzel, "Trajan Pro", Georgia, serif;
+    letter-spacing: .14em; color: #f3ece0; text-shadow: 0 2px 12px #000, 0 0 40px rgba(0,0,0,.9); }
+  .sub { font: italic clamp(12px, 1.2vw, 17px)/1.2 "IM Fell English", Georgia, serif;
+    color: #b9ae99; letter-spacing: .04em; margin-top: .35em; text-shadow: 0 1px 6px #000; }
+  .regla { height: 1px; align-self: stretch; margin: 1.1em 0 .9em;
+    background: linear-gradient(to right, rgba(220,205,175,.55), transparent); }
+  .lista { display: flex; flex-direction: column; align-items: flex-start; }
+  .op { position: relative; display: flex; align-items: baseline; gap: .5em; border: 0;
+    background: transparent; padding: .24em 0; text-align: left; cursor: pointer;
+    letter-spacing: .05em; font: clamp(15px, 1.5vw, 21px)/1.35 "IM Fell English", Georgia, serif;
+    color: #cfc6b6; text-shadow: 0 2px 6px #000; transition: color .14s, transform .14s; }
+  .op::before { content: "\25B8"; opacity: 0; color: var(--oro); transition: opacity .14s; }
+  .op::after { content: ""; position: absolute; left: 1.2em; right: 0; bottom: .1em; height: 1px;
+    background: linear-gradient(to right, var(--oro), transparent);
+    transform: scaleX(0); transform-origin: left; transition: transform .18s; }
+  .op:hover, .op[data-sel] { color: #fff6e4; transform: translateX(.18em); }
+  .op:hover::before, .op[data-sel]::before { opacity: 1; }
+  .op:hover::after, .op[data-sel]::after { transform: scaleX(1); }
+  .op[data-muerta]::before { color: #6f6a61; }
+  .op[data-muerta] { color: #6f6a61; cursor: default; }
+  .op[data-nueva] span::after { content: "nuevo en escritorio"; margin-left: .8em; font-size: .62em;
+    letter-spacing: .1em; text-transform: uppercase; color: #8fb37a; vertical-align: .22em; }
+  .pie-menu { position: absolute; left: 6%; right: 6%; bottom: 2.4%; z-index: 2;
+    color: #9a9284; font: 13px "IM Fell English", Georgia, serif; }
+  .credito { position: absolute; right: 2%; bottom: 2.4%; z-index: 2; text-align: right;
+    color: #6f6a61; font: 11px "IM Fell English", Georgia, serif; }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     LAS VENTANAS. Aquí está casi todo lo que el estilo decide, porque es lo
+     que hoy se ve mal: el bisel de VGUI sobre una pintura al óleo.
+     ════════════════════════════════════════════════════════════════════════ */
+  /* DÓNDE SE ABRE UNA VENTANA, que no es una minucia: centrada parte
+     «MASTER SWORD» por la mitad, y eso lo enseñó este mismo maquetado. Va a la
+     derecha, que es donde la pintura tiene luz y donde el menú NO está — el
+     bloque vive en el 6 % izquierdo desde el 52. Centrarla sólo cuando no cabe
+     de otra forma. */
+  .ventana { position: absolute; z-index: 3; right: 5%; top: 50%;
+    transform: translateY(-50%); width: var(--panel-ancho);
+    max-height: 86%; display: flex; flex-direction: column; }
+  @media (max-width: 820px) {
+    .ventana { right: auto; left: 50%; transform: translate(-50%, -50%); }
+  }
+  .v-titulo { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex: 0 0 auto; }
+  .v-titulo h3 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .07em; }
+  .v-cerrar { border: 0; background: transparent; color: inherit; cursor: pointer;
+    font-size: 16px; line-height: 1; padding: 2px 6px; opacity: .65; }
+  .v-cerrar:hover { opacity: 1; }
+  .v-pestanas { display: flex; flex-wrap: wrap; gap: 2px; flex: 0 0 auto; }
+  .v-pestanas button { font: inherit; font-size: 12.5px; padding: 5px 10px; cursor: pointer;
+    background: transparent; color: var(--tinta-baja); border: 0; }
+  .v-cuerpo { flex: 1 1 auto; overflow: auto; display: flex; flex-direction: column; gap: 11px;
+    padding: 14px; min-height: 150px; }
+  .v-pie { display: flex; justify-content: flex-end; gap: 7px; flex: 0 0 auto; padding: 11px 14px; }
+  .v-pie button, .v-cuerpo .boton { font: inherit; font-size: 13px; padding: 5px 15px; cursor: pointer; }
+
+  /* Una fila de ajuste: etiqueta, control y su estado. */
+  .fila { display: flex; flex-direction: column; gap: 4px; }
+  .fila > label { font-size: 13px; }
+  .fila-linea { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+  .fila[data-muerto] { opacity: .55; }
+  .fila[data-muerto] .razon { display: block; }
+  .razon { display: none; font-size: 11.5px; color: #9c8f78; font-style: italic; max-width: 62ch; }
+  .fila[data-nuevo] > label::after { content: "nuevo en escritorio"; margin-left: .7em;
+    font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #8fb37a; }
+  .fila[data-roto] > label::after { content: "no llega"; margin-left: .7em;
+    font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #d08a6a; }
+  input[type=range] { accent-color: var(--oro); width: min(100%, 230px); }
+  .casilla { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+  .nota { font-size: 11.5px; color: var(--tinta-baja); white-space: pre-line; }
+  .tabla-teclas { display: grid; grid-template-columns: 1fr 108px 88px; font-size: 12.5px; }
+  .tabla-teclas > div { padding: 4px 7px; }
+  .tabla-teclas .cab { font-weight: 600; position: sticky; top: 0; }
+  .lista-serv { display: grid; grid-template-columns: 1fr 96px 60px 92px 62px; font-size: 12.5px;
+    min-height: 118px; align-content: start; }
+  .lista-serv > div { padding: 4px 7px; }
+  .lista-serv .cab { font-weight: 600; }
+  .vacio { grid-column: 1 / -1; padding: 22px 7px; color: #9c8f78; font-style: italic; font-size: 12px; }
+
+  /* ── ESTILO 1 · PERGAMINO ────────────────────────────────────────────────── */
+  [data-estilo="pergamino"] .ventana { color: #2d2415; }
+  [data-estilo="pergamino"] .v-titulo { padding: 10px 14px 8px;
+    background: linear-gradient(to bottom, #e3d6b4, #d6c69f); border-bottom: 1px solid #a8926a; }
+  [data-estilo="pergamino"] .v-titulo h3 { font-family: Cinzel, Georgia, serif; }
+  [data-estilo="pergamino"] .v-pestanas { background: #d6c69f; padding: 0 10px;
+    border-bottom: 1px solid #a8926a; }
+  [data-estilo="pergamino"] .v-pestanas button { color: #6b5b3c; border-bottom: 2px solid transparent; }
+  [data-estilo="pergamino"] .v-pestanas button[aria-selected="true"] { color: #2d2415; font-weight: 600;
+    border-bottom-color: #8a6f3c; }
+  [data-estilo="pergamino"] .v-cuerpo { background: #efe4c8; }
+  [data-estilo="pergamino"] .v-pie { background: #e3d6b4; border-top: 1px solid #a8926a; }
+  [data-estilo="pergamino"] .v-pie button, [data-estilo="pergamino"] .boton {
+    background: #d6c69f; color: #2d2415; border: 1px solid #a8926a; border-radius: 2px; }
+  [data-estilo="pergamino"] .razon { color: #6b5b3c; }
+  [data-estilo="pergamino"] .nota { color: #6b5b3c; }
+  [data-estilo="pergamino"] .tabla-teclas .cab, [data-estilo="pergamino"] .lista-serv .cab {
+    background: #d6c69f; border-bottom: 1px solid #a8926a; }
+  [data-estilo="pergamino"] .tabla-teclas > div:not(.cab):nth-child(6n+4),
+  [data-estilo="pergamino"] .tabla-teclas > div:not(.cab):nth-child(6n+5),
+  [data-estilo="pergamino"] .tabla-teclas > div:not(.cab):nth-child(6n+6) { background: #e7dbbd; }
+  [data-estilo="pergamino"] .vacio { color: #6b5b3c; }
+
+  /* ── ESTILO 2 · HOJA (pizarra translúcida, una línea de oro) ─────────────── */
+  [data-estilo="hoja"] .ventana { color: var(--tinta);
+    background: rgba(13,16,18,.82); backdrop-filter: blur(9px);
+    border: 1px solid rgba(232,200,138,.3); border-radius: 4px;
+    box-shadow: 0 22px 60px rgba(0,0,0,.6); }
+  [data-estilo="hoja"] .v-titulo { padding: 12px 15px 10px; }
+  [data-estilo="hoja"] .v-titulo h3 { font-family: Cinzel, Georgia, serif; color: var(--oro);
+    letter-spacing: .13em; text-transform: uppercase; font-size: 13px; }
+  [data-estilo="hoja"] .v-pestanas { padding: 0 15px; border-bottom: 1px solid rgba(232,200,138,.16); }
+  [data-estilo="hoja"] .v-pestanas button { position: relative; padding: 7px 11px; }
+  [data-estilo="hoja"] .v-pestanas button[aria-selected="true"] { color: var(--oro); }
+  [data-estilo="hoja"] .v-pestanas button[aria-selected="true"]::after { content: ""; position: absolute;
+    left: 11px; right: 11px; bottom: -1px; height: 1px; background: var(--oro); }
+  [data-estilo="hoja"] .v-pie { border-top: 1px solid rgba(232,200,138,.16); }
+  [data-estilo="hoja"] .v-pie button, [data-estilo="hoja"] .boton { background: transparent;
+    color: var(--tinta); border: 1px solid rgba(232,200,138,.34); border-radius: 3px; }
+  [data-estilo="hoja"] .v-pie button:hover { border-color: var(--oro); color: var(--oro); }
+  [data-estilo="hoja"] .tabla-teclas .cab, [data-estilo="hoja"] .lista-serv .cab {
+    color: #8e8574; border-bottom: 1px solid rgba(232,200,138,.16); font-weight: 500;
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; }
+
+  /* ── ESTILO 3 · BISEL · EL QUE HAY HOY (el control) ──────────────────────── */
+  [data-estilo="bisel"] .ventana { color: #d5d1c7; background: #4c4a43;
+    border: 1px solid #000; box-shadow: inset 1px 1px 0 #6e6b61, inset -1px -1px 0 #2a2824; }
+  [data-estilo="bisel"] .v-titulo { padding: 4px 6px; background: #3a3833;
+    font-family: Verdana, Tahoma, sans-serif; }
+  [data-estilo="bisel"] .v-titulo h3 { font: bold 12px Verdana, Tahoma, sans-serif;
+    letter-spacing: 0; color: #e7e3d8; }
+  [data-estilo="bisel"] .ventana, [data-estilo="bisel"] .v-cuerpo,
+  [data-estilo="bisel"] .fila > label, [data-estilo="bisel"] .casilla {
+    font-family: Verdana, Tahoma, sans-serif; font-size: 11px; }
+  [data-estilo="bisel"] .v-pestanas { padding: 3px 4px 0; background: #4c4a43; }
+  [data-estilo="bisel"] .v-pestanas button { font: 11px Verdana, Tahoma, sans-serif;
+    background: #413f39; border: 1px solid #000; border-bottom: 0; padding: 4px 9px;
+    box-shadow: inset 1px 1px 0 #615e55; }
+  [data-estilo="bisel"] .v-pestanas button[aria-selected="true"] { background: #585549; color: #fff; }
+  [data-estilo="bisel"] .v-cuerpo { background: #4c4a43;
+    box-shadow: inset 1px 1px 0 #2a2824, inset -1px -1px 0 #6e6b61; }
+  [data-estilo="bisel"] .v-pie button, [data-estilo="bisel"] .boton {
+    font: 11px Verdana, Tahoma, sans-serif; background: #413f39; color: #d5d1c7;
+    border: 1px solid #000; box-shadow: inset 1px 1px 0 #615e55; border-radius: 0; }
+  [data-estilo="bisel"] .tabla-teclas, [data-estilo="bisel"] .lista-serv { background: #35332e;
+    box-shadow: inset 1px 1px 0 #2a2824; }
+  [data-estilo="bisel"] .tabla-teclas .cab, [data-estilo="bisel"] .lista-serv .cab {
+    background: #4c4a43; box-shadow: inset 1px 1px 0 #615e55; }
+  /* El menú también cambia con el bisel: era un mosaico y una lista centrada. */
+  [data-estilo="bisel"] .marca, [data-estilo="bisel"] .sub { font-family: Verdana, Tahoma, sans-serif;
+    letter-spacing: .02em; font-style: normal; }
+  [data-estilo="bisel"] .op { font-family: Verdana, Tahoma, sans-serif; letter-spacing: 0; }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     LOS DOS QUE NO SON HALF-LIFE.
+
+     Los tres de arriba son el mismo esqueleto repintado: caja flotante con
+     barra de título, tira de pestañas horizontal y pie OK/Cancel/Apply. Eso es
+     un diálogo de Windows 98, y mientras esté puesto da igual el color.
+
+     Estos dos rompen las tres cosas a la vez, y por eso cambian el HTML y no
+     sólo el CSS: no hay forma de quitar una barra de título con un selector.
+     ════════════════════════════════════════════════════════════════════════ */
+
+  /* ── ESTILO 4 · CÓDICE ───────────────────────────────────────────────────
+     El panel no es una ventana: es un OBJETO del mundo, un libro abierto. La
+     página izquierda es el índice, con cintas; la derecha, lo que se ajusta.
+     No hay OK/Cancel/Apply porque un libro no se acepta: se cierra, y lo
+     escrito ya está escrito. Es el idioma de un juego de espada y brujería, y
+     Half-Life no tiene nada equivalente. */
+  [data-modo="codice"] .ventana { right: 50%; transform: translate(50%, -50%);
+    width: min(92%, 760px); color: #2f2616; border-radius: 2px;
+    display: grid; grid-template-columns: 176px 1fr;
+    grid-template-areas: "tit tit" "tab cue" "tab pie";
+    box-shadow: 0 26px 70px rgba(0,0,0,.72), 0 0 0 1px #6b5733;
+    background:
+      linear-gradient(to right, transparent 170px, rgba(74,56,28,.26) 176px, transparent 183px),
+      linear-gradient(135deg, #efe5ca 0%, #e7dabb 44%, #e1d2ae 100%); }
+  [data-modo="codice"] .v-titulo { grid-area: tit; justify-content: center;
+    padding: 15px 18px 9px; }
+  [data-modo="codice"] .v-titulo h3 { font: 600 17px/1 Cinzel, "Trajan Pro", Georgia, serif;
+    letter-spacing: .2em; text-transform: uppercase; color: #5a431f; }
+  [data-modo="codice"] .v-cerrar { display: none; }      /* se cierra con el botón del pie */
+  [data-modo="codice"] .v-pestanas { grid-area: tab; flex-direction: column; flex-wrap: nowrap;
+    gap: 3px; padding: 10px 0 14px 14px; align-content: start; }
+  [data-modo="codice"] .v-pestanas button { text-align: left; width: 100%;
+    padding: 7px 24px 7px 13px; font-size: 12.5px; letter-spacing: .04em;
+    font-family: "IM Fell English", Georgia, serif;
+    background: #d6bd8c; color: #4a3a1c;
+    /* La cola de golondrina de una cinta de libro, que es lo que la hace leerse
+       como una cinta y no como una pestaña. */
+    clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 50%, 100% 100%, 0 100%); }
+  [data-modo="codice"] .v-pestanas button[aria-selected="true"] { background: #9d6b3a;
+    color: #f6edd8; font-weight: 600; }
+  [data-modo="codice"] .v-cuerpo { grid-area: cue; padding: 10px 20px 4px; }
+  [data-modo="codice"] .v-pie { grid-area: pie; padding: 4px 20px 16px; }
+  [data-modo="codice"] .v-pie button, [data-modo="codice"] .boton {
+    background: transparent; color: #5a431f; border: 0; border-bottom: 1px solid #9d7b40;
+    border-radius: 0; padding: 4px 3px; font-family: "IM Fell English", Georgia, serif;
+    font-size: 13.5px; font-style: italic; }
+  [data-modo="codice"] .v-pie button:hover { color: #2f2616; border-bottom-color: #2f2616; }
+  [data-modo="codice"] .razon, [data-modo="codice"] .nota { color: #6d5a33; }
+  [data-modo="codice"] .tabla-teclas .cab, [data-modo="codice"] .lista-serv .cab {
+    border-bottom: 1px solid #b59c6a; color: #6d5a33; }
+  [data-modo="codice"] .vacio { color: #6d5a33; }
+  @media (max-width: 760px) {
+    [data-modo="codice"] .ventana { grid-template-columns: 1fr;
+      grid-template-areas: "tit" "tab" "cue" "pie"; }
+    [data-modo="codice"] .v-pestanas { flex-direction: row; flex-wrap: wrap; padding: 8px 14px; }
+    [data-modo="codice"] .v-pestanas button { width: auto; }
+  }
+
+  /* ── ESTILO 5 · COLUMNA ──────────────────────────────────────────────────
+     No hay ventana en absoluto. La lista del menú NO desaparece: se convierte
+     en la navegación del panel —las siete pestañas ocupan el sitio exacto de
+     las diez entradas, con la misma letra y el mismo marcador ▸— y lo que se
+     ajusta aparece a la derecha, sobre la pintura, sin caja ni borde.
+
+     Es el idioma que el menú principal ya habla desde el 52, extendido. Y es
+     el único de los cinco que no toma nada prestado de ningún otro juego. */
+  /* La columna empieza en el 43 % y no antes: «MASTER SWORD» llega al 39 % a
+     1280, y la nota de Miles se le metía encima. */
+  [data-modo="columna"] .ventana { left: 43%; right: 6%; top: 11%; bottom: 13%;
+    width: auto; max-height: none; transform: none; background: none; border: 0;
+    box-shadow: none; color: var(--tinta); }
+  /* LA LEGIBILIDAD SIN CAJA. El texto blanco sobre la parte clara de la pintura
+     se pierde —se vio en la primera captura, encima de la torre—, y la respuesta
+     NO puede ser un panel con fondo: eso devuelve la caja por la puerta de
+     atrás. Es una viñeta difuminada sin un solo borde, que es exactamente lo
+     que el menú principal lleva haciendo desde el 52 con su bloque. */
+  /* La elipse va CENTRADA y con los radios al 50 %, que es la única forma de
+     que llegue a cero exactamente en sus bordes: descentrada deja una arista
+     recta, y una arista recta es una caja otra vez. Se vio en la captura. */
+  [data-modo="columna"] .ventana::before { content: ""; position: absolute;
+    inset: -16% -15% -14% -17%; z-index: -1; pointer-events: none;
+    background: radial-gradient(ellipse 50% 50% at 50% 50%,
+      rgba(7,10,9,.74) 0%, rgba(7,10,9,.52) 48%, rgba(7,10,9,.17) 78%, transparent 100%); }
+  [data-modo="columna"] .v-titulo { padding: 0 0 4px; }
+  [data-modo="columna"] .v-titulo h3 { font: 600 clamp(15px, 1.7vw, 21px)/1 Cinzel, Georgia, serif;
+    letter-spacing: .15em; text-transform: uppercase; color: var(--oro);
+    text-shadow: 0 2px 10px #000; }
+  [data-modo="columna"] .v-cerrar { display: none; }     /* la Escape, como en el menú */
+  [data-modo="columna"] .v-pestanas { display: none; }   /* viven en la columna izquierda */
+  [data-modo="columna"] .v-cuerpo { padding: 14px 0 0; gap: 15px;
+    font-family: "IM Fell English", Georgia, serif; }
+  [data-modo="columna"] .v-cuerpo, [data-modo="columna"] .fila > label,
+  [data-modo="columna"] .casilla { text-shadow: 0 1px 5px #000, 0 0 14px rgba(0,0,0,.75); }
+  [data-modo="columna"] .fila > label { font-size: 14px; letter-spacing: .03em; }
+  [data-modo="columna"] .v-pie { padding: 12px 0 0; justify-content: flex-start; gap: 20px; }
+  [data-modo="columna"] .v-pie button, [data-modo="columna"] .boton {
+    background: transparent; border: 0; border-radius: 0; padding: 3px 0; color: #cfc6b6;
+    font: clamp(14px, 1.3vw, 17px)/1.3 "IM Fell English", Georgia, serif; letter-spacing: .05em;
+    text-shadow: 0 2px 6px #000; }
+  [data-modo="columna"] .v-pie button:hover, [data-modo="columna"] .boton:hover {
+    color: #fff6e4; }
+  [data-modo="columna"] .razon, [data-modo="columna"] .nota { color: #a79a82;
+    text-shadow: 0 1px 4px #000; }
+  [data-modo="columna"] .tabla-teclas .cab, [data-modo="columna"] .lista-serv .cab {
+    color: #8e8574; border-bottom: 1px solid rgba(232,200,138,.22); font-size: 10.5px;
+    letter-spacing: .1em; text-transform: uppercase; font-weight: 500; }
+  [data-modo="columna"] .tabla-teclas, [data-modo="columna"] .lista-serv {
+    font-family: "IM Fell English", Georgia, serif; }
+  @media (max-width: 820px) {
+    /* Estrecho no caben dos columnas: la navegación se va arriba y el panel
+       ocupa el ancho. Es el único sitio donde este estilo cede. */
+    [data-modo="columna"] .ventana { left: 6%; right: 6%; top: auto; bottom: 6%; height: 58%; }
+    [data-modo="columna"] .bloque { bottom: auto; top: 6%; }
+  }
+
+  /* ── El inventario de funciones, debajo de cada panel ────────────────────── */
+  .inventario { margin-top: 16px; border: 1px solid #2b241c; border-radius: 3px; overflow: hidden; }
+  .inventario h4 { margin: 0; padding: 9px 13px; background: #1c1813; font-size: 12.5px;
+    letter-spacing: .06em; text-transform: uppercase; color: #a89c84; font-weight: 600; }
+  .inventario table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .inventario th { text-align: left; padding: 7px 13px; color: #7d7466; font-weight: 500;
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    border-bottom: 1px solid #2b241c; }
+  .inventario td { padding: 7px 13px; border-bottom: 1px solid #211c16; vertical-align: top; }
+  .inventario tr:last-child td { border-bottom: 0; }
+  .inventario code { font-size: 11.5px; color: #c9b98f; }
+  .e { display: inline-block; font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 9px; white-space: nowrap; }
+  .e-vivo { background: #1f3320; color: #92c48e; }
+  .e-muerto { background: #2c2520; color: #a1917c; }
+  .e-nuevo { background: #22331c; color: #a9cf86; }
+  .e-roto { background: #38231b; color: #e0a07c; }
+  @media (max-width: 700px) {
+    .inventario table, .inventario tbody, .inventario tr, .inventario td { display: block; width: 100%; }
+    .inventario thead { display: none; }
+    .inventario tr { border-bottom: 1px solid #2b241c; padding: 5px 0; }
+    .inventario td { border: 0; padding: 3px 13px; }
+    .lista-serv { grid-template-columns: 1fr 60px; }
+    .lista-serv > div:nth-child(5n+2), .lista-serv > div:nth-child(5n+4) { display: none; }
+    .tabla-teclas { grid-template-columns: 1fr 84px; }
+    .tabla-teclas > div:nth-child(3n) { display: none; }
+  }
+</style>
+</head>
+<body data-estilo="hoja">
+
+<header class="andamio">
+  <h1>Interfaz 73 — los cinco paneles del menú, en cinco estilos</h1>
+  <p>Los <strong>tres primeros son el mismo esqueleto repintado</strong>: caja flotante con
+     barra de título, pestañas horizontales y pie OK/Cancel/Apply. Eso es un diálogo de
+     Half-Life, y mientras esté puesto da igual el color — el tercero es literalmente el
+     que hay hoy, y está aquí porque un estilo no se juzga solo. Los dos marcados con
+     <strong>✦</strong> rompen las tres cosas a la vez y por eso cambian el HTML y no sólo
+     el CSS. Los cuatro anchos son para ver qué aguanta. Las etiquetas verdes marcan lo que
+     <strong>la cáscara de escritorio desbloquea</strong>; las naranjas, lo que
+     <strong>dice funcionar y no llega</strong> — eso último está medido, no supuesto.</p>
+</header>
+
+<div class="mandos">
+  <div class="grupo"><span>Estilo</span><div id="estilos"></div></div>
+  <div class="grupo"><span>Ancho de la ventana</span><div id="anchos"></div></div>
+  <div class="grupo"><span>Panel</span><div id="paneles"></div></div>
+</div>
+
+<main id="main"></main>
+
+<script>
+// ── LOS DATOS. Las etiquetas y los textos de los paneles van en INGLÉS porque
+// son interfaz del juego; lo que los explica, en español, porque es el cuaderno.
+
+// Cada estilo declara su MODO, que es lo que decide la forma del panel y no
+// sólo su color. Los tres primeros comparten modo porque son el mismo esqueleto
+// —caja flotante, pestañas arriba, OK/Cancel/Apply— repintado tres veces.
+const ESTILOS = [
+  ["hoja", "Hoja", "caja"],
+  ["pergamino", "Pergamino", "caja"],
+  ["bisel", "Bisel (el de hoy)", "caja"],
+  ["codice", "Códice ✦", "codice"],
+  ["columna", "Columna ✦", "columna"],
+];
+const MODO = Object.fromEntries(ESTILOS.map(([k, , m]) => [k, m]));
+/** Los dos que no son Half-Life no tienen caja, así que tampoco barra de título. */
+const SIN_CAJA = (m) => m === "codice" || m === "columna";
+const ANCHOS = [["1600", "1600"], ["1280", "1280"], ["960", "960"], ["720", "720 (estrecho)"]];
+
+/** Las entradas de `gamemenu.res`, en su orden, con lo que hace cada una hoy. */
+const MENU = [
+  { t: "Resume game", e: "vivo" },
+  { t: "Disconnect", e: "vivo" },
+  { sep: true },
+  { t: "Visit a Kingdom", e: "vivo" },
+  { t: "Establish a Kingdom", e: "vivo" },
+  { sep: true },
+  { t: "Name Character", e: "vivo" },
+  { t: "Options", e: "vivo" },
+  { sep: true },
+  { t: "Quit", e: "nuevo" },
+];
+
+const PANELES = {
+  menu: {
+    nombre: "Menú principal",
+    nota: "La disposición es la del 52 y no se toca: bloque abajo a la izquierda, " +
+          "sin cajas, la imagen manda. Lo que el estilo decide aquí es el peso de la letra.",
+    pinta: pintaMenu,
+    inventario: {
+      titulo: "Las diez entradas de gamemenu.res",
+      cols: ["Entrada", "Estado", "Qué pasa"],
+      filas: [
+        ["Resume game", "vivo", "Cierra el menú. Sólo con partida detrás (<code>OnlyInGame</code>)."],
+        ["Disconnect", "vivo", "Suelta la partida y vuelve al menú."],
+        ["Visit a Kingdom", "vivo", "Abre «Servers». La lista sale a cero y la ventana dice por qué."],
+        ["Establish a Kingdom", "vivo", "Abre «Create Server»; su «Start» es por donde se entra a jugar."],
+        ["Name Character", "vivo", "Abre la pantalla de crear personaje (VGUI1, cierra el menú)."],
+        ["Options", "vivo", "Abre «Options». El menú se queda detrás, como en el juego."],
+        ["Quit", "nuevo", "<strong>Hoy apagada</strong> con el motivo «a browser cannot close its own tab». " +
+          "En escritorio sí puede: <code>app.quit()</code>. Necesita el diálogo de confirmación " +
+          "que es el panel siguiente, porque salir no se puede deshacer."],
+        ["3 separadores", "vivo", "Los números 3, 7 y 11 del archivo, sin etiqueta ni comando. " +
+          "El primero lleva <code>OnlyInGame</code>: el hueco aparece con la partida."],
+      ],
+    },
+  },
+
+  salir: {
+    nombre: "Quit (nuevo)",
+    nota: "No existe hoy. Hace falta porque en escritorio «Quit» sí cierra, y cerrar " +
+          "no se deshace: el original pregunta y nosotros también.",
+    pinta: pintaSalir,
+    inventario: {
+      titulo: "El diálogo de salida",
+      cols: ["Función", "Estado", "Qué hace"],
+      filas: [
+        ["Quit", "nuevo", "<code>app.quit()</code> por el puente de la precarga. El proceso principal cierra la ventana."],
+        ["Cancel / Escape", "nuevo", "Vuelve al menú sin más. Es el botón que queda enfocado al abrir."],
+        ["Con partida detrás", "nuevo", "El texto cambia: avisa de que el personaje se guarda al salir " +
+          "si el almacén lo permite, y si no, de que se pierde lo que no esté guardado."],
+      ],
+    },
+  },
+
+  options: {
+    nombre: "Options",
+    nota: "Siete pestañas, 30 controles, 9 vivos. La cuenta la calcula <code>cuenta()</code> " +
+          "en <code>src/play/ajustes.js</code>, no está escrita a mano en ningún sitio.",
+    pinta: pintaOpciones,
+    inventario: {
+      titulo: "30 controles · 9 vivos · 21 apagados",
+      cols: ["Pestaña", "Estado", "Qué hay y qué falta"],
+      filas: [
+        ["Multiplayer · 1 de 4", "vivo", "<code>name</code> funciona: es el nombre que PROPONE la pantalla " +
+          "de crear personaje. Los otros tres son el spray, su color y «Advanced…», que no existen aquí."],
+        ["Keyboard · 1 de 1", "vivo", "La tabla entera, con <code>kb_act.lst</code> detrás. La pestaña más viva de la ventana."],
+        ["Mouse · 3 de 8", "vivo", "Sensibilidad, invertir y filtro llegan al juego. Joystick y apuntado automático no, " +
+          "y la casilla «Mouse look» no tiene nada que apagar."],
+        ["Audio · 2 de 3", "roto", "<strong>Aquí está el fallo que diste.</strong> Los dos deslizadores cuentan " +
+          "como vivos y <em>no llegan al sonido de la interfaz</em>: el menú suena con sus propios " +
+          "<code>new Audio()</code> a volumen 1, siempre. Medido: pasar el ratón da " +
+          "<code>buttonrollover.wav</code> a <code>volume: 1</code> antes y después de mover el deslizador. " +
+          "Y en el menú no hay nadie que aplique: <code>aplicarAjustes</code> nace a <code>null</code> " +
+          "y sólo se rellena al cargar un mapa."],
+        ["Video · 2 de 10", "nuevo", "Gamma y brillo sí: entran en la rampa del mapa de luz. " +
+          "<strong>Tres se pueden encender en escritorio</strong>: «Windowed» " +
+          "(<code>setFullScreen</code>), la resolución (<code>setSize</code>) y el modo, " +
+          "que en una pestaña eran el tamaño de la ventana del navegador y ahora son nuestros."],
+        ["Voice · 0 de 3", "muerto", "No hay canal de voz en el protocolo. Las tres salen y lo dicen."],
+        ["Lock · 0 de 1", "muerto", "El control parental esconde la sangre y las cvars de violencia de " +
+          "Half-Life; este port no dibuja ninguna de las dos."],
+      ],
+    },
+  },
+
+  servers: {
+    nombre: "Servers",
+    nota: "Seis pestañas, y sólo «Lan» devuelve algo: es el servidor del 27, " +
+          "<code>npm run servidor</code>. Una lista vacía no se disimula.",
+    pinta: pintaServidores,
+    inventario: {
+      titulo: "El navegador de servidores",
+      cols: ["Función", "Estado", "Qué hace"],
+      filas: [
+        ["Lan", "vivo", "Pide <code>/partidas</code> al servidor del experimento 27 y enseña lo que haya."],
+        ["Internet · Favorites · History · Spectate · Friends", "muerto",
+          "Necesitan el maestro de Steam, que no hay ni va a haber. Salen y devuelven cero."],
+        ["Connect", "vivo", "Apagado hasta que se elige una fila, como en el juego. Entra a la partida."],
+        ["Quick refresh / Refresh all", "vivo", "Las dos vuelven a pedir la lista. En el juego tampoco se diferencian aquí."],
+        ["Change filters", "muerto", "El filtro está fijo en <code>Master Sword: Rebirth;</code>, como el del mod."],
+        ["Las columnas candado y corazón", "muerto", "Contraseña y favorito. Se portan vacías " +
+          "para que la cabecera no quede descolocada respecto a las filas."],
+      ],
+    },
+  },
+
+  crear: {
+    nombre: "Create Server",
+    nota: "Dos pestañas, 13 ajustes, 2 vivos — y una sola razón detrás de los once: " +
+          "«Start» abre una partida local, no levanta un servidor.",
+    pinta: pintaCrear,
+    inventario: {
+      titulo: "13 ajustes · 2 vivos · 11 apagados",
+      cols: ["Ajuste", "Estado", "Qué hace"],
+      filas: [
+        ["Map", "vivo", "<code>mapaElegido()</code> resuelve <code>&lt; Random Map &gt;</code> y «Start» entra " +
+          "con lo que salga. Con dos mapas portados el azar es azar de verdad."],
+        ["Play in full screen", "nuevo", "<strong>Es nuestra, no del juego</strong>, y existía por un límite " +
+          "del navegador: las teclas sólo se podían pedir dentro de un gesto y en pantalla completa. " +
+          "En escritorio <code>Menu.setApplicationMenu(null)</code> ya libera Ctrl+W y F1–F12, " +
+          "así que la fila deja de ser un apaño y pasa a ser una preferencia normal — " +
+          "y su sitio natural es la pestaña Video de «Options», no ésta."],
+        ["Quit server on reset", "nuevo", "Apagada con el motivo «a browser tab cannot close itself, " +
+          "same as Quit». En escritorio el motivo ya no vale."],
+        ["Hostname · Max. players · Server password · Server Location", "muerto",
+          "Los cuatro son del proceso servidor, y «Start» no levanta uno."],
+        ["LAN Game", "muerto", "No hay maestro de Steam del que esconderse: aquí todo es local."],
+        ["Allow time change votes", "muerto", "Votar necesita con quién votar."],
+        ["Allow Player vs Player", "muerto", "Los jugadores se encuentran, pero nada decide todavía " +
+          "si uno puede herir a otro: <code>ms_pklevel</code> no se lee en ningún sitio."],
+        ["If Empty, reset after", "muerto", "El mapa no se reinicia: nada reaparece."],
+        ["Store Characters", "muerto", "«On Server» existe desde el 27, pero lo elige <code>?red=</code> " +
+          "al cargar, antes de que esta ventana exista."],
+        ["Enable Central Server", "muerto", "No hay central — y apagado ES el modo de pruebas del motor."],
+      ],
+    },
+  },
+};
+
+// ── LOS PANELES, dibujados ────────────────────────────────────────────────────
+
+const h = (tag, props = {}, hijos = []) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "html") n.innerHTML = v;
+    else if (k === "txt") n.textContent = v;
+    else if (v !== null && v !== false) n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of [].concat(hijos)) if (c) n.append(c);
+  return n;
+};
+
+function lienzo(...dentro) {
+  return h("div", { class: "lienzo" }, [
+    h("div", { class: "sinpintura", html:
+      "Aquí va la pintura de <strong>Anders Finér</strong>. No está en el repositorio " +
+      "—es contenido del juego— así que esto es un degradado con sus valores medidos: " +
+      "sirve para juzgar el texto sobre la imagen, no el color." }),
+    h("div", { class: "vineta" }),
+    ...dentro,
+  ]);
+}
+
+/**
+ * El bloque de abajo a la izquierda.
+ *
+ * En el modo COLUMNA, cuando hay un panel abierto, la lista deja de ser las diez
+ * entradas del menú y pasa a ser la navegación de ese panel: las siete pestañas
+ * de «Options» ocupan el sitio exacto que ocupaban las entradas, con la misma
+ * letra y el mismo marcador. La navegación nunca cambia de sitio, que es lo
+ * contrario de lo que hace un diálogo con pestañas propias.
+ */
+function bloqueDelMenu(seleccionada = "Options", rail = null) {
+  const lista = h("div", { class: "lista" });
+  const entradas = rail
+    ? rail.nombres.map((t, i) => ({ t, e: "vivo", sel: i === rail.activa }))
+    : MENU.map((e) => ({ ...e, sel: e.t === seleccionada }));
+  for (const e of entradas) {
+    if (e.sep) { lista.append(h("div", { style: "height:.85em" })); continue; }
+    lista.append(h("button", {
+      class: "op", type: "button",
+      "data-sel": e.sel || null,
+      "data-nueva": e.e === "nuevo" || null,
+      "data-muerta": e.e === "muerto" || null,
+    }, h("span", { txt: e.t })));
+  }
+  return h("div", { class: "bloque" }, [
+    h("div", { class: "marca", txt: "MASTER SWORD" }),
+    h("div", { class: "sub", txt: "Rebirth" }),
+    h("div", { class: "regla" }),
+    lista,
+  ]);
+}
+
+const pieYCredito = () => [
+  h("div", { class: "pie-menu", txt: "" }),
+  h("div", { class: "credito", txt:
+    "Master Sword: Rebirth by DrKill and the MSR team — title art by Anders Finér" }),
+];
+
+function pintaMenu() {
+  return lienzo(bloqueDelMenu(null), ...pieYCredito());
+}
+
+/** La armazón de una ventana: título, pestañas, cuerpo y pie. */
+function ventana({ titulo, pestanas = [], activa = 0, cuerpo, pie = [], ancho = null,
+                   conPestanas = true }) {
+  const barraP = (pestanas.length && conPestanas)
+    ? h("div", { class: "v-pestanas", role: "tablist" },
+      pestanas.map((p, i) => h("button", {
+        type: "button", role: "tab", "aria-selected": String(i === activa), txt: p,
+      }))) : null;
+  return h("div", {
+    class: "ventana", style: ancho ? `--panel-ancho: min(100%, ${ancho}px)` : null,
+  }, [
+    h("div", { class: "v-titulo" }, [
+      h("h3", { txt: titulo }),
+      h("button", { class: "v-cerrar", type: "button", txt: "✕", "aria-label": "Close" }),
+    ]),
+    barraP,
+    h("div", { class: "v-cuerpo" }, cuerpo),
+    pie.length ? h("div", { class: "v-pie" }, pie) : null,
+  ]);
+}
+
+const boton = (txt) => h("button", { type: "button", txt });
+
+/**
+ * UNA ESCENA ENTERA: la pintura, el bloque del menú y el panel encima.
+ *
+ * Aquí es donde el MODO decide la forma, y por eso está en un solo sitio:
+ *
+ *   - en `columna`, las pestañas del panel se van a la columna izquierda y
+ *     ocupan el lugar de las entradas del menú;
+ *   - sin caja no hay OK/Cancel/Apply, porque los cambios se aplican al
+ *     tocarlos — un libro no se acepta, se cierra. `pieLibre` es ese pie.
+ */
+function escena({ sel = null, pie = [], pieLibre = null, ...resto }) {
+  const modo = MODO[estilo];
+  const enColumna = modo === "columna" && resto.pestanas?.length;
+  return lienzo(
+    bloqueDelMenu(sel, enColumna ? { nombres: resto.pestanas, activa: resto.activa ?? 0 } : null),
+    ...pieYCredito(),
+    ventana({
+      ...resto,
+      conPestanas: modo !== "columna",
+      pie: SIN_CAJA(modo) ? (pieLibre ?? pie) : pie,
+    }),
+  );
+}
+
+/** Una fila de ajuste. `estado` es vivo | muerto | nuevo | roto. */
+function fila(etiqueta, control, { estado = "vivo", razon = "" } = {}) {
+  return h("div", {
+    class: "fila",
+    "data-muerto": estado === "muerto" || null,
+    "data-nuevo": estado === "nuevo" || null,
+    "data-roto": estado === "roto" || null,
+  }, [
+    etiqueta ? h("label", { txt: etiqueta }) : null,
+    h("div", { class: "fila-linea" }, control),
+    razon ? h("div", { class: "razon", txt: razon }) : null,
+  ]);
+}
+
+const deslizador = (min, max, v, paso = .01) =>
+  [h("input", { type: "range", min, max, step: paso, value: v }),
+   h("span", { class: "nota", txt: String(v) })];
+
+const casilla = (txt, marcada = false) => h("label", { class: "casilla" }, [
+  h("input", { type: "checkbox", checked: marcada || null }), h("span", { txt }),
+]);
+
+function pintaSalir() {
+  return escena({
+    sel: "Quit",
+    titulo: "Quit Master Sword",
+    ancho: 420,
+    cuerpo: [
+      h("p", { style: "margin:0 0 4px; font-size:13.5px", txt:
+        "Leave Gate City and close the game?" }),
+      h("p", { class: "nota", txt:
+        "Your character is saved where your store keeps it. Anything since your last " +
+        "save stays behind." }),
+    ],
+    pie: [boton("Quit"), boton("Cancel")],
+  });
+}
+
+function pintaOpciones() {
+  const cuerpo = [
+    fila("Sound effect volume", deslizador(0, 1, .12), { estado: "roto",
+      razon: "Medido: el menú suena a volumen 1 antes y después de mover esto. " +
+             "El sonido de la interfaz no pasa por el canal de efectos, y en el menú " +
+             "no hay nadie que aplique nada." }),
+    fila("MP3 volume", deslizador(0, 1, .2), { estado: "roto",
+      razon: "Mismo camino cortado: llega al canal de música del mapa, no a la interfaz." }),
+    fila("Sound quality", [h("select", {}, [h("option", { txt: "High" })])], { estado: "muerto",
+      razon: "the browser decodes the WAVs at their own rate; there is nothing to lower." }),
+    h("div", { class: "nota", txt:
+      "Software contained within this product includes Miles Sound System, " +
+      "copyright RAD Game Tools, Inc." }),
+  ];
+  return escena({
+    sel: "Options",
+    titulo: "Options",
+    pestanas: ["Multiplayer", "Keyboard", "Mouse", "Audio", "Video", "Voice", "Lock"],
+    activa: 3, cuerpo, ancho: 560,
+    pie: [boton("OK"), boton("Cancel"), boton("Apply")],
+    // Sin caja los cambios entran al tocarlos, así que no hay nada que aceptar.
+    pieLibre: [boton("Done")],
+  });
+}
+
+function pintaServidores() {
+  const tabla = h("div", { class: "lista-serv" });
+  for (const c of ["Servers (0)", "Game", "Players", "Map", "Latency"]) {
+    tabla.append(h("div", { class: "cab", txt: c }));
+  }
+  tabla.append(h("div", { class: "vacio", txt:
+    "No games found. The only list with anything behind it is Lan, and it needs " +
+    "`npm run servidor` running." }));
+  return escena({
+    sel: "Visit a Kingdom",
+    titulo: "Servers",
+    pestanas: ["Internet", "Favorites", "History", "Spectate", "Lan", "Friends"],
+    activa: 4, ancho: 700,
+    cuerpo: [tabla, h("div", { class: "fila-linea", style: "margin-top:2px" }, [
+      h("span", { class: "nota", style: "flex:1 1 auto", txt: "Master Sword: Rebirth;" }),
+      h("button", { class: "boton", type: "button", txt: "Quick refresh" }),
+      h("button", { class: "boton", type: "button", txt: "Connect" }),
+    ])],
+    pieLibre: [boton("Back")],
+  });
+}
+
+function pintaCrear() {
+  const cuerpo = [
+    fila("Map", [h("select", {}, [
+      h("option", { txt: "< Random Map >" }), h("option", { txt: "gatecity" }),
+      h("option", { txt: "edana" }),
+    ])], { estado: "vivo" }),
+    fila("", [casilla("Play in full screen", true)], { estado: "nuevo",
+      razon: "Era un apaño del navegador para no perder Ctrl+W. En escritorio ya no hace " +
+             "falta aquí: su sitio es la pestaña Video de Options." }),
+    fila("Hostname", [h("input", { type: "text", value: "Master Sword: Rebirth Server" })],
+      { estado: "muerto", razon: "«Start» abre una partida local; el nombre es de quien sirve." }),
+    fila("Max. players", [h("input", { type: "number", value: "6", style: "width:70px" })],
+      { estado: "muerto", razon: "Los slots son reales, pero el número vive en el otro proceso." }),
+  ];
+  return escena({
+    sel: "Establish a Kingdom",
+    titulo: "Create Server", pestanas: ["Server", "Game"], activa: 0,
+    cuerpo, ancho: 520, pie: [boton("Start"), boton("Cancel")],
+  });
+}
+
+// ── EL ANDAMIO ────────────────────────────────────────────────────────────────
+
+let estilo = "hoja", ancho = "1280", panel = "menu";
+
+function inventario(inv) {
+  const etiqueta = { vivo: "funciona", muerto: "apagado", nuevo: "escritorio", roto: "no llega" };
+  return h("div", { class: "inventario" }, [
+    h("h4", { txt: inv.titulo }),
+    h("table", {}, [
+      h("thead", {}, h("tr", {}, inv.cols.map((c) => h("th", { txt: c })))),
+      h("tbody", {}, inv.filas.map(([a, e, c]) => h("tr", {}, [
+        h("td", { html: "<strong>" + a + "</strong>" }),
+        h("td", {}, h("span", { class: "e e-" + e, txt: etiqueta[e] })),
+        h("td", { html: c }),
+      ]))),
+    ]),
+  ]);
+}
+
+function pinta() {
+  document.body.dataset.estilo = estilo;
+  document.body.dataset.modo = MODO[estilo];
+  const p = PANELES[panel];
+  const main = document.getElementById("main");
+  main.replaceChildren(h("figure", {
+    class: "escenario", style: `--simulado:${ancho}px`,
+  }, [
+    h("figcaption", {}, [
+      h("span", { html: "<strong>" + p.nombre + "</strong> — " + p.nota }),
+      h("span", { txt: ancho + " px" }),
+    ]),
+    p.pinta(),
+    inventario(p.inventario),
+  ]));
+  for (const [id, valor] of [["estilos", estilo], ["anchos", ancho], ["paneles", panel]]) {
+    for (const b of document.getElementById(id).children) {
+      b.setAttribute("aria-pressed", String(b.dataset.v === valor));
+    }
+  }
+}
+
+function mandos(id, opciones, alElegir) {
+  const caja = document.getElementById(id);
+  for (const [v, txt] of opciones) {
+    const b = h("button", { type: "button", txt, "aria-pressed": "false" });
+    b.dataset.v = v;
+    b.onclick = () => { alElegir(v); pinta(); };
+    caja.append(b);
+  }
+}
+
+mandos("estilos", ESTILOS, (v) => { estilo = v; });
+mandos("anchos", ANCHOS, (v) => { ancho = v; });
+mandos("paneles", Object.entries(PANELES).map(([k, p]) => [k, p.nombre]), (v) => { panel = v; });
+pinta();
+</script>
+</body>
+</html>

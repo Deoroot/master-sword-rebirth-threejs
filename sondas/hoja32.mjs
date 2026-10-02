@@ -19,7 +19,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5221;
@@ -28,6 +29,12 @@ if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el
 const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
 await new Promise((r) => setTimeout(r, 6000));
+
+// Cuántos controles TIENE que haber. No es decoración: si la sonda se va por el
+// `catch` a mitad, el «X de Y» de abajo se calcularía sobre los que llegaron a
+// correr y no podría bajar nunca — el experimento 65, que remató con «22 de 22
+// en verde» habiéndose caído en el 22 de 30.
+const DECLARADOS = 21;
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
@@ -39,11 +46,26 @@ try {
   const ANCHO = 1200, ALTO = 800;
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+
+  // VITE RECARGA LA PÁGINA cuando otra sesión guarda un archivo, y la recarga se
+  // lleva `window.probe`. Lo grave no es el rojo: es que **una pasada que se
+  // recarga a la mitad está midiendo dos versiones del código a la vez**, y eso
+  // puede salir verde. Se corta el canal de HMR por su SUBPROTOCOLO, así que el
+  // WebSocket del multijugador sigue pasando.
+  await pag.addInitScript(() => {
+    const Real = window.WebSocket;
+    window.WebSocket = function (url, protos) {
+      const esHmr = protos === "vite-hmr" || (Array.isArray(protos) && protos.includes("vite-hmr"));
+      if (!esHmr) return new Real(url, protos);
+      return { close() {}, send() {}, addEventListener() {}, removeEventListener() {}, readyState: 3 };
+    };
+  });
+  // SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  await entrarPorElMenu(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
   await pag.waitForFunction(() => window.probe.vgui.abierto() === null, null, { timeout: 60000 });
   await pag.evaluate(() => window.probe.hud.avanzar(20));
@@ -206,6 +228,89 @@ try {
   control("la elegida se pinta en ROJO, que es `Color_SelectedText`",
     rojo.length === 1, `${rojo.length}: ${rojo[0] ?? "ninguna"}`);
 
+  // ── 6. LOS DOS FORMATOS, QUE SON DOS A PROPÓSITO ────────────────────────
+  //
+  // `vgui_stats.cpp` pinta las habilidades en dos sitios con dos formatos
+  // distintos, y la confusión entre ellos es el encargo que llegó a esta sesión
+  // descrito al revés. Lo que dice el motor:
+  //
+  //   la lista de la IZQUIERDA, nombre y número y nada más
+  //     "%s: %i\n"                                  vgui_stats.cpp:277
+  //   el panel de la DERECHA, con el porcentaje
+  //     "%s: %i (%.2f%%%%) [%i left]\n"             vgui_stats.cpp:344
+  //
+  // O sea que añadir el porcentaje a la fila elegida de la izquierda sería
+  // inventarse un Master Sword que no existe. Los dos controles van juntos para
+  // que el segundo no se pueda «arreglar» sin ver el primero.
+  console.log(`\n  LOS DOS FORMATOS`);
+  const CON_PORCENTAJE = /^[A-Z][A-Za-z ]*: -?\d+ \(\d+\.\d{2}%\) \[-?\d+ left\]$/;
+  const filasDerecha = await detalle();
+  const cuerpoDerecha = filasDerecha.filter((t) => /: /.test(t));
+  console.log(`    derecha         ${JSON.stringify(cuerpoDerecha)}`);
+  console.log(`    izquierda       ${JSON.stringify(hab.slice(0, 3))} …`);
+  control("el panel de la DERECHA trae `(%.2f%%)` y `[%i left]`",
+    cuerpoDerecha.length > 0 && cuerpoDerecha.every((t) => CON_PORCENTAJE.test(t)),
+    cuerpoDerecha.length ? cuerpoDerecha[0] : "ni una fila");
+  // El nombre sale de `SkillTypeList`, no de la clave interna. Lo que había antes
+  // era `${p.clave}`, o sea «proficiency» en minúscula — el fallo que delata que
+  // nadie había comparado este panel con el original.
+  control("y el nombre es el de `SkillTypeList`, con mayúscula y no la clave interna",
+    cuerpoDerecha.every((t) => /^[A-Z]/.test(t)) && !cuerpoDerecha.some((t) => /^[a-z]/.test(t)),
+    cuerpoDerecha.map((t) => t.split(":")[0]).join(", "));
+  // Y LA FIDELIDAD POR EL OTRO LADO: la izquierda NO lo lleva.
+  const izquierdaConPct = hab.filter((t) => /%/.test(t) || /left/.test(t));
+  control("y la lista de la IZQUIERDA NO lo lleva, que es lo que hace el original",
+    izquierdaConPct.length === 0,
+    izquierdaConPct.length ? `inventado en ${izquierdaConPct.length}: ${izquierdaConPct[0]}` : "nombre y número");
+  // EL CONTROL POSITIVO del de arriba, que mide una AUSENCIA: el mismo detector,
+  // sobre una entrada que sí la tiene. Sin esto, un `hab` vacío —o un selector
+  // que dejara de encontrar la columna— daría «ninguna lleva porcentaje» en verde
+  // con la pantalla llena de ellos.
+  control("CONTROL POSITIVO: el detector de porcentaje sí lo ve donde está",
+    hab.length === 9 && cuerpoDerecha.some((t) => /%/.test(t) && /left/.test(t)),
+    `${hab.length} filas leídas a la izquierda, ${cuerpoDerecha.filter((t) => /%/.test(t)).length} con % a la derecha`);
+
+  // ── 7. PARRY ESCONDE EL PANEL ENTERO ────────────────────────────────────
+  //
+  //     if (m_ActiveStat < 0 || msstring(SkillStatList[m_ActiveStat].Name) == "Parry")
+  //     { m_InfoPanel->setVisible(false); return; }
+  //                                     vgui_stats.cpp:295-299
+  //
+  // Parry tiene UNA propiedad, así que un panel de cinco renglones para un número
+  // no dice nada y el original lo retira.
+  console.log(`\n  PARRY`);
+  const iParry = hab.findIndex((t) => /^Parry:/.test(t));
+  // Se cuentan las cajas VISIBLES de primer nivel, y no se busca «la de la
+  // derecha»: una caja escondida mide `x = 0`, así que ordenar por `x` y coger la
+  // mayor devuelve LA VENTANA en cuanto el panel se esconde — que es justo el caso
+  // que este control viene a medir. La primera versión de este lector hacía eso y
+  // decía «se ve» con el panel escondido, leyendo la ventana y creyendo que leía
+  // el panel. Es el aviso del 69 —comprueba que tu instrumento podía ver la
+  // ausencia— y el del 78: el selector seguía devolviendo algo, sólo que otra cosa.
+  //
+  // `.vg-hoja` tiene exactamente dos hijas: la ventana y el panel de la habilidad.
+  const cajasVisibles = () => pag.evaluate(() =>
+    [...document.querySelectorAll(".vg-hoja > div")].filter((n) => n.offsetParent !== null).length);
+  const panelDerechoSeVe = async () => (await cajasVisibles()) === 2;
+  const verseAntes = await panelDerechoSeVe();
+  for (let i = 0; i < iParry; i++) {
+    await pag.keyboard.press("PageDown");
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  await new Promise((r) => setTimeout(r, 400));
+  const verseConParry = await panelDerechoSeVe();
+  console.log(`    Parry es la ${iParry + 1}ª · cajas visibles antes: ${verseAntes ? 2 : "≠2"} · con Parry: ${await cajasVisibles()}`);
+  control("con `Parry` elegido el panel de la derecha SE ESCONDE",
+    iParry >= 0 && verseConParry === false, `Parry en la posición ${iParry}, panel visible=${verseConParry}`);
+  // El control positivo, que es el que hace que el de arriba signifique algo: si
+  // el panel estuviera escondido SIEMPRE —o si el lector mirara la caja
+  // equivocada— lo de arriba saldría verde sin que Parry tuviera nada que ver.
+  control("CONTROL POSITIVO: con cualquier otra habilidad sí se ve",
+    verseAntes === true, `antes de llegar a Parry: ${verseAntes}`);
+  // Y se vuelve a una habilidad normal para que la captura sea la útil.
+  await pag.keyboard.press("PageDown");
+  await new Promise((r) => setTimeout(r, 400));
+
   await pag.screenshot({ path: "build/gatecity/vistas/hoja32.png" });
   console.log(`    captura         build/gatecity/vistas/hoja32.png`);
 
@@ -221,9 +326,13 @@ try {
 console.log("\n  CONTROLES");
 for (const c of controles) console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(66)} ${c.detalle}`);
 const mal = controles.filter((c) => !c.bien);
-console.log(`\n  ${controles.length - mal.length} de ${controles.length} en verde`);
+// Sobre los DECLARADOS y no sobre los que corrieron. Ver arriba.
+console.log(`\n  ${controles.length - mal.length} de ${DECLARADOS} en verde`);
+if (controles.length !== DECLARADOS) {
+  console.log(`  !! FALTAN ${DECLARADOS - controles.length}: la sonda no llegó al final`);
+}
 console.log(`  errores de página: ${errores.length ? errores.join(" | ") : "ninguno"}\n`);
 
 await nav?.close();
 matar(dev);
-process.exit(mal.length || errores.length || !controles.length ? 1 : 0);
+process.exit(mal.length || errores.length || controles.length !== DECLARADOS ? 1 : 0);

@@ -153,7 +153,7 @@ function primero(d) {
   return mejor;
 }
 
-// La niebla, igual que la monta `escenaGateCity`: `FogExp2` y mezcla en el
+// La niebla, igual que la monta `escenaDelMapa`: `FogExp2` y mezcla en el
 // fragmento. A diez metros no llega al 1 %, pero al fondo de una galeria si.
 const caja = man.caja;
 const lejos = Math.hypot(caja.max[0] - caja.min[0], caja.max[2] - caja.min[2]);

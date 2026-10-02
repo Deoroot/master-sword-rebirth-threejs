@@ -18,7 +18,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5204;
@@ -35,14 +36,15 @@ const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
 await pag.waitForFunction(() => window.probe.golpe.estado.triangulos > 0, null, { timeout: 60000 })
   .catch(() => {});
@@ -177,6 +179,27 @@ const aguanteAntes = await pag.evaluate(() => {
 console.log(`  aguante al levantarlo: ${aguanteAntes.a} -> ${aguanteAntes.b} (la ficha declara ${aguanteAntes.ficha})`);
 control("levantar el escudo es gratis aunque su ficha declare 15 de aguante",
   aguanteAntes.a === aguanteAntes.b, `${aguanteAntes.a} -> ${aguanteAntes.b}`);
+// EL POSITIVO, y hacía falta: «no cambió» es el valor de reposo de un aguante
+// que no cambia NUNCA. Se comprobó rompiendo a propósito la línea que lo gasta
+// al correr, y esta sonda siguió en verde con la fatiga congelada — y con ella
+// `sonda:hud`, `sonda:mundo` y `sonda:golpe`.
+//
+// Se corre con las TECLAS y no con `probe.golpe.atacar()`, que sería lo
+// natural aquí: ese accesor llama a `brazo.tic` directamente y **no pasa por
+// `pasoDelBrazo`**, que es donde el juego cobra el aguante de blandir. O sea
+// que un mandoble de la sonda sale gratis aunque en el juego no lo sea. Es la
+// lección del 21 y del 22 —la sonda tiene que llamar a lo que llama el
+// juego— y está anotada en `doc/ARCO_55.md`.
+await pag.keyboard.down("ShiftLeft");
+await pag.keyboard.down("KeyW");
+await pag.waitForTimeout(1500);
+await pag.keyboard.up("KeyW");
+await pag.keyboard.up("ShiftLeft");
+const aguanteCorriendo = await pag.evaluate(() => window.probe.golpe.estado.aguante);
+console.log(`  y corriendo 1,5 s: ${aguanteAntes.b} -> ${aguanteCorriendo}`);
+control("CONTROL POSITIVO: correr SÍ cuesta aguante, así que lo de arriba mide",
+  aguanteCorriendo < aguanteAntes.b - 0.3,
+  `${aguanteAntes.b} -> ${aguanteCorriendo} tras 1,5 s corriendo`);
 
 // ── 3. EL BLOQUEO, medido ──────────────────────────────────────────────────
 //

@@ -283,6 +283,20 @@ export class PanelDeInventario extends PanelConNombre {
     this.botones = [this.accion, this.cancelar, ...this.botonesVista, this.casillaAlfabetico];
   }
 
+  /**
+   * QUÉ HACE UN CLIC EN UN OBJETO. Aquí, elegirlo.
+   *
+   * Es un método y no una línea suelta dentro de `refrescar` porque **el panel
+   * de la tienda hereda de éste** y ahí un clic no elige: compra. En el mod es
+   * lo mismo, `VGUI_ItemButton` llama a `ItemClicked` del panel que lo
+   * contiene y `CStoreBuyPanel` la sobreescribe para mandar `trade buy` y
+   * cerrar (vgui_storebuy.cpp:68-76). El gancho es del 60, con la tienda.
+   */
+  alPulsarObjeto(o) {
+    this.elegidoObjeto = o.id;
+    this.refrescar();
+  }
+
   /** Lo que hay dentro del contenedor elegido ahora, en el orden que toque. */
   get objetos() {
     const e = this.equipo?.() ?? [];
@@ -406,6 +420,12 @@ export class PanelDeInventario extends PanelConNombre {
     for (const o of objs) {
       const fila = el("div", `vg-inv-fila vg-inv-${VISTAS[this.vista].toLowerCase()}`);
       fila.dataset.elegida = o.id === this.elegidoObjeto ? "si" : "no";
+      // El id en el nodo, para que el panel de la tienda —que hereda de éste—
+      // pueda marcar filas sin adivinar cuál es por su texto. El 60.
+      fila.dataset.id = String(o.id);
+      // `Item.Disabled`: en la tienda, lo que el vendedor no compra
+      // (vgui_storesell.cpp:87). Aquí no lo pone nadie; lo pone la subclase.
+      if (o.apagado) fila.dataset.apagada = "si";
       // «Small» es la lista sin iconos: es para lo que está, para que quepan
       // más objetos de los que caben con el icono de 128 al lado.
       if (o.icono && this.vista !== 1) {
@@ -426,7 +446,7 @@ export class PanelDeInventario extends PanelConNombre {
         d.textContent = o.descripcion;
         fila.appendChild(d);
       }
-      fila.addEventListener("click", () => { this.elegidoObjeto = o.id; this.refrescar(); });
+      fila.addEventListener("click", () => this.alPulsarObjeto(o));
       this.listaObjetos.appendChild(fila);
     }
     if (!objs.length) {

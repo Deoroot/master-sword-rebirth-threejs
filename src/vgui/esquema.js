@@ -9,7 +9,7 @@
 //                                     vgui_teamfortressviewport.cpp:563-565
 //
 // Los esquemas los extrae `npm run vgui` de los cuatro `*_textscheme.txt` del
-// juego a `build/gatecity/vgui.json`. Aquí se consume.
+// juego a `build/msr/vgui.json`. Aquí se consume.
 //
 // ── Sin el fichero esto tiene que funcionar igual ──────────────────────────
 //
@@ -21,6 +21,9 @@
 
 import { deVgui } from "../juego/paleta.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+import { traerJson } from "../play/json.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /**
  * Las cuatro resoluciones del motor y cómo elige entre ellas.
  *
@@ -81,7 +84,7 @@ const BLANCO = [255, 255, 255, 0];
 
 export class Esquema {
   /**
-   * @param ficha  `build/gatecity/vgui.json`, o `null` si no está.
+   * @param ficha  `build/msr/vgui.json`, o `null` si no está.
    * @param ancho  el ancho de la pantalla, para elegir el archivo.
    */
   constructor(ficha = null, ancho = 640) {
@@ -148,13 +151,12 @@ export class Esquema {
 /**
  * Carga `vgui.json` si está. Nunca lanza: devuelve un esquema de socorro.
  *
- * @param base  la carpeta de `build/gatecity/`, tal como la sirve vite.
+ * @param base  la carpeta de `build/msr/`, tal como la sirve vite.
  */
-export async function cargarEsquema(base = "/build/gatecity/", ancho = 640, traer = fetch) {
+export async function cargarEsquema(base = `/${BASE_POR_DEFECTO}/`, ancho = 640, traer = fetch) {
   let ficha = null;
   try {
-    const r = await traer(`${base}vgui.json`);
-    if (r.ok) ficha = await r.json();
+    ficha = await traerJson(`${base}vgui.json`, { fetch: traer, avisar: () => {} });
   } catch {
     // Sin ficha se sigue: los tres esquemas de socorro están escritos arriba.
   }

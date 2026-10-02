@@ -177,10 +177,32 @@ describe("el ciclo de caza", () => {
     assert.equal(r.accion, ACCION.GOLPEAR);
   });
 
+  // CORRECCIÓN DEL 82: esta prueba decía 131, o sea «un paso más que
+  // ATTACK_RANGE», y es que medía la DISTANCIA. El motor no compara eso: el
+  // `range` de `NPC_RANGE_TYPE` lleva restada la mitad de las dos anchuras
+  // (scriptcmds.cpp:1154), y con los 32 de ancho de esta ficha son 16. O sea
+  // que el borde está en 130 + 16 = 146, y a 131 el bicho SÍ pega — lo que
+  // esta prueba llamaba «fuera» estaba dentro.
+  //
+  // El razonamiento de entonces se conserva porque sigue siendo el que vale:
+  // justo fuera del alcance de golpe no se golpea. Lo que estaba mal era el
+  // sitio donde cae «justo fuera».
   test("y justo fuera de ATTACK_RANGE, no", () => {
     const c = new Cazador(FICHA);
-    const r = piensa(c, { donde: [0, 0, 0], candidatos: [enemigo([131, 0, 0])] });
+    const r = piensa(c, { donde: [0, 0, 0], candidatos: [enemigo([147, 0, 0])] });
     assert.equal(r.accion, ACCION.PERSEGUIR);
+  });
+
+  test("y justo dentro, sí: el borde está en ATTACK_RANGE más media anchura", () => {
+    // Los dos lados del mismo umbral, escritos a mano y no derivados de la
+    // constante que miden — si salieran de `alcanceDeGolpe + ancho / 2` esta
+    // prueba seguiría verde con la resta puesta del revés (el 75).
+    const c = new Cazador(FICHA);
+    assert.equal(piensa(c, { donde: [0, 0, 0], candidatos: [enemigo([145, 0, 0])] }).accion,
+      ACCION.GOLPEAR);
+    assert.equal(piensa(new Cazador(FICHA), {
+      donde: [0, 0, 0], candidatos: [enemigo([147, 0, 0])],
+    }).accion, ACCION.PERSEGUIR);
   });
 
   test("los tres alcances son tres y no uno", () => {

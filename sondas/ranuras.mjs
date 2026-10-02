@@ -23,7 +23,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5208;
@@ -41,14 +42,15 @@ const ANCHO = 1200, ALTO = 800;
 const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
 await pag.evaluate(() => window.probe.vivo.congelarPaseo(true));
 // Sin esto no hay nada que ciclar: en Gate City no hay tiendas y un personaje
@@ -294,7 +296,10 @@ const menu = await pag.evaluate(() => {
   const abierto = window.probe.menu.abrir(true);
   const n = document.querySelector(".ms-menu");
   const fondo = getComputedStyle(n).backgroundImage;
-  return { ...abierto, fondo, visible: !n.hidden, rect: n.getBoundingClientRect().toJSON() };
+  // `data-fondo="vivo"` es lo que pone la capa cuando hay escena detrás
+  // (`src/juego/menums.js`), y es lo que distingue la torre de la pintura.
+  const fondoVivo = n.dataset.fondo === "vivo";
+  return { ...abierto, fondo, fondoVivo, visible: !n.hidden, rect: n.getBoundingClientRect().toJSON() };
 });
 console.log(`\n  EL MENÚ — ${menu.opciones.length} opciones y ${menu.separadores} separadores`);
 for (const o of menu.opciones) console.log(`    ${o.sirve ? "•" : "·"} ${o.texto.padEnd(24)} ${o.que}`);
@@ -302,9 +307,17 @@ control("el menú se abre y se ve", menu.abierto === true && menu.visible === tr
 control("y tapa la pantalla entera",
   menu.rect.width >= ANCHO - 1 && menu.rect.height >= ALTO - 1,
   `${Math.round(menu.rect.width)}×${Math.round(menu.rect.height)}`);
-control("trae el fondo de la torre horneado",
-  menu.fondo && menu.fondo.includes("fondo.png"),
-  menu.conFondo ? "menu/fondo.png" : "SIN FONDO — falta `npm run menu`");
+// EL 55: este control exigía la PINTURA, y desde el 52 el menú puede llevar
+// detrás la escena de la torre en vez de ella — con fondo vivo la capa es
+// transparente a propósito y `backgroundImage` queda vacío. O sea que estaba
+// rojo diciendo «falta el fondo» sobre un menú que tiene MÁS fondo que antes.
+//
+// Lo que hay que exigir no es una de las dos: es que haya UNA, y que se sepa
+// cuál. Un menú sin ninguna sí es un fallo, y sigue cayéndose.
+control("el menú tiene fondo: o la torre viva, o la pintura horneada",
+  Boolean(menu.fondoVivo) || Boolean(menu.fondo && menu.fondo.includes("fondo.png")),
+  menu.fondoVivo ? "la torre, en 3D" : (menu.fondo?.includes("fondo.png")
+    ? "la pintura, menu/fondo.png" : "NINGUNO — ni torre ni `npm run menu`"));
 control("con partida detrás salen «Resume game» y «Disconnect»",
   menu.opciones.some((o) => o.que === "cerrar") && menu.opciones.some((o) => o.que === "desconectar"),
   menu.opciones.map((o) => o.texto).join(" / "));
@@ -326,20 +339,40 @@ control("sin partida, «Resume game» y «Disconnect» no salen",
   !sinPartida.opciones.some((o) => o.que === "cerrar" || o.que === "desconectar"),
   sinPartida.opciones.map((o) => o.texto).join(" / "));
 
+// CUÁL ES LA QUE NO SIRVE SE BUSCA, NO SE ESCRIBE.
+//
+// Esto decía «Visit a Kingdom, que es la primera que no sirve» y exigía que el
+// pie dijera «no servers yet». Desde el 34 «Visit a Kingdom» SÍ sirve —abre el
+// navegador de servidores— así que el control llevaba rojo acusando al menú de
+// callarse cuando lo que pasaba es que no tenía nada que decir.
+//
+// El nombre escrito era el fallo. La regla que hay que vigilar no es «esta
+// opción concreta se queja»: es **la del apartado 5 de CLAUDE.md, que ninguna
+// opción apagada se quede callada**. Así que se busca la que esté apagada, sea
+// cual sea, y se le exige que hable.
 const apagadas = await pag.evaluate(() => {
   window.probe.menu.cerrar();
-  window.probe.menu.abrir(true);
-  // Bajar hasta «Visit a Kingdom», que es la primera que no sirve.
+  const abierto = window.probe.menu.abrir(true);
+  const cual = (abierto.opciones ?? []).find((o) => !o.sirve);
+  if (!cual) return { cual: null, elegida: null, pie: null, cuantas: 0 };
   let e = window.probe.menu.estado();
-  for (let i = 0; i < 12 && e.elegida !== "Visit a Kingdom"; i++) e = window.probe.menu.mover(1);
+  for (let i = 0; i < 16 && e.elegida !== cual.texto; i++) e = window.probe.menu.mover(1);
   const r = window.probe.menu.elegir();
-  return { elegida: e.elegida, r, pie: window.probe.menu.estado().pie };
+  return {
+    cual: cual.texto, elegida: e.elegida, r,
+    pie: window.probe.menu.estado().pie,
+    cuantas: (abierto.opciones ?? []).filter((o) => !o.sirve).length,
+  };
 });
-console.log(`    al elegir una que no sirve: "${apagadas.pie}"`);
-control("las flechas se mueven saltando los separadores",
-  apagadas.elegida === "Visit a Kingdom", `${apagadas.elegida}`);
+console.log(`    al elegir «${apagadas.cual}», que no sirve: "${apagadas.pie}"`);
+// El positivo del control de abajo: si no hubiera ninguna apagada, «todas las
+// apagadas hablan» sería verdad por vacío, que es el apartado 4 otra vez.
+control("hay alguna opción apagada a la que mirarle el pie",
+  apagadas.cuantas > 0, `${apagadas.cuantas} apagada(s)`);
+control("las flechas llegan hasta ella saltando los separadores",
+  apagadas.elegida === apagadas.cual, `${apagadas.elegida} (buscaba ${apagadas.cual})`);
 control("y una opción que no sirve DICE por qué, no calla",
-  Boolean(apagadas.pie) && apagadas.pie.includes("no servers yet"), `"${apagadas.pie}"`);
+  Boolean(apagadas.pie) && apagadas.pie.length > 3, `"${apagadas.pie}"`);
 
 await pag.screenshot({ path: "build/gatecity/vistas/menu.png" });
 

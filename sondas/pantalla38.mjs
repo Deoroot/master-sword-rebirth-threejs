@@ -51,6 +51,21 @@ await new Promise((r) => setTimeout(r, 6000));
 // una sonda que corriera ahí daría todos estos controles en gris sin decirlo.
 // Se comprueba abajo con `hayKeyboardLock`, que es el positivo de la sonda
 // entera: sin él, lo que sigue no mide nada y hay que verlo.
+// ── POR QUÉ ÉSTA NO ENTRA POR EL MENÚ, y las demás sí (59) ────────────────
+//
+// El 59 pasó las 27 sondas que abrían `?map=gatecity` a entrar por el menú.
+// Ésta se queda, y no por pereza: **su tema es la entrada**.
+//
+//   - los apartados 1 a 3 miden el estado ANTES de entrar —el teclado sin
+//     atrapar, sin pantalla completa, el menú en pie—, y un ayudante que
+//     entra por el menú ya ha pulsado «Start» cuando llegan;
+//   - el apartado 9 compara los DOS caminos a propósito: si los retratos se
+//     montan por `?map=` y no por el menú, el fallo es del menú; si no se
+//     montan por ninguno, llevaba roto desde antes. Poner los dos lados al
+//     mismo camino deja la comparación comparándose consigo misma.
+//
+// Se probó convertirla y dio 33 de 35, con siete controles midiendo otra
+// cosa. Un camino uniforme no vale nada si borra la pregunta.
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];

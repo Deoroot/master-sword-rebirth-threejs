@@ -87,7 +87,27 @@ const PORCODIGO = new Map(RESERVADAS.map((r) => [r.codigo, r]));
  * está perfecto; el problema aparece cuando además hay un Ctrl pulsado, y ese
  * Ctrl viene de OTRA acción. Por eso esto no basta y hace falta lo de abajo.
  */
-export function reservada(codigo) { return PORCODIGO.get(codigo) ?? null; }
+export function reservada(codigo, { enEscritorio = enLaCascara() } = {}) {
+  if (enEscritorio) return null;    // en la cáscara no hay ninguna reservada
+  return PORCODIGO.get(codigo) ?? null;
+}
+
+/**
+ * ¿Corremos dentro de la cáscara de escritorio?
+ *
+ * Se lee de `window.escritorio`, que pone `escritorio/precarga.cjs`. Es el único
+ * sitio del proyecto que lo consulta por su cuenta en vez de recibirlo, y tiene
+ * motivo: **este archivo entero trata del precio de publicar en el navegador**,
+ * así que la pregunta «¿hay navegador?» es su asunto y no el de quien lo llama.
+ *
+ * Las dos funciones públicas dejan pasarlo como parámetro igualmente, porque una
+ * prueba de Node tiene que poder afirmar las dos ramas sin inventarse un
+ * `globalThis` — que es la trampa del 59: construir el argumento que el llamador
+ * se equivoca al pasar.
+ */
+export function enLaCascara() {
+  return Boolean(globalThis.escritorio);
+}
 
 /**
  * El choque de verdad: dos acciones que por separado están bien y juntas no.
@@ -187,7 +207,18 @@ export function soltarTeclado(nav = globalThis.navigator) {
  * Devuelve el texto, o `null` si no toca decir nada. Quien lo llama lo manda al
  * HUD; este archivo no sabe qué es un HUD.
  */
-export function avisoDeReservadas({ mapa = {}, acciones = [], yaAvisado = false } = {}) {
+export function avisoDeReservadas({ mapa = {}, acciones = [], yaAvisado = false,
+                                    enEscritorio = enLaCascara() } = {}) {
+  // EN LA CÁSCARA NO HAY NADA QUE AVISAR, y avisar igual sería mentir.
+  //
+  // Esto ya estaba prometido —y escrito— en `escritorio/precarga.cjs`: *«quien
+  // lo pregunta es src/juego/navegador.js […] en escritorio no se queda ninguna,
+  // así que esos avisos sobran — y un aviso que no es verdad es peor que no
+  // avisar»*. La promesa estaba, la línea que la cumple no: hasta el 74 el juego
+  // de escritorio seguía diciéndole al jugador que Ctrl+W le cerraría la pestaña
+  // y que se pusiera en pantalla completa para evitarlo. No hay pestaña, y las
+  // teclas son suyas desde que el 72 quitó el menú de aplicación.
+  if (enEscritorio) return null;
   if (yaAvisado || atrapado) return null;
   const lista = choques(mapa, acciones).filter((c) => c.modificador === "ctrl" && c.acciones.length === 2);
   if (!lista.length) return null;

@@ -32,12 +32,32 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync, rmSync, readdirSync, existsSync } from "node:fs";
+import { MAPA_POR_DEFECTO, esNombreDeMapa } from "../src/play/mapa.js";
 
 const PUERTO_WEB = 5211;
 const PUERTO_PARTIDA = 5212;
 const PERSONAJES = "build/partidas/sonda/personajes";
+
+// EL SEGUNDO MAPA — experimento 61.
+//
+// Esta sonda midió la red **sólo en Gate City** desde el 27, y eso es la forma
+// del apartado 4 que ni romper el arreglo caza: con un caso, el valor correcto
+// y el valor de reposo son el mismo. El servidor acepta `--mapa` desde el 47 y
+// nadie lo había ejecutado nunca; el menú elige mapa desde el 50 y esta sonda
+// tomaba el de por omisión sin decirlo.
+//
+//     npm run sonda:red                 Gate City
+//     npm run sonda:red -- --mapa edana el otro
+//
+// Se le pasa a las dos puntas: al servidor, que carga su malla de colisión, y
+// a la fila «Map» del menú, que es por donde entra el jugador. Si no fueran el
+// mismo, los dos navegadores andarían un mapa que el servidor no tiene.
+const iMapa = process.argv.indexOf("--mapa");
+const MAPA = iMapa >= 0 ? process.argv[iMapa + 1] : MAPA_POR_DEFECTO;
+if (!esNombreDeMapa(MAPA)) { console.error(`«${MAPA}» no es un nombre de mapa`); process.exit(2); }
+console.log(`\n  EL MAPA: ${MAPA}\n`);
 
 // Se empieza en limpio: si quedaran personajes de la vuelta anterior, el
 // control de «el personaje vive en el servidor» pasaría sin haber guardado nada.
@@ -69,7 +89,7 @@ const dev = spawn("npx", ["vite", "--port", String(PUERTO_WEB), "--strictPort"],
 // que es cómo se quedó ocupado el puerto la primera vez.
 const partida = spawn(process.execPath, [
   "tools/servidor.mjs", "--puerto", String(PUERTO_PARTIDA),
-  "--nombre", "La sonda", "--personajes", PERSONAJES,
+  "--nombre", "La sonda", "--personajes", PERSONAJES, "--mapa", MAPA,
 ], { stdio: ["ignore", "pipe", "pipe"] });
 const salidaDelServidor = [];
 partida.stdout.on("data", (b) => salidaDelServidor.push(String(b)));
@@ -101,15 +121,29 @@ const abrir = async (quien) => {
     const traza = String(e.stack ?? "").split(/\r?\n/).slice(1, 4).join(" <- ");
     errores.push(`${quien}: ${String(e).slice(0, 160)} | ${traza.slice(0, 300)}`);
   });
-  await pag.goto(`http://localhost:${PUERTO_WEB}/?map=gatecity&red=ws://localhost:${PUERTO_PARTIDA}/juego`, { waitUntil: "load" });
-  await esNuestro(pag, PUERTO_WEB);
+  // SE ENTRA POR EL MENÚ, como el jugador (59). El `red=` se queda en la URL
+  // —el menú todavía no tiene su «Visit a Kingdom», y elegir el mapa por
+  // omisión no recarga— pero el camino hasta dentro es el del jugador.
+  await entrarPorElMenu(pag, PUERTO_WEB, {
+    mapa: MAPA,
+    extra: `red=ws://localhost:${PUERTO_PARTIDA}/juego`,
+  });
   await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   return pag;
 };
 
 const ana = await abrir("ana");
 const beto = await abrir("beto");
-mkdirSync("build/gatecity/vistas", { recursive: true });
+
+// CUÁNTOS TRIÁNGULOS HABÍA AL ENTRAR, para el control del final.
+//
+// Ese control decía `triangulos > 40000`, que son los 41 494 de Gate City
+// escritos a mano: en Edana, que tiene 33 087, se ponía rojo con el mapa
+// perfectamente dibujado. Un umbral copiado de un mapa mide ese mapa. Lo que
+// se quiere saber es que **sigue** en pie, así que se compara contra lo que
+// había, y eso vale en los dos (61).
+const trianguloAlEntrar = await ana.evaluate(() => window.probe.level?.mesh?.triangleCount ?? 0);
+mkdirSync(`build/${MAPA}/vistas`, { recursive: true });
 
 // ── 1. CONECTAR, que ya es el oráculo del marco ────────────────────────────
 console.log(`\n  CONECTAR`);
@@ -232,8 +266,8 @@ const dondeEstaBeto = quieto[0].pies;
 // fue como se encontró: por el error de audio, no por la captura.
 await ana.evaluate(([x, y, z]) => window.probe.mundo.mirar(x, y + 0.9, z), dondeEstaBeto);
 await esperar(300);
-await ana.screenshot({ path: "build/gatecity/vistas/red.png" });
-console.log(`    captura         build/gatecity/vistas/red.png`);
+await ana.screenshot({ path: `build/${MAPA}/vistas/red.png` });
+console.log(`    captura         build/${MAPA}/vistas/red.png`);
 
 // ── 4. LA AUTORIDAD ────────────────────────────────────────────────────────
 console.log(`\n  QUIÉN MANDA`);
@@ -325,7 +359,8 @@ const mundo = await ana.evaluate(() => ({
   bichos: window.probe.bichos?.cuantos?.() ?? null,
 }));
 control("el mapa sigue dibujado y el HUD en pie con la red puesta",
-  mundo.triangulos > 40000 && mundo.hud !== false, JSON.stringify(mundo));
+  trianguloAlEntrar > 0 && mundo.triangulos === trianguloAlEntrar && mundo.hud !== false,
+  JSON.stringify({ ...mundo, alEntrar: trianguloAlEntrar }));
 
 console.log(`\n  ── ${controles.filter((c) => c.bien).length} de ${controles.length} controles ──`);
 for (const c of controles) console.log(`  ${c.bien ? "sí" : "NO"}  ${c.que}${c.detalle ? `  [${c.detalle}]` : ""}`);

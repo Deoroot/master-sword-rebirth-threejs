@@ -35,7 +35,9 @@ import { resolve, join } from "node:path";
 import { leerFichaObjeto, partirScript } from "../src/bsp/script.js";
 
 const RAIZ = process.argv[2] ?? "../MSC/MSCScripts/scripts";
-const SALIDA = resolve("build/msr");
+import { salidaComun, prepararComunes } from "./recursos.mjs";
+const SALIDA = salidaComun();
+prepararComunes();
 
 if (!existsSync(`${RAIZ}/items`)) {
   console.error(`No encuentro ${RAIZ}/items. Pásame la carpeta scripts/ de MSR como argumento.`);

@@ -142,13 +142,46 @@ test("la manada: el estado que antes vivía dentro de un nodo de Three", async (
   await t.test("pero una que NO es de bucle rebobina siempre", () => {
     // `if (pev->sequence != iSequence || !m_fSequenceLoops) pev->frame = 0;`
     // — monsters.cpp:1238. Dos hachazos seguidos son dos hachazos.
+    //
+    // ── CORRECCIÓN DEL 80: «seguidos» no es «en el mismo instante» ──────────
+    //
+    // Esta prueba pedía los dos hachazos SIN que pasara tiempo entre ellos, y
+    // eso en el motor no ocurre: `SetAnimation` le pregunta primero a
+    // `CAnimOnce::CanChangeTo`, que devuelve `m_fSequenceFinished`
+    // (monsteranimation.cpp:217-220, msmonsterserver.cpp:2023), así que el
+    // segundo hachazo en el mismo fotograma **se rechaza**. La regla que esta
+    // prueba defiende es la de después —cuando el cambio sí se acepta, una que
+    // no es de bucle rebobina— y para verla hay que dejar acabar la primera.
+    // El propio `HACK_ATTACK_DELAY 1.0` dice que entre dos golpes pasa un
+    // segundo. La cita se queda; lo que estaba mal era el montaje.
+    const m = hacerManada();
+    const i = m.instancias[0];
+    m.pon(i, "swing");
+    assert.equal(i.anim.unaVez, true);
+    // Se deja acabar: `swing` son 30 fotogramas a 30 fps.
+    m.relojes(duracionDe(buscarSecuencia(i.secuencias, "swing")) + 1 / 60);
+    const gen = i.anim.gen;
+    m.pon(i, "swing");
+    assert.equal(i.anim.gen, gen + 1, "el segundo hachazo rebobina");
+    assert.equal(i.anim.unaVez, true);
+  });
+
+  await t.test("y EN EL MISMO FOTOGRAMA no: `CAnimOnce` no suelta el sitio (80)", () => {
+    // El complemento de la de arriba, y el fallo que el 80 vino a arreglar.
+    // Thothie lo dejó escrito encima de la guarda: «if you 'dance' around an
+    // affected monster, he can never attack, as his swing anims break».
     const m = hacerManada();
     const i = m.instancias[0];
     m.pon(i, "swing");
     const gen = i.anim.gen;
-    m.pon(i, "swing");
-    assert.equal(i.anim.gen, gen + 1);
-    assert.equal(i.anim.unaVez, true);
+    // Ni el mismo golpe, ni la de correr: mientras el hachazo corre, nada entra.
+    assert.equal(m.pon(i, "swing"), null);
+    assert.equal(m.pon(i, "run"), null);
+    assert.equal(i.anim.gen, gen, "la animación no se ha movido");
+    assert.equal(i.sigue.rechazos, 2);
+    // Pero `playanim critical` SÍ: rompe antes de poner (npcscript.cpp:1545-1548).
+    assert.equal(m.deUnaVez(i, "die"), true);
+    assert.equal(i.anim.nombre, "die");
   });
 
   await t.test("sin ACT_IDLE nombrada se sortea la actividad, no se pone la de andar", () => {
@@ -246,11 +279,18 @@ test("la foto de un bicho: lo justo, y aplicarla deja la manada igual", async (t
   await t.test("la animación se aplica por generación, no por nombre", () => {
     // Dos hachazos seguidos con la misma secuencia son dos hachazos. Comparando
     // nombres, el segundo no rebobinaría y el bicho daría un golpe de cada dos.
+    //
+    // CORRECCIÓN DEL 80: los dos golpes van separados por lo que dura el
+    // primero, porque `CAnimOnce` no deja empezar el segundo antes (ver «pero
+    // una que NO es de bucle rebobina siempre», arriba). Lo que esta prueba
+    // defiende —que el delta viaja por `gen` y no por nombre— no cambia: lo que
+    // cambia es que antes el segundo `pon` no llegaba a pasar nada.
     const a = hacerManada();
     const b = hacerManada();
     a.pon(a.instancias[0], "swing");
     b.aplicar(a.estado());
     const reinicios = b.instancias[0].sigue.reinicios;
+    a.relojes(duracionDe(buscarSecuencia(a.instancias[0].secuencias, "swing")) + 1 / 60);
     a.pon(a.instancias[0], "swing");
     b.aplicar(a.estado());
     assert.equal(b.instancias[0].sigue.reinicios, reinicios + 1, "el segundo golpe también llega");

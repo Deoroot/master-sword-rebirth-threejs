@@ -105,11 +105,13 @@
 // **todas las que vengan detrás en el bloque**. Aquí se llaman «cortes» y se
 // añaden a cada opción registrada desde ese punto.
 
-import { writeFileSync, existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { writeFileSync, existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
-const SCRIPTS = process.argv[2] ?? "../MSC/MSCScripts/scripts";
-const SALIDA = resolve("build/gatecity/menus.json");
+import { mapaDeArgv, posicionalesDe, salidaDe, enSalida } from "./mapa.mjs";
+const MAPA = mapaDeArgv();
+const SCRIPTS = posicionalesDe()[0] ?? "../MSC/MSCScripts/scripts";
+const SALIDA = enSalida(MAPA, "menus.json");
 
 /** Los ocho tipos, con el nombre que les da el script. `npcscript.cpp:953-973`. */
 export const TIPOS = {
@@ -265,7 +267,7 @@ export function juzgar(cond) {
 
 // ── LO QUE SE EJECUTA ───────────────────────────────────────────────────────
 if (process.argv[1]?.endsWith("menus.mjs")) {
-  const dir = join(SCRIPTS, "gatecity");
+  const dir = join(SCRIPTS, MAPA);
   if (!existsSync(dir)) {
     console.error(`No encuentro ${dir}. Pásame la carpeta de scripts del juego.`);
     process.exit(1);
@@ -285,14 +287,14 @@ if (process.argv[1]?.endsWith("menus.mjs")) {
       juicio: o.condiciones.map(juzgar),
     }));
     if (!ops.length) continue;
-    const clave = `gatecity/${f.replace(/\.script$/, "")}`;
+    const clave = `${MAPA}/${f.replace(/\.script$/, "")}`;
     porScript[clave] = ops;
     total += ops.length;
     decidibles += ops.filter((o) => o.juicio.every((j) => j.decidible)).length;
     conFallo += ops.filter((o) => o.cortes > 0).length;
   }
 
-  console.log(`\n  OPCIONES DE MENÚ DE GATE CITY  (${dir})\n`);
+  console.log(`\n  OPCIONES DE MENÚ DE ${MAPA}  (${dir})\n`);
   for (const [k, ops] of Object.entries(porScript)) {
     console.log(`    ${k.padEnd(22)} ${ops.length}`);
     for (const o of ops) {
@@ -303,21 +305,24 @@ if (process.argv[1]?.endsWith("menus.mjs")) {
     }
   }
 
-  control("hay opciones de verdad en Gate City", total >= 8, `${total} en ${Object.keys(porScript).length} NPC`);
-  control("y más de la mitad se pueden decidir sin intérprete", decidibles * 2 >= total,
-    `${decidibles} de ${total}`);
-  // Este control decía «EL FALLO DEL SCRIPT: el `if` del mineral sólo guarda
-  // el título» y estaba en verde sobre un hallazgo falso. Ahora mide lo que de
-  // verdad hay: opciones que van DETRÁS de un `if` viejo y que por eso
-  // desaparecen si él falla, porque abandona el evento (script.cpp:5758).
-  control("hay opciones detrás de un `if` viejo, que al fallar se las lleva",
-    conFallo >= 1, `${conFallo} de ${total}`);
-  // Y su contrario, que es el que impide que lo de arriba sea un sello: tiene
-  // que haber también opciones SIN ningún corte delante. Si todas tuvieran uno,
-  // «detrás de un if viejo» no distinguiría nada.
-  control("y otras que no llevan ninguno delante",
-    Object.values(porScript).flat().some((o) => !o.cortes),
-    `${Object.values(porScript).flat().filter((o) => !o.cortes).length} de ${total} sin cortes`);
+  // Regresiones del mapa de referencia: otros mapas pueden no tener menús.
+  if (MAPA === "gatecity") {
+    control("hay opciones de verdad en Gate City", total >= 8, `${total} en ${Object.keys(porScript).length} NPC`);
+    control("y más de la mitad se pueden decidir sin intérprete", decidibles * 2 >= total,
+      `${decidibles} de ${total}`);
+    // Este control decía «EL FALLO DEL SCRIPT: el `if` del mineral sólo guarda
+    // el título» y estaba en verde sobre un hallazgo falso. Ahora mide lo que de
+    // verdad hay: opciones que van DETRÁS de un `if` viejo y que por eso
+    // desaparecen si él falla, porque abandona el evento (script.cpp:5758).
+    control("hay opciones detrás de un `if` viejo, que al fallar se las lleva",
+      conFallo >= 1, `${conFallo} de ${total}`);
+    // Y su contrario, que es el que impide que lo de arriba sea un sello: tiene
+    // que haber también opciones SIN ningún corte delante. Si todas tuvieran uno,
+    // «detrás de un if viejo» no distinguiría nada.
+    control("y otras que no llevan ninguno delante",
+      Object.values(porScript).flat().some((o) => !o.cortes),
+      `${Object.values(porScript).flat().filter((o) => !o.cortes).length} de ${total} sin cortes`);
+  }
   control("el tipo desconocido cae en `callback`, como el motor",
     tipoDe("lo-que-sea") === "callback" && tipoDe("payment_silent") === "payment");
   control("una variable de misión sin poner: `!VAR` es cierto y `VAR` es falso",
@@ -329,6 +334,7 @@ if (process.argv[1]?.endsWith("menus.mjs")) {
   for (const c of controles) console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(62)} ${c.detalle}`);
   console.log(`\n  ${controles.filter((c) => c.bien).length} de ${controles.length} controles`);
 
+  mkdirSync(salidaDe(MAPA), { recursive: true });
   writeFileSync(SALIDA, JSON.stringify({
     procedencia: {
       scripts: SCRIPTS,
@@ -346,14 +352,14 @@ if (process.argv[1]?.endsWith("menus.mjs")) {
   }, null, 1));
   console.log(`  escrito ${SALIDA}`);
 
-  const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+  const PROC = enSalida(MAPA, "PROCEDENCIA.md");
   const MARCA = "## Las opciones del menú de interacción";
   if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
     appendFileSync(PROC, `
 ${MARCA}
 
 \`menus.json\` lo escribe \`node tools/menus.mjs\` leyendo los bloques
-\`game_menu_getoptions\` de los 25 scripts de \`scripts/gatecity/\`. Son títulos,
+\`game_menu_getoptions\` de los scripts de \`scripts/${MAPA}/\`. Son títulos,
 tipos y condiciones: texto, nada de imágenes.
 
 No es un intérprete de scripts. Se juzgan cuatro formas de condición y lo que no

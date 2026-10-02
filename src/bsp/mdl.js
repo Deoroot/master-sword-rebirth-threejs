@@ -521,6 +521,12 @@ export function mallaDe(m, texturas, { piel = 0, cuerpo = 0, matrices: dadas = n
   // giro correcto es el que concuerda con ella. Se cuentan los que no.
   const grupos = [...porTextura.values()];
   let contraNormal = 0, aFavor = 0;
+  // Y de paso, QUIÉN ESTÁ REPETIDO. Ver `gemelos` abajo.
+  const posDe = (p, i) => [0, 1, 2]
+    .map((k) => `${p[i + k * 3].toFixed(3)},${p[i + k * 3 + 1].toFixed(3)},${p[i + k * 3 + 2].toFixed(3)}`)
+    .sort().join("|");
+  const deFrente = new Set();
+  const delReves = [];
   for (const g of grupos) {
     for (let i = 0; i < g.pos.length; i += 9) {
       const ax = g.pos[i + 3] - g.pos[i], ay = g.pos[i + 4] - g.pos[i + 1], az = g.pos[i + 5] - g.pos[i + 2];
@@ -530,22 +536,39 @@ export function mallaDe(m, texturas, { piel = 0, cuerpo = 0, matrices: dadas = n
       const nx = (g.nor[i] + g.nor[i + 3] + g.nor[i + 6]) / 3;
       const ny = (g.nor[i + 1] + g.nor[i + 4] + g.nor[i + 7]) / 3;
       const nz = (g.nor[i + 2] + g.nor[i + 5] + g.nor[i + 8]) / 3;
-      if (cx * nx + cy * ny + cz * nz > 0) aFavor++; else contraNormal++;
+      if (cx * nx + cy * ny + cz * nz > 0) { aFavor++; deFrente.add(posDe(g.pos, i)); }
+      else { contraNormal++; delReves.push(posDe(g.pos, i)); }
     }
   }
+  // LOS GEMELOS, y son lo que salva el umbral de tener que adivinarse (el 48).
+  //
+  // Un triángulo «en contra» que tiene otro **en las mismas tres posiciones** y
+  // a favor no es un error de bobinado: es una pieza de DOBLE CARA, modelada
+  // dos veces a propósito porque en GoldSrc no hay `doubleSided`.
+  //
+  // Lo destapó Edana: `msc_riverwind/flo_grass2.mdl` —una mata de hierba— tiene
+  // 36 de 72 en contra, o sea el 50 % clavado, y el umbral del 25 % lo paraba.
+  // Los 36 tienen gemelo, los 36. Descontarlos deja el 0 % y no hay que mover
+  // el umbral: un modelo de verdad invertido sigue dando el 100 % sin un solo
+  // gemelo, porque sus triángulos no están repetidos.
+  const gemelos = delReves.filter((k) => deFrente.has(k)).length;
+  const sueltos = contraNormal - gemelos;
   return {
     grupos,
     triangulos, tiras, abanicos, submodelosOmitidos,
     esperados, leidos, cuadra: esperados === leidos,
-    aFavor, contraNormal,
+    aFavor, contraNormal, gemelos, sueltos,
     // El umbral es el 25 % y no el 0 %, y la razón está medida: `gaz_thoth_mutant_candle`
     // tiene **10 de sus 120** triángulos girando en contra, y son la llama —una
     // pieza de dos caras, modelada así a propósito—. Un bobinado invertido de
     // verdad no da el 8 %: da el 100 %, que es lo que daban los diecisiete antes
-    // de invertirlos. Entre un caso y otro no hay nada, así que el umbral separa
-    // sin dudar y no hay que afinarlo.
+    // de invertirlos.
+    //
+    // Lo que se cuenta contra el umbral son los que van en contra **y no tienen
+    // gemelo**: los de doble cara no son un fallo y en la hierba de Edana son
+    // justo la mitad. Ver `gemelos` arriba.
     contraNormalFrac: (aFavor + contraNormal) ? contraNormal / (aFavor + contraNormal) : 0,
-    bobinadoBien: contraNormal <= (aFavor + contraNormal) * 0.25,
+    bobinadoBien: sueltos <= (aFavor + contraNormal) * 0.25,
   };
 }
 

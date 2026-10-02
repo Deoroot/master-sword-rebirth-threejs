@@ -84,7 +84,42 @@
 // más claro» no podía encontrarlos ni por casualidad. Son dos preguntas
 // distintas, y la que se parece a la que se quería hacer es la segunda.
 
-import { readFileSync, writeFileSync } from "node:fs";
+// ── CORRECCIÓN DEL 50: el punto del mapa gana si no hay motivo para cambiarlo
+//
+// Todo lo de arriba se midió sobre Gate City, y sobre Gate City es cierto: su
+// `ms_player_begin` deja al jugador en una cueva con TRES goblins a menos de
+// 15 m y fuera de toda zona de pueblo. De ahí salió «el templo gana al punto
+// del mapa», y de ahí salieron tres controles que exigen ganarle.
+//
+// Edana lo enseñó: **su `ms_player_begin` está bien.** Cero hostiles —el jabalí
+// más cercano a 127,9 m— y luz 193 sobre 255, que además está comprobada: de
+// las 42 posiciones de NPC del mapa hay 23 valores de luz distintos y trece dan
+// exactamente 193, o sea que es el valor de estar a cielo abierto y no una
+// lectura atascada. El templo de Edana da 172. Exigirle al elegido que GANE en
+// luz es pedirle a un templo que sea más claro que el mediodía.
+//
+// Es la forma del experimento 48: una regla correcta medida sobre un solo mapa.
+// Lo que dice el mod es `SPAWN_BEGIN` (`player/player.cpp:2455` y `:2558`), o
+// sea el punto del mapa; apartarse de él necesita un motivo, y el motivo de
+// Gate City son sus goblins. Así que ahora **se mide el punto del mapa contra
+// las reglas duras y sólo si falla alguna se busca otro sitio**.
+//
+// Las reglas duras no traen ni un número nuevo: son las tres que ya estaban
+// —hostiles, poder estar de pie, no aparecer dentro de nadie— más la zona de
+// pueblo, que **sólo se aplica si el mapa tiene alguna**. Y NO hay umbral de
+// luz a propósito: Gate City ya falla por los goblins y por la zona, así que un
+// mínimo de luz sería un número que hoy no decide nada y que el día que
+// decidiera, decidiría a ojo.
+//
+// Lo que esto destapó de paso: el filtro de rayos pedía `enPueblo`, así que en
+// un mapa sin un solo `msarea_town` descartaba **los quince** antes de que el
+// ancla llegara a mirarlos. No era una decisión, era el mismo bug.
+//
+// Y los controles que sólo valen en una de las dos ramas ya no salen verdes por
+// no aplicar: dicen `n/a` con el motivo, como las tablas de ajustes. Un control
+// que no puede fallar es el apartado 4 de CLAUDE.md con otra ropa.
+
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   leerBsp, leerModelos, leerTexinfo, leerCaras, leerEntidades, origen,
   aEscena, UNIDADES_POR_METRO as U,
@@ -92,8 +127,10 @@ import {
 import { luzEnSuelo } from "../src/bsp/luz.js";
 import { sePuedeEstar, sueloBajo } from "../src/bsp/arbol.js";
 
-const BSP = process.argv[2] ?? "../MSC/assets/msr/maps/gatecity.bsp";
-const SALIDA = "build/gatecity/aparicion.json";
+import { mapaDeArgv, bspDe, enSalida } from "./mapa.mjs";
+const MAPA = mapaDeArgv();
+const BSP = bspDe(MAPA);
+const SALIDA = enSalida(MAPA, "aparicion.json");
 
 // Un hostil es lo que declara un script de `monsters/`. No es una lista
 // nuestra: es la carpeta en la que el mod guarda a los que atacan, y separa
@@ -108,8 +145,8 @@ const modelos = leerModelos(bsp);
 const texinfos = leerTexinfo(bsp);
 const caras = leerCaras(bsp, modelos[0], texinfos);
 const entidades = leerEntidades(bsp);
-const man = JSON.parse(readFileSync("build/gatecity/malla.json", "utf8"));
-const censo = JSON.parse(readFileSync("build/gatecity/bichos.json", "utf8"));
+const man = JSON.parse(readFileSync(enSalida(MAPA, "malla.json"), "utf8"));
+const censo = JSON.parse(readFileSync(enSalida(MAPA, "bichos.json"), "utf8"));
 
 const hostiles = censo.colocados.filter(esHostil);
 const amigos = censo.colocados.filter((b) => !esHostil(b) && b.clase === "ms_npc");
@@ -123,6 +160,9 @@ const cajasPueblo = entidades
   .filter((e) => e.classname === "msarea_town" && /^\*\d+$/.test(e.model ?? ""))
   .map((e) => modelos[Number(e.model.slice(1))])
   .filter(Boolean);
+// Si el mapa no tiene ninguna, la regla de la zona de pueblo no se aplica en
+// vez de fallar siempre. Edana no tiene ni una (medido en el experimento 48).
+const HAY_PUEBLOS = cajasPueblo.length > 0;
 const enPueblo = (u) => cajasPueblo.some((m) =>
   u[0] >= m.mins[0] && u[0] <= m.maxs[0] &&
   u[1] >= m.mins[1] && u[1] <= m.maxs[1] &&
@@ -233,14 +273,50 @@ const SEGURO = 15;      // metros sin un solo hostil
 const HUECO = 1.2;      // metros de separación del NPC más cercano, para no
                         // aparecer dentro de nadie
 
-/** Los sacerdotes del templo: los cuatro scripts que incluyen `help/first_npc`. */
-const DEL_TEMPLO = new Set(["gatecity/priest", "gatecity/masterp", "edana/priest", "edana/masterp"]);
+/**
+ * LOS ANCLAS DEL MOD, derivados y no escritos.
+ *
+ * Esto era una lista de cuatro nombres a mano. La lista era correcta —salió de
+ * un `grep` sobre los 2 884 scripts— pero **una lista escrita no se entera de
+ * un mapa nuevo**, que es exactamente contra lo que argumenta la primera línea
+ * de este archivo sobre las coordenadas del templo. Se vuelve a hacer el
+ * `grep` aquí, cada vez, y cuesta menos de un segundo.
+ */
+function anclasDelMod(raiz = RAIZ_SCRIPTS, incluye = "help/first_npc") {
+  const marca = new RegExp(`#include\\s+${incluye}\\b`);
+  const salida = new Set();
+  const andar = (dir, pre) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) andar(`${dir}/${e.name}`, `${pre}${e.name}/`);
+      else if (e.name.endsWith(".script") && marca.test(readFileSync(`${dir}/${e.name}`, "utf8"))) {
+        salida.add(`${pre}${e.name.replace(/\.script$/, "")}`);
+      }
+    }
+  };
+  andar(raiz, "");
+  return salida;
+}
+const RAIZ_SCRIPTS = "../MSC/MSCScripts/scripts";
+const DEL_TEMPLO = anclasDelMod();
 const sacerdotes = amigos.filter((a) => DEL_TEMPLO.has(a.script));
-if (!sacerdotes.length) {
-  throw new Error(
-    "este mapa no tiene sacerdotes de templo, así que no hay ancla que medir. " +
-    "Un mapa sin ellos necesita otra regla, y elegirla a ojo es justo lo que esto evita."
-  );
+
+/**
+ * Las reglas que un sitio tiene que cumplir para valer, con el nombre de la
+ * que falla — y el motivo por el que puede haber que cambiar el punto del mapa.
+ *
+ * Ninguna trae un número nuevo: son las que ya decidían antes. La de la zona de
+ * pueblo sólo se aplica donde hay zonas. Ver la corrección del 50 arriba.
+ */
+function reglasDuras(c) {
+  const mal = [];
+  const [x, y, z] = c.unidades;
+  if (c.hostiles15 > 0) mal.push(`${c.hostiles15} hostil(es) a menos de ${SEGURO} m`);
+  if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) {
+    mal.push("no se puede estar de pie");
+  }
+  if (c.alAmigo < HUECO) mal.push(`a ${c.alAmigo} m del NPC más cercano, mínimo ${HUECO}`);
+  if (HAY_PUEBLOS && !c.enPueblo) mal.push("fuera de toda zona msarea_town");
+  return mal;
 }
 
 const seguros = (lista) => lista
@@ -287,9 +363,8 @@ function apartar(c) {
 // este mapa está por debajo de 32 sobre 255, así que «claro» aquí quiere decir
 // «se ve algo» y no «es bonito».
 sitios.sort((a, b) => b.luz - a.luz || a.alPueblo - b.alPueblo);
-if (!sitios.length) throw new Error("ningún sacerdote tiene hueco seguro alrededor");
-const delTemplo = sitios[0];
-const delMapa = candidatos.find((c) => c.nombre === "ms_player_begin");
+const delTemplo = sitios[0] ?? null;
+const delMapa = candidatos.find((c) => c.nombre === "ms_player_begin") ?? null;
 
 // ── Y DENTRO DEL TEMPLO, DEBAJO DE UN RAYO DE LUZ ──────────────────────────
 //
@@ -388,17 +463,39 @@ const rayos = rayosDeLuz();
 const bajoRayo = [];
 const rayosFuera = [];   // los descartados por no ser del templo: el control de
                          // que el ancla sigue decidiendo algo
+/**
+ * POR QUÉ SE CAE CADA RAYO, contado.
+ *
+ * Esto no es estadística: es lo que habría enseñado el bug. El filtro pedía
+ * `enPueblo`, así que en un mapa sin un solo `msarea_town` los quince rayos de
+ * Edana se caían aquí **sin dejar rastro** — la tabla imprimía «ninguno
+ * utilizable» y parecía un mapa sin tragaluces. Un `continue` mudo no se puede
+ * distinguir de una decisión.
+ *
+ * Con el motivo apuntado, la suma tiene que cuadrar con los rayos del mapa, y
+ * ningún rayo puede caerse por una regla que este mapa no puede cumplir.
+ */
+const descartes = new Map();
+const descartar = (motivo) => descartes.set(motivo, (descartes.get(motivo) ?? 0) + 1);
+
 for (const r of rayos) {
   const [x, y, z] = r.unidades;
-  if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) continue;
-  if (r.alSuelo > RAYO_AL_SUELO) continue;
+  if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) {
+    descartar("no se puede estar de pie debajo"); continue;
+  }
+  if (r.alSuelo > RAYO_AL_SUELO) { descartar(`se corta a más de ${RAYO_AL_SUELO} unidades del suelo`); continue; }
   const visible = Number.isFinite(r.alSacerdoteVisible);
   const m = medir(
     r.unidades,
     `rayo a ${r.alSacerdote.toFixed(1)} m del sacerdote${visible ? "" : " (no se le ve)"}`,
     "rayo",
   );
-  if (m.hostiles15 > 0 || m.alAmigo < HUECO || !m.enPueblo) continue;
+  // Las mismas reglas duras que se le piden al punto del mapa, y por el mismo
+  // motivo: aquí estaba escrito `!m.enPueblo` a secas, que en un mapa sin
+  // `msarea_town` descarta TODOS los rayos sin haber mirado ninguno.
+  const mal = reglasDuras(m);
+  // Sólo el primer motivo, para que la suma siga cuadrando con un rayo por fila.
+  if (mal.length) { descartar(mal[0].replace(/^\d+ /, "").replace(/a [\d.]+ m del/, "demasiado cerca del")); continue; }
   const fila = {
     ...m,
     alSacerdote: Number(r.alSacerdote.toFixed(1)),
@@ -410,23 +507,49 @@ for (const r of rayos) {
 bajoRayo.sort((a, b) => b.luz - a.luz || a.alSacerdoteVisible - b.alSacerdoteVisible);
 rayosFuera.sort((a, b) => b.luz - a.luz);
 
-// Si el mapa no tiene rayos utilizables, se cae al rincón del sacerdote. Un
-// mapa sin tragaluces no es un error: es un mapa sin tragaluces.
-const elegido = bajoRayo[0] ?? delTemplo;
+// ── LA ELECCIÓN, en el orden que dice el mod ───────────────────────────────
+//
+// Primero el punto del mapa, que es lo que hace el motor (`SPAWN_BEGIN`). Sólo
+// si falla una regla dura se busca otro sitio, y entonces sí: el rayo del
+// templo, y si el mapa no tiene rayos utilizables el rincón del sacerdote —
+// un mapa sin tragaluces no es un error, es un mapa sin tragaluces.
+const falloDelMapa = delMapa
+  ? reglasDuras(delMapa)
+  : ["el mapa no trae ms_player_begin"];
+
+let elegido, porQue;
+if (delMapa && !falloDelMapa.length) {
+  elegido = delMapa;
+  porQue = "el ms_player_begin del mapa cumple las reglas duras, así que se respeta";
+} else {
+  if (!sacerdotes.length) {
+    throw new Error(
+      `el ms_player_begin de ${MAPA} falla (${falloDelMapa.join("; ")}) y el mapa no tiene ` +
+      "sacerdotes de templo, así que no hay ancla que medir. Un mapa así necesita otra " +
+      "regla, y elegirla a ojo es justo lo que esto evita."
+    );
+  }
+  if (!sitios.length) throw new Error("ningún sacerdote tiene hueco seguro alrededor");
+  elegido = bajoRayo[0] ?? delTemplo;
+  porQue = `el ms_player_begin del mapa falla: ${falloDelMapa.join("; ")}`;
+}
 
 // ── La tabla, que es la prueba ─────────────────────────────────────────────
 const fila = (c, marca = " ") => console.log(
   ` ${marca}${c.nombre.padEnd(32)}${String(c.luz).padStart(5)}  ${c.enPueblo ? "dentro" : " fuera"}` +
   `${String(c.hostiles15).padStart(10)}  ${c.hostilMasCerca ? `${c.hostilMasCerca.nombre} a ${c.hostilMasCerca.m} m` : "—"}`
 );
-console.log("\n  DÓNDE APARECE UN PERSONAJE NUEVO EN GATE CITY");
+console.log(`\n  DÓNDE APARECE UN PERSONAJE NUEVO EN ${MAPA}`);
 console.log("  ─────────────────────────────────────────────────────────────────────────");
 console.log("  sitio                              luz   msarea_town  hostiles  el más cerca");
 console.log("\n  lo que trae el mapa");
-for (const c of candidatos.filter((c) => c.familia === "mapa" || c.familia === "reaparicion").slice(0, 4)) fila(c);
+for (const c of candidatos.filter((c) => c.familia === "mapa" || c.familia === "reaparicion").slice(0, 4)) {
+  fila(c, c === elegido ? "→" : " ");
+}
+console.log(`    ms_player_begin: ${falloDelMapa.length ? `falla — ${falloDelMapa.join("; ")}` : "cumple las reglas duras"}`);
 console.log("\n  los pueblos");
 for (const c of candidatos.filter((c) => c.familia === "pueblo").slice(0, 3)) fila(c);
-console.log("\n  EL TEMPLO — el ancla, sacada de los 4 scripts que incluyen help/first_npc");
+console.log(`\n  EL TEMPLO — el ancla, sacada de los ${DEL_TEMPLO.size} scripts que incluyen help/first_npc`);
 for (const c of sitios) fila(c, c === elegido ? "→" : " ");
 console.log(`\n  LOS RAYOS DEL TEMPLO — ${rayos.length} func_illusionary rendermode 5 en el mapa`);
 for (const c of bajoRayo.slice(0, 4)) fila(c, c === elegido ? "→" : " ");
@@ -447,17 +570,54 @@ console.log(`     en ejes de escena: (${elegido.escena.map((v) => v.toFixed(1)).
 // Sin esto lo de arriba es una tabla bonita. Un control que no puede fallar no
 // es un control, así que los tres comparan contra lo que trae el mapa.
 const controles = [];
-const control = (que, bien, detalle) => { controles.push({ que, bien, detalle }); return bien; };
+const control = (que, bien, detalle) => { controles.push({ que, aplica: true, bien, detalle }); return bien; };
+/** Un control que en ESTE mapa no puede decidir nada, y dice por qué. */
+const noAplica = (que, porQueNo) => { controles.push({ que, aplica: false, bien: null, porQueNo }); };
 
-control("gana al punto del mapa en LUZ", elegido.luz > delMapa.luz,
-  `${elegido.luz} contra ${delMapa.luz}`);
-control("gana al punto del mapa en HOSTILES", elegido.hostiles15 < delMapa.hostiles15,
-  `${elegido.hostiles15} contra ${delMapa.hostiles15} a ${SEGURO} m`);
+const seCambio = elegido !== delMapa;
+
+// ── Lo primero: que las reglas duras discriminen ───────────────────────────
+//
+// Son las que deciden si el punto del mapa se respeta, así que si aceptaran
+// todo o rechazaran todo, la elección entera sería un sello de goma. Este par
+// es la versión de dos lados del control del 48: tienen que rechazar algo Y
+// aceptar algo, en el mapa que se está horneando.
+{
+  const juzgados = candidatos.map((c) => reglasDuras(c).length);
+  control("las reglas duras RECHAZAN sitios de este mapa", juzgados.some((n) => n > 0),
+    `${juzgados.filter((n) => n > 0).length} de ${juzgados.length} candidatos incumplen alguna`);
+  control("y ACEPTAN otros", juzgados.some((n) => n === 0),
+    `${juzgados.filter((n) => n === 0).length} de ${juzgados.length} las cumplen todas`);
+}
+control("el sitio elegido cumple TODAS las reglas duras", reglasDuras(elegido).length === 0, porQue);
+
+// La luz NO es una regla dura, y por eso ya no es un control: ver la corrección
+// del 50. Se mide y se imprime, que es lo que se puede defender.
+noAplica("gana al punto del mapa en LUZ",
+  `la luz no decide: ${elegido.luz} contra ${delMapa?.luz ?? "—"} del mapa, y en Edana el templo` +
+  " pierde contra el mediodía");
+
+// Cada regla dura sólo se juzga cuando es ELLA la que obligó a cambiar de
+// sitio. Así el control no puede salir verde por casualidad ni rojo por no
+// venir a cuento.
+if (!seCambio) {
+  noAplica("gana al punto del mapa en HOSTILES", "no se ha cambiado el punto del mapa");
+} else if (falloDelMapa.some((f) => f.includes("hostil"))) {
+  control("gana al punto del mapa en HOSTILES", elegido.hostiles15 < delMapa.hostiles15,
+    `${elegido.hostiles15} contra ${delMapa.hostiles15} a ${SEGURO} m`);
+} else {
+  noAplica("gana al punto del mapa en HOSTILES", "el punto del mapa no falla por hostiles");
+}
+
 // La zona de pueblo y no la distancia: el «centro» de un pueblo es su cara de
 // suelo mayor, así que a 43 m de él se puede estar perfectamente dentro. Lo que
 // decide es el volumen `msarea_town`, que es lo que mira el propio mod.
-control("aparece DENTRO de una zona de pueblo", elegido.enPueblo && !delMapa.enPueblo,
-  `el templo dentro; ms_player_begin ${delMapa.enPueblo ? "también" : "fuera"}`);
+if (!HAY_PUEBLOS) {
+  noAplica("aparece DENTRO de una zona de pueblo", "el mapa no tiene ni un msarea_town");
+} else {
+  control("aparece DENTRO de una zona de pueblo", elegido.enPueblo,
+    `elegido dentro; ms_player_begin ${delMapa?.enPueblo ? "también" : "fuera"}`);
+}
 control("se puede estar de pie donde aparece",
   sePuedeEstar(bsp, [elegido.unidades[0], elegido.unidades[1], elegido.unidades[2] + 8]) &&
   sePuedeEstar(bsp, [elegido.unidades[0], elegido.unidades[1], elegido.unidades[2] + 68]),
@@ -473,24 +633,46 @@ control("mira a algo despejado", elegido.libre >= 3,
 // se relaja la regla de los hostiles, el punto del mapa TIENE que colarse.
 control("la regla de los hostiles descarta algo", candidatos.some((c) => c.hostiles15 > 0),
   `${candidatos.filter((c) => c.hostiles15 > 0).length} de ${candidatos.length} candidatos descartados por hostiles`);
-// Y el que impide que el ANCLA sea decorativa: tiene que haber al menos un
-// sitio seguro MÁS CLARO que el elegido y aun así descartado. Si no lo hay,
-// «el templo» y «el sitio más claro» son lo mismo y anclar no ha hecho nada.
-// ── Y los tres del rayo ────────────────────────────────────────────────────
+// ── El ancla derivada, y que el `grep` distinga ────────────────────────────
 //
-// El primero es el que dice que esto se ha hecho; los otros dos son los que
-// impiden que sea un sello de goma.
-control("aparece DEBAJO de un rayo de luz", elegido.familia === "rayo",
-  bajoRayo.length
-    ? `${bajoRayo.length} rayos utilizables en el templo, elegido el de luz ${elegido.luz}`
-    : "ninguno utilizable: se ha caído al rincón del sacerdote");
-// El ancla es el sacerdote porque el mod lo designa primer NPC. Si desde donde
-// aparece el jugador no se le ve, el ancla no ha servido para nada.
-control("desde donde aparece SE VE al sacerdote",
-  sacerdotes.some((s) => seVeDesde(elegido.unidades, s.pies)),
-  elegido.alSacerdoteVisible != null
-    ? `el más cercano a la vista, a ${elegido.alSacerdoteVisible} m`
-    : "ninguno a la vista");
+// La lista de anclas ya no está escrita, así que hay que comprobar que el
+// `grep` que la saca no devuelve ni todo ni nada. El control positivo es otro
+// `#include` del mismo `help/`: `first_vendor` tiene que dar un conjunto
+// DISTINTO. Si los dos dieran lo mismo, el filtro no estaría filtrando.
+{
+  const otros = anclasDelMod(RAIZ_SCRIPTS, "help/first_vendor");
+  const mismos = [...DEL_TEMPLO].filter((s) => otros.has(s)).length;
+  control("el grep de las anclas distingue", DEL_TEMPLO.size > 0 && mismos === 0,
+    `${DEL_TEMPLO.size} scripts con help/first_npc, ${otros.size} con help/first_vendor,` +
+    ` ${mismos} en común · en este mapa hay ${sacerdotes.length} de ellos`);
+}
+
+// ── Y los del rayo, que sólo valen si se ha tenido que buscar otro sitio ───
+if (!seCambio) {
+  noAplica("aparece DEBAJO de un rayo de luz", "se ha respetado el punto del mapa");
+  noAplica("desde donde aparece SE VE al sacerdote", "se ha respetado el punto del mapa");
+} else {
+  // Caerse al rincón del sacerdote en un mapa sin tragaluces es lo previsto, no
+  // un fallo; lo que no puede pasar es haberlos y no usarlos.
+  control("si hay rayos utilizables, se elige uno",
+    bajoRayo.length === 0 || elegido.familia === "rayo",
+    bajoRayo.length
+      ? `${bajoRayo.length} rayos utilizables en el templo, elegido el de luz ${elegido.luz}`
+      : "ninguno utilizable: se ha caído al rincón del sacerdote, que es lo previsto");
+  // El ancla es el sacerdote porque el mod lo designa primer NPC. Si desde donde
+  // aparece el jugador no se le ve, el ancla no ha servido para nada. El detalle
+  // se calcula AQUÍ y no se lee de `elegido`: ese campo sólo lo llevan las filas
+  // de rayo, así que al caerse al rincón decía «ninguno a la vista» al lado de
+  // un verde. Un control y su texto no pueden decir cosas distintas.
+  const aLaVista = sacerdotes
+    .filter((s) => seVeDesde(elegido.unidades, s.pies))
+    .map((s) => dist(elegido.unidades, s.pies))
+    .sort((a, b) => a - b);
+  control("desde donde aparece SE VE al sacerdote", aLaVista.length > 0,
+    aLaVista.length
+      ? `${aLaVista.length} a la vista, el más cercano a ${aLaVista[0].toFixed(1)} m`
+      : "ninguno a la vista");
+}
 // El control positivo del anterior, y hay que leerlo con cuidado porque dice
 // menos de lo que parece: **en Gate City la línea de visión no descarta ni un
 // rayo.** Los seis que están a menos de RAYO_TEMPLO del sacerdote lo ven todos,
@@ -503,42 +685,102 @@ control("desde donde aparece SE VE al sacerdote",
 // que la FUNCIÓN sabe decir que no: en el mapa entero hay rayos desde los que
 // no se ve ningún sacerdote. Sin esto, `seVeDesde` podría devolver `true`
 // siempre y los dos controles de arriba saldrían verdes igual.
+// ── Que ningún rayo se caiga sin dejar rastro ──────────────────────────────
+//
+// Los dos controles que habrían cazado el bug de `enPueblo`. El primero es de
+// conservación: cada uno de los rayos del mapa acaba elegible, descartado por
+// el ancla, o descartado con un motivo escrito. El segundo es el que dice que
+// el motivo tiene sentido en ESTE mapa: descartar por «fuera de toda zona
+// msarea_town» donde no hay ninguna zona no es filtrar, es tirarlos todos.
 {
+  const contados = [...descartes.values()].reduce((a, b) => a + b, 0);
+  const suma = bajoRayo.length + rayosFuera.length + contados;
+  control("ningún rayo se cae sin motivo apuntado", suma === rayos.length,
+    `${bajoRayo.length} en el templo + ${rayosFuera.length} fuera + ${contados} descartados` +
+    ` = ${suma} de ${rayos.length}` +
+    (descartes.size ? ` · ${[...descartes].map(([m, n]) => `${n} ${m}`).join(", ")}` : ""));
+
+  const imposibles = HAY_PUEBLOS ? [] : [...descartes.keys()].filter((m) => m.includes("msarea_town"));
+  control("y ninguno por una regla que este mapa no puede cumplir", imposibles.length === 0,
+    HAY_PUEBLOS
+      ? `${cajasPueblo.length} zonas msarea_town, así que la regla se puede cumplir`
+      : "el mapa no tiene zonas, así que no se descarta por zona: " +
+        (imposibles.length ? `PERO ${imposibles.join("; ")}` : "ninguno"));
+}
+
+if (!sacerdotes.length) {
+  noAplica("la línea de visión sabe decir que no", "el mapa no tiene anclas que mirar");
+} else {
   const ciegos = rayos.filter((r) => !Number.isFinite(r.alSacerdoteVisible)).length;
   control("la línea de visión sabe decir que no", ciegos > 0,
     `${ciegos} de ${rayos.length} rayos del mapa no ven a ningún sacerdote` +
     ` · dentro del templo descarta 0, o sea que aquí la distancia bastaba`);
 }
 // Si todos los rayos del mapa estuvieran en el templo, «del templo» no filtra
-// nada y el ancla sería decorativa aquí igual que lo sería arriba.
-control("el ancla descarta rayos", rayosFuera.length > 0,
-  `${bajoRayo.length} rayos dentro del templo, ${rayosFuera.length} descartados por estar fuera` +
-  (rayosFuera[0] ? ` (el más claro, luz ${rayosFuera[0].luz})` : ""));
+// nada y el ancla sería decorativa aquí igual que lo sería arriba. Pero pedirle
+// esto a un mapa que no tiene rayos dentro del templo es pedirle un reparto que
+// no existe: se juzga sólo cuando el ancla ha tenido rayos que repartir.
+if (!bajoRayo.length) {
+  noAplica("el ancla descarta rayos",
+    `ninguno de los ${rayos.length} rayos del mapa cae en el templo, así que no hay reparto`);
+} else {
+  control("el ancla descarta rayos", rayosFuera.length > 0,
+    `${bajoRayo.length} rayos dentro del templo, ${rayosFuera.length} descartados por estar fuera` +
+    (rayosFuera[0] ? ` (el más claro, luz ${rayosFuera[0].luz})` : ""));
+}
 // Y el que compara con lo que había: el rayo tiene que ser mejor que el rincón
 // en algo medible, o el cambio es sólo un gusto. Se pide que no empeore la luz
 // Y que separe más del NPC, que es lo que se notaba jugando.
-control("el rayo mejora el rincón del sacerdote",
-  elegido.familia !== "rayo" || (elegido.luz >= delTemplo.luz && elegido.alAmigo > delTemplo.alAmigo),
-  `luz ${elegido.luz} contra ${delTemplo.luz} · ${elegido.alAmigo} m al NPC contra ${delTemplo.alAmigo} m`);
-control("el ancla cambia la respuesta", resto.some((c) => c.luz > elegido.luz),
-  resto.length
-    ? `el más claro descartado es ${resto[0].nombre} con ${resto[0].luz}, contra ${elegido.luz} del templo`
-    : "no hay otros sitios seguros, así que el ancla no se puede juzgar");
+if (elegido.familia !== "rayo") {
+  noAplica("el rayo mejora el rincón del sacerdote", "no se ha elegido un rayo");
+} else {
+  control("el rayo mejora el rincón del sacerdote",
+    elegido.luz >= delTemplo.luz && elegido.alAmigo > delTemplo.alAmigo,
+    `luz ${elegido.luz} contra ${delTemplo.luz} · ${elegido.alAmigo} m al NPC contra ${delTemplo.alAmigo} m`);
+}
+// Y el que impide que el ANCLA sea decorativa: tiene que haber al menos un
+// sitio seguro MÁS CLARO que el elegido y aun así descartado. Si no lo hay,
+// «el templo» y «el sitio más claro» son lo mismo y anclar no ha hecho nada.
+if (!seCambio) {
+  noAplica("el ancla cambia la respuesta", "no se ha usado el ancla: vale el punto del mapa");
+} else {
+  control("el ancla cambia la respuesta", resto.some((c) => c.luz > elegido.luz),
+    resto.length
+      ? `el más claro descartado es ${resto[0].nombre} con ${resto[0].luz}, contra ${elegido.luz} del templo`
+      : "no hay otros sitios seguros, así que el ancla no se puede juzgar");
+}
 
 console.log("\n  CONTROLES");
 for (const c of controles) {
-  console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(48)} ${c.detalle}`);
+  const marca = !c.aplica ? "n/a " : c.bien ? "ok  " : "MAL ";
+  console.log(`  ${marca} ${c.que.padEnd(48)} ${c.aplica ? c.detalle : `no aplica: ${c.porQueNo}`}`);
 }
-const fallan = controles.filter((c) => !c.bien);
+// Sólo cuentan los que podían fallar. Un `n/a` que se sumara a los verdes sería
+// el apartado 4 de CLAUDE.md otra vez.
+const aplican = controles.filter((c) => c.aplica);
+const fallan = aplican.filter((c) => !c.bien);
+console.log(`  ${aplican.length - fallan.length}/${aplican.length} controles aplicables en verde,` +
+  ` ${controles.length - aplican.length} que no aplican a ${MAPA}`);
 
 // ── Lo que se escribe ──────────────────────────────────────────────────────
 const salida = {
   mapa: man.mapa,
-  procedencia: "derivado de gatecity.bsp por tools/aparicion.mjs. Ver PROCEDENCIA.md",
+  procedencia: `derivado de ${MAPA}.bsp por tools/aparicion.mjs. Ver PROCEDENCIA.md`,
   criterio: {
-    ancla: "los sacerdotes del templo: los 4 scripts de 2884 que incluyen help/first_npc",
-    regla: "del templo, el rayo de luz (func_illusionary rendermode 5) con 0 hostiles " +
-           "a 15 m y más luz; si el mapa no tiene rayos utilizables, el rincón del sacerdote",
+    ancla: `los sacerdotes del templo: los ${DEL_TEMPLO.size} scripts de 2884 que incluyen ` +
+           "help/first_npc, buscados al hornear y no escritos a mano",
+    regla: "primero el ms_player_begin del mapa, que es lo que dice el mod (SPAWN_BEGIN, " +
+           "player/player.cpp:2455); sólo si incumple una regla dura se busca otro sitio, y " +
+           "entonces es el rayo de luz (func_illusionary rendermode 5) del templo, o el " +
+           "rincón del sacerdote si el mapa no tiene rayos utilizables",
+    reglasDuras: "0 hostiles a 15 m · se puede estar de pie · no dentro de otro NPC · " +
+                 "dentro de un msarea_town SI el mapa tiene alguno",
+    // Qué se decidió y por qué, que es lo que no se puede volver a deducir del
+    // resultado: `nacimiento` a secas no dice si el mapa ya lo hacía bien.
+    decision: porQue,
+    seCambioElPuntoDelMapa: seCambio,
+    loQueFallaElPuntoDelMapa: falloDelMapa,
+    hayPueblos: HAY_PUEBLOS,
     seguroMetros: SEGURO,
     huecoMetros: HUECO,
     rayoTemploMetros: RAYO_TEMPLO,

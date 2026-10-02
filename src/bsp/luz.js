@@ -42,24 +42,55 @@ export function bytesDeCara(cara) {
  * La contabilidad del lump, que es la sonda con oráculo de esta parte.
  *
  * No mide «parece razonable»: mide contra un número que está escrito en el
- * archivo. Los bloques de las caras con mapa de luz tienen que **llenar el lump
- * exactamente**, sin solaparse y sin dejar huecos. Si sobra un byte, algo se está
- * leyendo mal, y lo que se leería mal es el tamaño de los parches — o sea el
+ * archivo. Los bloques de las caras con mapa de luz tienen que encajar **sin
+ * pisarse, sin dejar huecos entre medias y sin salirse del lump**. Si uno no
+ * encaja, lo que se está leyendo mal es el tamaño de los parches — o sea el
  * mapa de luz entero, desplazado.
+ *
+ * ── LA COLA, y por qué dejó de ser un fallo (experimento 48) ────────────────
+ *
+ * Hasta el 48 esto exigía además que la suma **fuera** el tamaño del lump, y
+ * con eso Edana no se horneaba: sumaba 1 544 688 contra 1 545 495, 807 bytes de
+ * menos. Los 807 resultaron ser **ceros al final del lump que ninguna cara
+ * reclama**, y el censo de los 93 mapas del juego dice que no es de Edana: 36
+ * los tienen, de 363 a 2 928 bytes, todos ceros y todos múltiplo de tres.
+ *
+ * El motor no los ve. `Mod_LoadLighting` copia el lump entero de una vez
+ * (`ReHLDS/rehlds/engine/model.cpp:651-658`) y a partir de ahí cada superficie
+ * entra por su `lightofs`: **nadie suma los bloques**. Un byte que nadie
+ * reclama no lo lee nadie.
+ *
+ * Así que la cola se mide y se permite, pero **sólo si es toda ceros**, y para
+ * eso hace falta `datos`. Sin `datos` una cola no se puede comprobar y no
+ * cuadra: la ignorancia no se pone verde sola.
  */
-export function contabilidad(caras, bytesDelLump) {
+export function contabilidad(caras, bytesDelLump, datos = null) {
   const con = caras.filter(tieneLuz).sort((a, b) => a.lightofs - b.lightofs);
-  let bytes = 0, luxels = 0, solapes = 0, huecos = 0, mayor = 0;
+  let bytes = 0, luxels = 0, solapes = 0, huecos = 0, desbordan = 0, mayor = 0, fin = 0;
   for (let i = 0; i < con.length; i++) {
     const p = parcheDeLuz(con[i].puntos, con[i].texinfo);
     const tam = p.ancho * p.alto * 3 * con[i].nEstilos;
     bytes += tam;
     luxels += p.ancho * p.alto;
     mayor = Math.max(mayor, p.ancho, p.alto);
-    const fin = i + 1 < con.length ? con[i + 1].lightofs : bytesDelLump;
-    const hueco = fin - con[i].lightofs;
-    if (hueco < tam) solapes++;
-    else if (hueco > tam) huecos++;
+    fin = con[i].lightofs + tam;
+    if (fin > bytesDelLump) desbordan++;
+    // El hueco contra el SIGUIENTE bloque. El último no tiene siguiente: lo que
+    // le quede por detrás es la cola, y se juzga aparte.
+    if (i + 1 < con.length) {
+      const sitio = con[i + 1].lightofs - con[i].lightofs;
+      if (sitio < tam) solapes++;
+      else if (sitio > tam) huecos++;
+    }
+  }
+  const cola = con.length ? bytesDelLump - fin : bytesDelLump;
+  // `null` es «no se ha podido mirar», que no es lo mismo que `false`.
+  let colaCeros = cola > 0 ? null : true;
+  if (cola > 0 && datos) {
+    colaCeros = true;
+    for (let i = bytesDelLump - cola; i < bytesDelLump; i++) {
+      if (datos[i] !== 0) { colaCeros = false; break; }
+    }
   }
   return {
     caras: con.length,
@@ -72,8 +103,11 @@ export function contabilidad(caras, bytesDelLump) {
     luxels,
     solapes,
     huecos,
+    desbordan,
+    cola,
+    colaCeros,
     parcheMayor: mayor,
-    cuadra: bytes === bytesDelLump && solapes === 0 && huecos === 0,
+    cuadra: solapes === 0 && huecos === 0 && desbordan === 0 && colaCeros === true,
   };
 }
 

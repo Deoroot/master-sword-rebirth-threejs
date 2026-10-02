@@ -25,6 +25,12 @@
 // De los bichos de Gate City, el ÚNICO que se encoge es el zombi enano de
 // ballesta, y con el tercero.
 
+// `RELACION` sale de `razas.js` y no de `script.js`, igual que en `ia.js`: ése
+// lee ficheros con `node:fs` y tocarlo desde el navegador hace que Vite lo
+// externalice y la página no cargue, sin más error que uno en la consola antes
+// de que exista `probe`.
+import { RELACION } from "../bsp/razas.js";
+
 /**
  * EL ALCANCE DEL AVISO, que sale de la vida máxima y no es un número fijo:
  * `npc_post_spawn` (base_monster_shared.script:175-182) hace
@@ -211,6 +217,59 @@ export function cambiaDeObjetivo({ ficha, ahora = 0, proximo = 0, huyendo = fals
     return { cambia: false, porque: "el plazo al revés (base_npc_attack_new.script:1104)" };
   }
   return { cambia: true, porque: "cambia" };
+}
+
+/**
+ * DEVOLVER EL GOLPE, QUE SÍ SE PUEDE DISPARAR — el 82.
+ *
+ * `cambiaDeObjetivo`, justo arriba, porta `npcatk_retaliate` con su plazo del
+ * revés y concluye que **ningún monstruo cambia de objetivo por recibir un
+ * golpe**. Ese análisis es correcto para `npcatk_retaliate` y la conclusión se
+ * pasó de ancha: son DOS ramas de un `if`, y la otra no tiene plazo ni dado
+ * (base_npc_attack_new.script:1075-1089):
+ *
+ * ```
+ * if ( $get(NPCATK_TARGET,isplayer) ) local L_FIRST_STRUCK 1
+ * if ( NPCATK_TARGET equals unset )   local L_FIRST_STRUCK 1
+ *
+ * if ( L_FIRST_STRUCK )
+ * {
+ *     if !IS_FLEEING
+ *     if $get(ent_laststruck,relationship,ent_me) equals wary
+ *     callevent npcatk_settarget $get(ent_laststruck,id) "struck_by_enemy"
+ * }
+ * else
+ * {
+ *     if $get(ent_laststruck,id) isnot NPCATK_TARGET
+ *     callevent npcatk_retaliate INC_PARAM          // ← la muerta
+ * }
+ * ```
+ *
+ * Y la condición que la gobierna es `relationship equals wary`, o sea RECELO,
+ * que es **la relación de una rata con el jugador**: `vermin` declara
+ * `recelo human` en `races.script`. O sea que esta rama no es un caso
+ * marginal — es el único camino por el que un bicho que recela llega a
+ * atacarte, porque por su raza no te toma como enemigo nunca (`esEnemigo` no
+ * cuenta RECELO, npcscript.cpp:1806). Sin ella, pegarle a una rata no tiene
+ * ninguna consecuencia: te mira y sigue a lo suyo.
+ *
+ * Que la de al lado esté muerta es justo lo que hizo difícil ver que ésta
+ * faltaba: las dos salen del mismo golpe y una ya estaba estudiada y escrita.
+ *
+ * NO lleva dado ni plazo a propósito: los suyos están en la otra rama.
+ */
+export function apuntaAlQueTePega({
+  relacion = null, tengoObjetivo = false, objetivoEsJugador = false, huyendo = false,
+} = {}) {
+  if (huyendo) return { apunta: false, porque: "IS_FLEEING" };
+  // `L_FIRST_STRUCK`: sin objetivo, o con uno que es un jugador.
+  if (tengoObjetivo && !objetivoEsJugador) {
+    return { apunta: false, porque: "ya peleo con otro: eso es `npcatk_retaliate`, y está muerto" };
+  }
+  if (relacion !== RELACION.RECELO) {
+    return { apunta: false, porque: "la rama pide `equals wary` y ésta no lo es" };
+  }
+  return { apunta: true, porque: "struck_by_enemy" };
 }
 
 /**

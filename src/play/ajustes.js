@@ -109,7 +109,7 @@ export const AJUSTES = [
   {
     pestana: "Mouse", clave: "mirarConRaton", cvar: "lookspring", tipo: TIPOS.CASILLA,
     etiqueta: "#GameUI_MouseLook", descripcion: "#GameUI_MouseLookLabel", pordefecto: true,
-    porQueNo: "in a browser the mouse always looks: there is no keyboard-look mode to turn off.",
+    porQueNo: "the mouse always looks here: there is no keyboard-look mode to turn off.",
   },
   {
     pestana: "Mouse", clave: "filtro", cvar: "m_filter", tipo: TIPOS.CASILLA,
@@ -135,7 +135,7 @@ export const AJUSTES = [
   {
     pestana: "Mouse", clave: "ratonCrudo", cvar: "m_rawinput", tipo: TIPOS.CASILLA,
     etiqueta: "Raw mouse input", descripcion: "Directly access mouse data", pordefecto: false,
-    porQueNo: "the browser gives movementX from pointer lock and nothing rawer.",
+    porQueNo: "pointer lock gives movementX and nothing rawer.",
   },
   {
     pestana: "Mouse", clave: "sensibilidad", cvar: "sensitivity", tipo: TIPOS.DESLIZADOR,
@@ -164,7 +164,7 @@ export const AJUSTES = [
   {
     pestana: "Audio", clave: "calidad", cvar: "s_a3d", tipo: TIPOS.DESPLEGABLE,
     etiqueta: "#GameUI_SoundQuality", opciones: ["Low", "Medium", "High"], pordefecto: "High",
-    porQueNo: "the browser decodes the WAVs at their own rate; there is nothing to lower.",
+    porQueNo: "Web Audio decodes the WAVs at its own rate; there is nothing to lower.",
   },
   {
     pestana: "Audio", clave: "notaMiles", tipo: TIPOS.NOTA,
@@ -182,7 +182,7 @@ export const AJUSTES = [
   {
     pestana: "Video", clave: "resolucion", tipo: TIPOS.DESPLEGABLE,
     etiqueta: "#GameUI_Resolution", opciones: [], pordefecto: "",
-    porQueNo: "the resolution is the size of the browser window: the window changes it, not this.",
+    porQueNo: "the resolution follows the window size; nothing here resizes the window yet.",
   },
   {
     pestana: "Video", clave: "modo", tipo: TIPOS.DESPLEGABLE,
@@ -205,7 +205,7 @@ export const AJUSTES = [
   {
     pestana: "Video", clave: "ventana", tipo: TIPOS.CASILLA,
     etiqueta: "#GameUI_Windowed", pordefecto: true,
-    porQueNo: "a browser tab is already a window; full screen is the browser's own key.",
+    porQueNo: "the game already runs in a window; toggling full screen is not wired to this box yet.",
   },
   {
     pestana: "Video", clave: "vsync", cvar: "gl_vsync", tipo: TIPOS.CASILLA,

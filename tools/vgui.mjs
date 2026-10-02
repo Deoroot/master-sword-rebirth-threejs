@@ -1,3 +1,4 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
 // EL ESQUEMA DE VGUI: de dónde saca Master Sword su letra y sus colores.
 //
 //   npm run vgui
@@ -11,7 +12,7 @@
 //                                     vgui_teamfortressviewport.cpp:563-565
 //
 // Y los esquemas están en `*_textscheme.txt`, cuatro archivos, uno por
-// resolución. Esto los lee los cuatro y escribe `build/gatecity/vgui.json`, que
+// resolución. Esto los lee los cuatro y escribe `build/msr/vgui.json`, que
 // es lo que `src/vgui/esquema.js` consume en el navegador.
 //
 // ── Cómo elige el motor el archivo ─────────────────────────────────────────
@@ -56,10 +57,9 @@
 // Misma regla de siempre: **el lector es nuestro, el contenido no se copia.**
 
 import { writeFileSync, existsSync, readFileSync, appendFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 const ASSETS = process.argv[2] ?? "../MSC/assets/msr";
-const SALIDA = resolve("build/gatecity/vgui.json");
+const SALIDA = salidaComun("vgui.json");
 
 /** Las cuatro resoluciones del motor, en orden. */
 export const RESOLUCIONES = [640, 960, 1440, 1920];
@@ -179,6 +179,7 @@ export function resolucionPara(ancho, disponibles = RESOLUCIONES) {
 // ── LO QUE SE EJECUTA ───────────────────────────────────────────────────────
 if (import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}` ||
     process.argv[1]?.endsWith("vgui.mjs")) {
+  prepararComunes();
 
   if (!existsSync(`${ASSETS}/640_textscheme.txt`)) {
     console.error(`No encuentro ${ASSETS}/640_textscheme.txt. Pásame la carpeta del juego.`);
@@ -265,7 +266,7 @@ if (import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}` ||
   }, null, 1));
   console.log(`  escrito ${SALIDA}`);
 
-  const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+  const PROC = salidaComun("PROCEDENCIA.md");
   const MARCA = "## El esquema de VGUI";
   if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
     appendFileSync(PROC, `

@@ -20,6 +20,7 @@ import { exportar, importar } from "./almacen.js";
 import { carga } from "./inventario.js";
 import { ESTADO, IMPUESTO_DE_MUERTE } from "./sesion.js";
 import { ACCIONES, nombreDeTecla } from "./teclas.js";
+import { enLaCascara } from "./navegador.js";
 import { variablesCss } from "./paleta.js";
 import { Retratos } from "../render/retratos.js";
 
@@ -368,13 +369,25 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
       const bien = estado.concedido;
       aviso.appendChild(el("span", {
         clase: bien ? "mx-si" : "mx-aviso-linea",
-        texto: bien
-          ? "✓ protected in this browser"
-          : estado.soportado
-            ? "⚠ saved only in this browser; it may delete them"
-            : "⚠ this browser cannot say whether it keeps them",
-        title: "They live in this browser and on this machine. \"Clear browsing data\" " +
-          "takes them away, and the browser may evict them if it runs short of space.",
+        // Las mismas tres frases, contadas donde pasan. En la cáscara no hay
+        // «borrar datos de navegación» que se los lleve, y el riesgo de que el
+        // navegador los desaloje por falta de sitio tampoco es el suyo.
+        texto: enLaCascara()
+          ? (bien
+            ? "✓ saved on this machine"
+            : estado.soportado
+              ? "⚠ saved only on this machine; keep an exported copy"
+              : "⚠ cannot confirm this machine keeps them")
+          : (bien
+            ? "✓ protected in this browser"
+            : estado.soportado
+              ? "⚠ saved only in this browser; it may delete them"
+              : "⚠ this browser cannot say whether it keeps them"),
+        title: enLaCascara()
+          ? "They live on this machine, in the game's own data folder. " +
+            "Export keeps a copy somewhere else."
+          : "They live in this browser and on this machine. \"Clear browsing data\" " +
+            "takes them away, and the browser may evict them if it runs short of space.",
       }));
       if (!bien && estado.soportado) {
         aviso.appendChild(el("button", { clase: "mx-boton", texto: "protect", onclick: async (ev) => {
@@ -799,7 +812,22 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     if (ahora === ESTADO.ELIGIENDO) pantallaElegir();
     if (ahora === ESTADO.JUGANDO) cerrar({ aunqueSeaObligatoria: true });
   });
-  sesion.al("muerte", (e) => pantallaMuerte(e));
+  // LA MUERTE YA NO ABRE PANEL, desde el 41.
+  //
+  // `pantallaMuerte` era una invención nuestra —un `mx-panel` con un botón «get
+  // up»— y lo que el motor hace es otra cosa y ya está portada: un centrado con
+  // «<nombre> has fallen!», el velo rojo a medias, el grito según el género, la
+  // cámara a metro y ochenta del cuerpo y el impuesto por la consola de sucesos
+  // (`src/play/muerte.js`, `src/juego/mensajes.js`). Con las dos cosas a la vez
+  // el panel tapaba justo la cámara que se acaba de portar, y para volver había
+  // dos caminos —su botón y la regla del motor, que ya estaba puesta en
+  // `sesion.tic`— de los cuales uno sobra.
+  //
+  // La función se queda aquí y no se borra: es el suplente del día en que el
+  // velo y el centrado no se puedan montar, igual que la pantalla de personajes
+  // es suplente de la de VGUI. `montarMuerte` la enciende quien lo necesite.
+  let panelDeMuerte = false;
+  sesion.al("muerte", (e) => { if (panelDeMuerte) pantallaMuerte(e); });
 
   function descargar(nombre, texto) {
     const url = URL.createObjectURL(new Blob([texto], { type: "application/json" }));
@@ -845,6 +873,9 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
   return {
     elegir: pantallaElegir, crear: pantallaCrear, hoja: pantallaHoja,
     inventario: pantallaInventario, muerte: pantallaMuerte, opciones: pantallaOpciones, cerrar,
+    /** Enciende el panel suplente de la muerte. Apagado desde el 41. */
+    usarPanelDeMuerte(si = true) { panelDeMuerte = Boolean(si); },
+    get panelDeMuerte() { return panelDeMuerte; },
     get abierta() { return Boolean(velo); },
     get personaje() { return activo(); },
     /** Cuántos retratos hay vivos. Para las sondas. */

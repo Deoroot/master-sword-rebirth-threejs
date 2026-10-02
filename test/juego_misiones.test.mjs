@@ -319,18 +319,84 @@ describe("los comandos, con sus rarezas", () => {
 });
 
 describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", () => {
-  test("son 22 comandos de los 223 del motor, y éstos", () => {
+  test("son 78 comandos de los 223 del motor, y éstos", () => {
     // Si esta prueba se cae es porque alguien añadió un comando: hay que
     // volver a correr `npm run guiones` y actualizar la cuenta de
     // `doc/MISIONES_33.md`, porque la cobertura cambia.
-    assert.equal(COMANDOS.size, 22);
+    //
+    // 22 hasta el 33; los siete del 43 son los que más piden los NPC de Gate
+    // City, elegidos midiendo — ver `doc/GUIONES_43.md`.
+    // El 83 lo movió de 77 a 78, y no sumando uno: QUITÓ `exit`, que no existe
+    // en el motor y que no usa ni uno de los 2 884 guiones, y puso `exitevent`
+    // —el que de verdad corta un evento, 108 líneas en 53 ficheros— y
+    // `returndata`, el alias de `return`. Ver `test/gauntlet83.test.mjs`.
+    assert.equal(COMANDOS.size, 78);
+    assert.equal(COMANDOS.has("exit"), false, "`exit` no es un comando del motor (el 83)");
+    for (const c of ["exitevent", "returndata"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 83`);
+    }
     for (const c of ["if", "if()", "setvard", "setvarg", "local", "saytext", "offer", "quest", "menuitem.register"]) {
       assert.ok(COMANDOS.has(c), `falta ${c}`);
     }
+    for (const c of ["stradd", "playsound", "setprop", "say", "roam", "setmovedest", "setmoveanim"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 43`);
+    }
+    // Las tiendas del 44 van con su alias viejo cada una, porque los guiones
+    // usan unas veces uno y otras veces otro.
+    for (const c of ["npcstore.create", "createstore", "npcstore.additem", "addstoreitem",
+      "npcstore.offer", "offerstore", "npcstore.remove"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 44`);
+    }
+    // El 64: los tres del guion DEL JUGADOR. `repeatdelay` no es como los
+    // demás —lo resuelve el CARGADOR, no el intérprete— y por eso lleva su
+    // propia prueba en `test/juego_jugador64.test.mjs`.
+    for (const c of ["repeatdelay", "givehp", "givemp"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 64`);
+    }
+    // El 45: `deleteent` y su gemelo `deleteme`, que son LA MISMA función del
+    // motor con dos nombres (scriptcmds.cpp:138-139).
+    for (const c of ["deleteent", "deleteme"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 45`);
+    }
+    // El 67: el único comando del lenguaje que cruza al `.bsp`. Va solo porque
+    // es el único de su especie — lo demás que un guion hace se queda entre
+    // guiones, y esto dispara entidades del mapa.
+    assert.ok(COMANDOS.has("usetrigger"), "falta usetrigger, que es del 67");
+    // El 46: el andamiaje de menú. Van juntos a propósito — es la lección del
+    // 44, donde siete comandos buenos movieron el censo cero porque lo que
+    // bloqueaba estaba en otro sitio.
+    for (const c of ["calleventloop", "multiply", "menuitem.remove", "menu.open",
+      "catchspeech", "helptip", "gplayermessage", "playrandomsound",
+      "array.create", "array.add", "array.del"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 46`);
+    }
+    // Y cada `array.*` tiene su gemela global con `g_` delante.
+    for (const c of [...COMANDOS].filter((x) => x.startsWith("array."))) {
+      assert.ok(COMANDOS.has(`g_${c}`), `falta la global de ${c}`);
+    }
   });
-  test("y 7 getters", () => {
-    assert.equal(GETTERS.size, 7);
+  test("y 21 getters", () => {
+    assert.equal(GETTERS.size, 21);
+    // El 83: los dos de la guarda del bono del gauntlet. Entran juntos porque
+    // por separado no sirven de nada — la guarda es
+    // `$get_find_token(MAPS_GAUNTLET_START,$lcase(game.map.name)) == -1`.
+    for (const g of ["$get_find_token", "$lcase"]) {
+      assert.ok(GETTERS.has(g), `falta ${g}, que es del 83`);
+    }
+    // El 81: `$cansee`. Entra con nombre propio porque lo que lo destapó no
+    // fue el censo sino una misión que no arrancaba — con el `if` VIEJO, un
+    // getter sin soporte abandona el BLOQUE entero (el 67), así que el
+    // `say_job` de Sylphiel moría en su primera línea.
+    assert.ok(GETTERS.has("$cansee"), "el `$cansee` del 81");
     assert.ok(GETTERS.has("$item_exists") && GETTERS.has("$get_quest_data"));
+    assert.ok(GETTERS.has("$randf"), "el `$randf` del 43");
+    assert.ok(GETTERS.has("$get_by_name") && GETTERS.has("$get_token_amt"), "los dos del 45");
+    // El 46: los cuatro de las listas y sus cuatro gemelos globales, que son
+    // EL MISMO getter del motor con ocho nombres (script.cpp:129-141).
+    for (const g of ["$get_array", "$get_arrayfind", "$get_array_amt", "$get_array_exists"]) {
+      assert.ok(GETTERS.has(g), `falta ${g}, que es del 46`);
+      assert.ok(GETTERS.has(g.replace("$", "$g_")), `falta su gemelo global de ${g}`);
+    }
   });
 });
 

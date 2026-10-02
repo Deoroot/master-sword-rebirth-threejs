@@ -21,8 +21,9 @@
 // La cuenta la calcula `cuenta()` y no está escrita a mano en ningún sitio, para
 // que no se quede vieja cuando uno de los veintidós se encienda.
 
-import { Frame, PropertySheet, Button, CheckButton, ComboBox, Slider, TextEntry,
+import { Button, CheckButton, ComboBox, Slider, TextEntry,
          etiqueta, MEDIDAS } from "./widgets.js";
+import { cascara } from "./codice.js";
 import { deLaPestana, PESTANAS, TIPOS, porDefecto, cuenta } from "../play/ajustes.js";
 
 /** Medidas de la ventana, medidas de la captura del 27 de septiembre. */
@@ -52,24 +53,39 @@ export class VentanaOpciones {
     this.alAplicar = alAplicar;
     this.controles = new Map();          // clave -> el control, para la sonda
 
-    this.marco = new Frame(tema, {
+    const { Marco, Hojas, conCaja } = cascara();
+    this.conCaja = conCaja;
+
+    this.marco = new Marco(tema, {
       titulo: "Options", ancho: VENTANA.ancho, alto: VENTANA.alto, x, y,
       alCerrar: () => { this.#descartar(); alCerrar?.(); },
     });
 
-    this.hojas = new PropertySheet(tema);
+    this.hojas = new Hojas(tema);
     for (const p of PESTANAS) this.hojas.anadir(p, () => this.#pagina(p));
 
-    // Los tres botones de abajo, en el orden de la captura: OK, Cancel, Apply.
-    const pie = el("div");
+    const pie = el("div", "v2-pie");
     Object.assign(pie.style, {
       display: "flex", justifyContent: "flex-end", gap: "6px",
       padding: `${MEDIDAS.margen / 2}px 0 0`, flex: "0 0 auto",
     });
-    this.botonOk = new Button(tema, "#GameUI_OK", { alPulsar: () => { this.aplicar(); this.cerrar(); } });
-    this.botonCancelar = new Button(tema, "#GameUI_Cancel", { alPulsar: () => { this.#descartar(); this.cerrar(); } });
-    this.botonAplicar = new Button(tema, "#GameUI_Apply", { alPulsar: () => this.aplicar() });
-    pie.append(this.botonOk.nodo, this.botonCancelar.nodo, this.botonAplicar.nodo);
+    if (conCaja) {
+      // Los tres botones de abajo, en el orden de la captura: OK, Cancel, Apply.
+      this.botonOk = new Button(tema, "#GameUI_OK", { alPulsar: () => { this.aplicar(); this.cerrar(); } });
+      this.botonCancelar = new Button(tema, "#GameUI_Cancel", { alPulsar: () => { this.#descartar(); this.cerrar(); } });
+      this.botonAplicar = new Button(tema, "#GameUI_Apply", { alPulsar: () => this.aplicar() });
+      pie.append(this.botonOk.nodo, this.botonCancelar.nodo, this.botonAplicar.nodo);
+    } else {
+      // EL CÓDICE NO TIENE OK/CANCEL/APPLY, y eso no es un botón menos: es otro
+      // comportamiento. Un libro no se acepta, así que lo que se toca ya está
+      // aplicado y «Done» sólo cierra. Como no hay «Cancel», tampoco hay a dónde
+      // volver: `original` se mueve con cada cambio y no al pulsar nada.
+      //
+      // Es la consecuencia incómoda de quitar la tercera cosa, y está aquí
+      // escrita porque es la que se olvida al elegir un aspecto por su foto.
+      this.botonOk = new Button(tema, "Done", { alPulsar: () => { this.aplicar(); this.cerrar(); } });
+      pie.append(this.botonOk.nodo);
+    }
 
     const dentro = el("div");
     Object.assign(dentro.style, { display: "flex", flexDirection: "column", height: "100%" });
@@ -120,7 +136,14 @@ export class VentanaOpciones {
     const vivo = !a.porQueNo;
     const t = this.tema;
 
-    const poner = (v) => { this.valores[a.clave] = v; };
+    // SIN CAJA EL CAMBIO ENTRA AL TOCARLO. No es un detalle de estilo: es lo
+    // que hay que construir de verdad cuando se quita «Apply», y lo que se
+    // olvida al elegir un aspecto mirando una foto. Ver `cascara` en
+    // `src/vgui2/codice.js`.
+    const poner = (v) => {
+      this.valores[a.clave] = v;
+      if (!this.conCaja) this.aplicar();
+    };
 
     if (a.tipo === TIPOS.NOTA) {
       // El `\n` de los archivos de Valve es un salto de línea de verdad. Sin

@@ -112,11 +112,38 @@ describe("dónde cae cada cosa en la pantalla", () => {
     // `CHARGE_SPACER_W + (i == 0) ? CHARGE_W : 0` se lee
     // `(CHARGE_SPACER_W + (i==0)) ? CHARGE_W : 0`, así que el espaciador nunca
     // se suma y las dos barras salen a ±CHARGE_W del ancla en vez de pegadas.
-    const [der, izq] = cargaEn(1280, 960);
+    const [izq, der] = cargaEn(1280, 960);
     const w = XRES(30, 1280);
-    assert.equal(izq.x - der.x, 2 * w);
+    assert.equal(der.x - izq.x, 2 * w);
     // Y el ancla es 304, no 320: tampoco están centradas.
-    assert.equal(der.x, XRES(304, 1280) - w);
+    assert.equal(izq.x, XRES(304, 1280) - w);
+  });
+
+  /**
+   * CADA BARRA DEL LADO DE SU MANO, que es lo que se veía roto jugando: el
+   * jugador cargaba con la derecha y se le encendía la barra de la izquierda.
+   *
+   *     enum hand_e { LEFT_HAND, RIGHT_HAND, ... };        genericitem.h:15-23
+   *     int Bar = Item->m_Hand < 2 ? Item->m_Hand : 1;     vgui_health.h:234
+   *
+   * El índice 0 es `LEFT_HAND`, y el multiplicador `(i == 0) ? -1 : 1` lo pone
+   * a la izquierda del ancla. Esta prueba mira el nombre Y la posición a la
+   * vez, porque el fallo era justamente que la geometría estaba bien y sólo la
+   * etiqueta estaba cambiada: la que sólo miraba la `x` pasaba en verde.
+   */
+  test("la barra de la mano derecha cae a la DERECHA del ancla", () => {
+    const barras = cargaEn(1280, 960);
+    const ancla = XRES(304, 1280);
+    const der = barras.find((b) => b.mano === "derecha");
+    const izq = barras.find((b) => b.mano === "izquierda");
+    assert.ok(der && izq, "tienen que estar las dos manos, y una sola vez cada una");
+    assert.equal(barras.length, 2);
+    assert.ok(der.x > ancla, `la derecha en ${der.x} tendría que pasar del ancla ${ancla}`);
+    assert.ok(izq.x < ancla, `la izquierda en ${izq.x} tendría que quedarse antes del ancla`);
+    // Y el positivo de la posición, para que esto no pase con dos barras
+    // pegadas en el sitio equivocado: siguen a ±CHARGE_W exactos.
+    assert.equal(der.x - ancla, XRES(30, 1280));
+    assert.equal(ancla - izq.x, XRES(30, 1280));
   });
 });
 

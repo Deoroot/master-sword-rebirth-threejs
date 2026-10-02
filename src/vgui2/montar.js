@@ -8,20 +8,23 @@
 // Mientras `main.js` lo tenga otra sesión, esto se puede montar solo y la sonda
 // lo mide igual.
 
-import { Tema, CSS } from "./widgets.js";
+import { CSS } from "./widgets.js";
+import { temaDe, CSS_CODICE, ponerAspecto, aspectoActivo } from "./codice.js";
 import { VentanaOpciones } from "./opciones.js";
 import { VentanaServidores } from "./servidores.js";
 import { VentanaCrearServidor } from "./crearservidor.js";
+import { VentanaPregunta } from "./pregunta.js";
 import { porDefecto, leerAjustes } from "../play/ajustes.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+import { traerJson } from "../play/json.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /** Dónde vive la ficha horneada. Si no está, el esquema de repuesto. */
-export const RUTA_FICHA = "build/gatecity/vgui2.json";
+export const RUTA_FICHA = `${BASE_POR_DEFECTO}/vgui2.json`;
 
 export async function cargarFicha(ruta = RUTA_FICHA) {
   try {
-    const r = await fetch(ruta);
-    if (!r.ok) return null;
-    return await r.json();
+    return await traerJson(ruta, { avisar: () => {} });
   } catch {
     // Igual que el HUD y el menú: un `.json` que falta no deja al jugador sin
     // interfaz. `esquema.js` tiene lo justo escrito a mano.
@@ -61,10 +64,22 @@ export class Vgui2 {
     this.valores = leerAjustes(ajustes ?? porDefecto());
     this.abiertas = [];
 
+    // `?aspecto=vgui` vuelve a las ventanas de VGUI2. No es una puerta trasera
+    // para la sonda: es la única forma de que los controles de fidelidad del 34
+    // —Verdana, 13 px, el alfa 0 de `TitleBG`, los 535 px medidos— se puedan
+    // seguir midiendo con el códice de por omisión. Ver `codice.js`.
+    try {
+      ponerAspecto(new URLSearchParams(globalThis.location?.search ?? "").get("aspecto"));
+    } catch { /* sin URL se queda el de por omisión */ }
+
     if (!document.getElementById("v2-css")) {
       const s = document.createElement("style");
       s.id = "v2-css";
-      s.textContent = CSS;
+      // El del códice va DETRÁS para poder pisar lo que haga falta, y se pone
+      // siempre aunque el aspecto sea `vgui`: son reglas bajo `.v2-codice` y sin
+      // esa clase no alcanzan a nada. Así cambiar de aspecto es una palabra y no
+      // también un `if` aquí.
+      s.textContent = CSS + CSS_CODICE;
       document.head.appendChild(s);
     }
 
@@ -75,7 +90,7 @@ export class Vgui2 {
     });
     raiz.appendChild(this.capa);
 
-    this.tema = new Tema(ficha, innerHeight || 480);
+    this.tema = temaDe(ficha, innerHeight || 480);
 
     // La Escape cierra la de arriba, no todas: es lo que hace el juego cuando
     // tiene Options encima de Servers, que es justo la captura del menú.
@@ -89,8 +104,13 @@ export class Vgui2 {
       // Lo enseñó la sonda del arranque: abría la lista de mapas, pulsaba Escape
       // para cerrarla y la siguiente pestaña ya no existía porque «Create
       // Server» se había ido con ella.
+      //
+      // EL 50: y se cierra POR EL WIDGET, no arrancando el nodo. `remove()`
+      // dejaba al `Desplegable` con su `abierta` puesta, así que el siguiente
+      // clic en la fila se lo comía `alternar()` cerrando lo que ya no estaba.
+      // Ver `vgui2/widgets.js`, `cerrarDesplegable`.
       const lista = this.capa.querySelector(".v2-lista-abierta");
-      if (lista) { lista.remove(); return; }
+      if (lista) { (lista.cerrarDesplegable ?? (() => lista.remove()))(); return; }
       this.cerrarUltima();
     };
     addEventListener("keydown", this.escape, true);
@@ -197,10 +217,27 @@ export class Vgui2 {
     const ya = this.abiertas.find((v) => v instanceof VentanaCrearServidor);
     if (ya) { ya.nodo.hidden = false; return ya; }
     const v = new VentanaCrearServidor(this.tema, {
+      // En la cáscara no sale la casilla de pantalla completa: ver la fila
+      // `soloEnNavegador` en `src/play/crearpartida.js`.
+      enEscritorio: Boolean(globalThis.escritorio?.salir),
       mapas: mapas ?? this.mapas,
       alEmpezar: alEmpezar ?? this.alEmpezar,
       alCerrar: () => this.#quitar(v),
       x: Math.max(8, (innerWidth - 403) / 2), y: Math.max(8, (innerHeight - 493) / 2),
+    });
+    return this.#poner(v);
+  }
+
+  /**
+   * Una pregunta de sí o no. La usa «Quit», y **se puede abrir dos veces**: a
+   * diferencia de las otras tres no se busca una ya abierta, porque dos
+   * preguntas distintas son dos preguntas.
+   */
+  abrirPregunta(opciones = {}) {
+    const v = new VentanaPregunta(this.tema, {
+      ...opciones,
+      alCerrar: () => this.#quitar(v),
+      x: Math.max(8, (innerWidth - 420) / 2), y: Math.max(8, (innerHeight - 150) / 2),
     });
     return this.#poner(v);
   }
@@ -245,6 +282,9 @@ export class Vgui2 {
       servidores: sr ? { pestana: sr.pestana, cuantos: sr.cuantos() } : null,
       crearServidor: cs ? { pestana: cs.pestana, valores: { ...cs.valores } } : null,
       conFicha: !!this.ficha,
+      // QUÉ ASPECTO TIENEN LAS VENTANAS, para que la sonda lo mida en vez de
+      // deducirlo del color de un píxel. Ver `codice.js`.
+      aspecto: aspectoActivo().cual,
       valores: { ...this.valores },
       // De quién es el ratón ahora mismo, para que la sonda lo mida en vez de
       // deducirlo de que un clic funcione.

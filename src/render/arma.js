@@ -31,6 +31,8 @@ import * as THREE from "three";
 import { cargarModelo } from "./bichos.js";
 import { ESPACIO } from "./bsp_escena.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /**
  * Monta el arma de la mano y la cuelga de la cámara.
  *
@@ -38,7 +40,7 @@ import { ESPACIO } from "./bsp_escena.js";
  * `U` las unidades por metro del mapa, que es la escala del modelo.
  */
 export async function cargarArma(carpeta, {
-  base = "build/gatecity/armas", U = 39.37,
+  base = `${BASE_POR_DEFECTO}/armas`, U = 39.37,
 } = {}) {
   const M = await cargarModelo(carpeta, { base });
   if (!M) return null;

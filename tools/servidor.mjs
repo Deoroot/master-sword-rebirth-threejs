@@ -1,6 +1,7 @@
 // UN PROCESO DE NODE POR PARTIDA. El paso 4 de PROYECTO_10.md, en marcha.
 //
 //   npm run servidor                      una partida en el 5210, mapa gatecity
+//   npm run servidor -- --mapa edana      otro mapa, con sus propios personajes
 //   npm run servidor -- --puerto 5300 --nombre "Sala de Thothie"
 //   npm run servidor -- --vacio           sin mapa: el suelo liso de las pruebas
 //
@@ -21,9 +22,11 @@ import { Partida } from "../src/red/partida.js";
 import { Anfitrion, mundoDeNivel, nivelDeDisco } from "../src/red/anfitrion.js";
 import { AlmacenArchivos } from "../src/red/archivos.js";
 import { Fauna, censoDeDisco } from "../src/red/fauna.js";
-import { gatecityLevel } from "../src/bsp/nivel.js";
+import { cargarNivel } from "../src/bsp/nivel.js";
+import { MAPA_POR_DEFECTO, baseDe, esNombreDeMapa } from "../src/play/mapa.js";
 import { RED } from "../src/red/protocolo.js";
 import { readFile } from "node:fs/promises";
+import { rutaComun } from "../src/play/recursos.js";
 
 const args = process.argv.slice(2);
 const valor = (nombre, porDefecto) => {
@@ -33,8 +36,18 @@ const valor = (nombre, porDefecto) => {
 const bandera = (nombre) => args.includes(`--${nombre}`);
 
 const PUERTO = Number(valor("puerto", 5210));
-const NOMBRE = valor("nombre", "Gate City");
-const CARPETA = valor("personajes", "build/partidas/gatecity/personajes");
+// El 47: `--mapa` en vez de Gate City escrito a mano. La carpeta de personajes
+// cuelga del mapa, que es lo que hace el juego: un personaje de Edana no está
+// en la partida de Gate City.
+const MAPA = valor("mapa", MAPA_POR_DEFECTO);
+if (!esNombreDeMapa(MAPA)) {
+  console.error(`«${MAPA}» no es un nombre de mapa: sólo minúsculas, dígitos y guion bajo.`);
+  process.exit(1);
+}
+// El nombre del servidor por omisión es el del mapa, sin más: MSR no trae
+// tabla de títulos y el operador lo cambia con `--nombre` (59).
+const NOMBRE = valor("nombre", MAPA);
+const CARPETA = valor("personajes", `build/partidas/${MAPA}/personajes`);
 
 // ── el mundo ────────────────────────────────────────────────────────────────
 
@@ -49,10 +62,10 @@ if (bandera("vacio")) {
   aparicion = { mapa: "liso", nacimiento: { nombre: "el centro", escena: [0, 1, 0] } };
   deQue = "un suelo liso de 200 m";
 } else {
-  const level = await nivelDeDisco(gatecityLevel);
+  const level = await nivelDeDisco((o) => cargarNivel({ ...o, mapa: MAPA }), { base: baseDe(MAPA) });
   mundo = mundoDeNivel(level);
-  aparicion = JSON.parse(await readFile("build/gatecity/aparicion.json", "utf8"));
-  deQue = `gatecity: ${mundo.triangulos} triángulos de colisión`;
+  aparicion = JSON.parse(await readFile(`${baseDe(MAPA)}/aparicion.json`, "utf8"));
+  deQue = `${MAPA}: ${mundo.triangulos} triángulos de colisión`;
 }
 
 // ── la partida ──────────────────────────────────────────────────────────────
@@ -65,7 +78,7 @@ const almacen = new AlmacenArchivos({ carpeta: CARPETA });
 // la reconciliación corrige un poco en cada foto para siempre. La sonda lo
 // midió: 144 mm de error andando en línea recta, con la física correcta en los
 // dos lados.
-const catalogo = await readFile("build/msr/objetos.json", "utf8")
+const catalogo = await readFile(rutaComun("objetos.json"), "utf8")
   .then((t) => JSON.parse(t))
   .catch(() => null);
 if (!catalogo) console.log("  (sin build/msr/objetos.json: el servidor no sabrá lo que pesa lo que llevas)");
@@ -80,16 +93,72 @@ if (!catalogo) console.log("  (sin build/msr/objetos.json: el servidor no sabrá
 // un Gate City vacío.
 let fauna = null;
 if (!bandera("vacio") && !bandera("sinbichos")) {
-  const censo = await censoDeDisco({ base: "build/gatecity" });
+  const censo = await censoDeDisco({ base: baseDe(MAPA) });
   if (!censo) {
-    console.log("  (sin build/gatecity/bichos.json: la partida va sin monstruos)");
+    console.log(`  (sin ${baseDe(MAPA)}/bichos.json: la partida va sin monstruos)`);
   } else {
     fauna = new Fauna({ ...censo, mundo });
     console.log(`  bichos         ${fauna.n} del censo, ${fauna.solidos?.n ?? 0} con cilindro`);
   }
 }
 
-const partida = new Partida({ mundo, almacen, aparicion, catalogo, fauna, nombre: NOMBRE });
+// ── LOS GUIONES DE LOS NPC, que desde el 62 son del servidor ────────────────
+//
+// Mismo motivo que los bichos y un experimento más tarde: hasta el 61 cada
+// navegador corría su copia del guion de cada NPC, así que dos jugadores tenían
+// **dos vendedores distintos con el mismo nombre**, cada uno con su estante, y
+// los dos podían comprar la última daga. En el mod esto siempre fue del
+// servidor: `game_menu_getoptions` corre allí y el cliente sólo dibuja
+// (menu.cpp:143, multiplay_gamerules.cpp:1576).
+//
+// Sin `guiones.json` la partida va sin conversaciones y se dice: es lo mismo
+// que hace con `bichos.json`, y callarse cuesta media hora de «por qué no me
+// habla nadie».
+const guiones = await readFile(`${baseDe(MAPA)}/guiones.json`, "utf8")
+  .then((t) => JSON.parse(t)).catch(() => null);
+const menus = await readFile(`${baseDe(MAPA)}/menus.json`, "utf8")
+  .then((t) => JSON.parse(t)).catch(() => null);
+if (!guiones) console.log(`  (sin ${baseDe(MAPA)}/guiones.json: los NPC del servidor no hablan. Corre \`npm run guiones -- --mapa ${MAPA}\`)`);
+else console.log(`  guiones        ${Object.keys(guiones.guiones ?? {}).length} del mapa, corriendo aquí`);
+
+// ── DÓNDE NACEN, si el operador lo dice ─────────────────────────────────────
+//
+//     npm run servidor -- --mapa edana --nacer 53.4,-7.7,42.5
+//
+// Es una perilla del que levanta el servidor, no del jugador, y existe por una
+// razón concreta: con red **el cuerpo lo mueve el servidor**, así que un
+// `probe.mundo.poner()` en el navegador es una mentira que la reconciliación
+// deshace (lo mide el control «el servidor corrige la mentira» de `sonda:red`).
+// Para medir una tienda hay que estar delante del vendedor de verdad, y el
+// herrero de Edana está a **107 metros** del `ms_player_begin`. Andarlos mediría
+// el camino —que no está portado— en vez de la tienda.
+//
+// No se salta nada del juego: se elige otro punto de aparición, que es lo que
+// hace el mapa cuando tiene varios `ms_player_spawn`.
+const nacer = valor("nacer", null);
+if (nacer && aparicion) {
+  const xyz = String(nacer).split(",").map(Number);
+  if (xyz.length === 3 && xyz.every(Number.isFinite)) {
+    aparicion = { ...aparicion, nacimiento: { nombre: `--nacer ${nacer}`, escena: xyz }, alternativas: [] };
+    console.log(`  nacimiento     ${xyz.join(", ")}  (--nacer)`);
+  } else {
+    console.error(`  «--nacer ${nacer}» no son tres números separados por comas: se ignora.`);
+  }
+}
+
+// ── CON CUÁNTO ORO ENTRAN, si el operador lo dice ───────────────────────────
+//
+//     npm run servidor -- --mapa edana --oro 5000
+//
+// La hermana de `--nacer`, y por el mismo motivo: con red **el personaje vive
+// aquí**, así que `probe.misiones.oro(5000)` en el navegador pinta un 5000 en
+// una pantalla y el servidor sigue contestando «You can't afford …» — que es
+// verdad, y la sonda medía su propia mentira. Para medir una compra hay que
+// tener el oro DONDE SE RESTA.
+const oroInicial = valor("oro", null);
+if (oroInicial !== null) console.log(`  oro            ${oroInicial} al entrar  (--oro)`);
+
+const partida = new Partida({ mundo, almacen, aparicion, catalogo, fauna, guiones, menus, nombre: NOMBRE, oroInicial });
 
 const http = createServer((pet, res) => {
   // La lista de partidas: lo que en Master Sword es el navegador de servidores

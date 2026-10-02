@@ -2,7 +2,7 @@
 //
 // El modelo es el mismo que el juego usa para un personaje —
 // `models/human/reference.mdl`, lo que `CRenderChar::Init` carga— y el mismo que
-// ya está horneado en `build/gatecity/cuerpos/` para la hoja de personaje del
+// ya está horneado en `build/msr/cuerpos/` para la hoja de personaje del
 // experimento 14. O sea que **esto no trae contenido nuevo**: trae al mismo
 // modelo al mundo, a tamaño y con su animación.
 //
@@ -17,7 +17,7 @@
 //
 // ── Las dos animaciones, y son las del mod ────────────────────────────────
 //
-// `build/gatecity/cuerpos.json` las nombra, y salen de `global.script`, o sea
+// `build/msr/cuerpos.json` las nombra, y salen de `global.script`, o sea
 // del mod y no de mirar capturas:
 //
 //     sinArma: "attention"      quieto
@@ -30,6 +30,8 @@
 import * as THREE from "three";
 import { cargarModelo } from "./bichos.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /** El umbral de «se está moviendo», en unidades por segundo. */
 export const ANDANDO = 10;
 
@@ -39,20 +41,18 @@ export const ANDANDO = 10;
  *
  * @param {{base?: string, U?: number, carpeta?: string}} opciones
  */
-export async function cargarOtros({
-  base = "build/gatecity", U = 39.37, carpeta = "cuerpos/human_reference_b40",
-} = {}) {
-  const modelo = await cargarModelo(carpeta, { base });
-  if (!modelo) return null;
-
-  const grupo = new THREE.Group();
-  grupo.name = "otros jugadores";
-  /** @type {Map<number, object>} */
-  const figuras = new Map();
-
-  /** Una figura nueva: esqueleto propio, materiales propios, malla compartida. */
-  function crear(id, nombre) {
-    const M = modelo;
+/**
+ * UNA FIGURA DE JUGADOR: esqueleto propio, materiales propios, malla compartida.
+ *
+ * Sale de dentro de `cargarOtros` en el 41 y se exporta porque hace falta en dos
+ * sitios: los demás jugadores y **tu propio cadáver**, que es la misma figura con
+ * otra vida. Duplicar veinte líneas de atar un esqueleto es exactamente la clase
+ * de copia que luego se arregla en un sitio y no en el otro.
+ *
+ * No la cuelga de ninguna parte por su cuenta: `padre` dice dónde va, y quien la
+ * pide es quien la quita.
+ */
+export function figuraDeJugador(M, { id = 0, nombre = null, U = 39.37, padre = null } = {}) {
     // Un esqueleto por figura. Dos jugadores en fotogramas distintos no pueden
     // compartirlo, igual que dos zombis.
     const huesos = M.ficha.huesos.map((h, i) => {
@@ -95,7 +95,7 @@ export async function cargarOtros({
     const nodo = new THREE.Group();
     nodo.name = `jugador ${id}${nombre ? ` (${nombre})` : ""}`;
     nodo.add(ejes);
-    grupo.add(nodo);
+    if (padre) padre.add(nodo);
     // El esqueleto se ata DESPUÉS de colgarlo y de actualizar las matrices, por
     // lo mismo que en `bichos.js`: `new Skeleton()` saca las inversas de enlace
     // de `bone.matrixWorld`, y sin actualizar las saca de la identidad — que no
@@ -113,8 +113,29 @@ export async function cargarOtros({
       mezclador.clipAction(e.clip).reset().play();
       return e;
     };
-    pon("attention");
-    return { id, nodo, mezclador, pon, get secuencia() { return puesta?.seq?.nombre ?? null; }, nombre };
+    return {
+      id, nodo, mezclador, pon, materiales,
+      get secuencia() { return puesta?.seq?.nombre ?? null; },
+      nombre,
+    };
+}
+
+export async function cargarOtros({
+  base = BASE_POR_DEFECTO, U = 39.37, carpeta = "cuerpos/human_reference_b40",
+} = {}) {
+  const modelo = await cargarModelo(carpeta, { base });
+  if (!modelo) return null;
+
+  const grupo = new THREE.Group();
+  grupo.name = "otros jugadores";
+  /** @type {Map<number, object>} */
+  const figuras = new Map();
+
+  /** Una figura nueva, colgada ya del grupo de los otros. */
+  function crear(id, nombre) {
+    const f = figuraDeJugador(modelo, { id, nombre, U, padre: grupo });
+    f.pon("attention");
+    return f;
   }
 
   return {

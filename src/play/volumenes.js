@@ -35,10 +35,16 @@ export function dentro(caja, p) {
 }
 
 /**
- * ¿Está el punto dentro del volumen? La caja primero y los planos después.
+ * ¿Está el punto dentro del volumen? La caja primero y las piezas después.
  *
  * El `margen` es cero a propósito: un volumen de agua con margen te moja antes
  * de tocarla. Existe para las escaleras, donde el jugador está pegado por fuera.
+ *
+ * **`piezas` es del 48**, y son varias porque una entidad puede tener varios
+ * brushes: dentro es estar dentro de ALGUNA. Hasta entonces había una sola
+ * lista de planos, sacada de las caras del modelo, y los volúmenes sin caras
+ * —las escaleras, los `trigger_hurt`, las `msarea_*`— se contestaban con la
+ * envolvente. El `trigger_hurt` de Gate City son cinco brushes separados.
  */
 export function dentroDe(v, p, margen = 0) {
   if (margen) {
@@ -50,8 +56,10 @@ export function dentroDe(v, p, margen = 0) {
   } else if (!dentro(v.caja, p)) {
     return false;
   }
-  if (!v.planos) return true;      // sin caras: manda la caja
-  return v.planos.every((q) => q.n[0] * p[0] + q.n[1] * p[1] + q.n[2] * p[2] - q.d <= margen);
+  const enPieza = (ps) => ps.every((q) => q.n[0] * p[0] + q.n[1] * p[1] + q.n[2] * p[2] - q.d <= margen);
+  if (v.piezas?.length) return v.piezas.some(enPieza);
+  if (v.planos) return enPieza(v.planos);
+  return true;                     // ni piezas ni planos: manda la caja
 }
 
 /**

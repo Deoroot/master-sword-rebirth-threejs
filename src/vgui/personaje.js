@@ -60,6 +60,7 @@ import { Panel, MSLabel, MSButton, medirTexto } from "./widgets.js";
 import { PanelConNombre, ATRAPA_NUMEROS, CERRAR_CON_ESC } from "./registro.js";
 import { centradoConFallo } from "./menubase.js";
 import { XRES, YRES } from "../play/hud.js";
+import { enLaCascara } from "../juego/navegador.js";
 
 export const NOMBRE = "newchar";
 
@@ -420,8 +421,12 @@ export class PanelDePersonaje extends PanelConNombre {
     this.titulo.ponTexto(enElegir ? "Choose your character"
       : enQuien ? "Who are you?" : "Choose your weapon");
     this.etiqueta.ponTexto(enElegir ? "" : enQuien ? "" : "");
+    // DÓNDE SE GUARDAN, dicho como es en cada sitio. En la cáscara no hay
+    // «este navegador» que valga: hay una máquina. Ver `enLaCascara`.
     this.manejo.ponTexto(enElegir
-      ? "Characters are saved in this browser. Use Export to keep a copy."
+      ? (enLaCascara()
+        ? "Characters are saved on this machine. Use Export to keep a copy."
+        : "Characters are saved in this browser. Use Export to keep a copy.")
       : enQuien ? "" : "");
     this.manejo.ver(enElegir);
     this.etiqueta.ver(enElegir);

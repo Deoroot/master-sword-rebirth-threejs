@@ -1,0 +1,360 @@
+// EL TIRO CON ARCO: de dónde sale la flecha, contra qué choca y quién se come
+// el daño.
+//
+// Extraído de `src/main.js` (experimento 55), donde eran 267 líneas dentro de
+// una función de cuatro mil. La regla del proyectil ya vivía aparte en
+// `src/play/proyectil.js`; lo que estaba pegado al archivo grande era el
+// pedazo que toca el mundo, y por eso nadie podía probarlo sin arrancar el
+// juego entero.
+//
+// ── POR QUÉ ESTE TROZO Y NO OTRO: se midió ───────────────────────────────
+//
+// `arrancarJuego` tiene 4 069 líneas antes de la sonda, y no todos sus tramos
+// cuestan lo mismo de sacar. Medido con `rollup/parseAst`, que resuelve
+// ámbitos —a ojo la lista sale corta y falsa, ver abajo—:
+//
+//   tramo                    líneas   salen al juego   se reasignan cruzando
+//   el golpe (2345-2930)        586        ~25                 varios
+//   el mundo  (816-1170)        355         32                    —
+//   EL ARCO   (2931-3250)       320          2                    3
+//
+// Dos nombres cruzan al juego (`flechasPuestas` y el paso de las flechas) y
+// seis más los lee sólo la sonda. Ésa es la costura limpia, y por eso es la
+// primera. El golpe cuerpo a cuerpo no lo es todavía, y el motivo está en
+// `doc/ARCO_55.md`.
+//
+// ── LO QUE APRENDIÓ LA MEDIDA, y vale para el próximo que reparta ────────
+//
+// La primera versión del analizador sólo miraba las declaraciones ANTERIORES
+// al tramo y dio una lista de dependencias **corta y falsa**:
+//
+//   `U` se declara en la línea 3512 y este bloque la usa en la 3007. Funciona
+//   porque las flechas vuelan más tarde, no porque esté declarada antes; un
+//   `const` en zona muerta que nadie pisa.
+//
+//   `municionElegida` vive en el módulo y se REASIGNA a los dos lados de la
+//   frontera, que es el caso caro: mover ese trozo sin darse cuenta habría
+//   dejado dos variables distintas con el mismo nombre y ningún error.
+//
+// ── LAS DEPENDENCIAS SON CAPTADORES, NO COPIAS ───────────────────────────
+//
+// Es la lección del 28, y aquí muerde igual: `brazo`, `armaEnMano`, `bichos`,
+// `sesion` y `reloj` se reasignan mientras el juego corre. Pasarlos por valor
+// daría un módulo que apunta para siempre al arco que llevabas al entrar y a
+// un reloj parado, **sin un solo error**. Se piden como funciones.
+
+import * as THREE from "three";
+import { Flecha, anguloDelTiro, danoDeFlecha, dadoDeFlecha } from "../play/proyectil.js";
+import { habilidadDeArma, propiedadesDe } from "./stats.js";
+
+/**
+ * Monta el arco sobre el mundo que se le pasa.
+ *
+ * Todo lo que puede cambiar durante la partida entra como función. Lo que no
+ * cambia nunca —`RAPIER`, `U`— entra por valor, y `U` se pide como función
+ * igualmente porque el nivel se carga después del menú desde el 53.
+ *
+ * @returns el arco: su estado, sus pasos y lo que la sonda mira.
+ */
+export function montarArco({
+  // El mundo
+  RAPIER, world, player, U,
+  // Lo que cambia
+  sesion = () => null, red = () => null, audio = () => null,
+  bichos = () => null, bichosSolidos = () => null,
+  brazo = () => null, armaEnMano = () => null,
+  catalogoDeFlechas = () => null, reloj = () => 0,
+  // Lo que el arco no sabe hacer y pide prestado
+  suceso = () => {}, potenciaDe = () => 0, destrezaDe = () => 0,
+  repartirExperiencia = () => {}, alMatar = () => {},
+  JUGADOR = "jugador",
+} = {}) {
+  /** El conjunto de nodos, montado al empuñar un arco. Lo pone `empunar`. */
+  let flechasPuestas = null;
+  const flechasEnVuelo = [];    // `{ flecha, pieza }`
+  const cuentas = { tiros: 0, flechazos: 0, perdidas: 0 };
+  /**
+   * La última que se ha soltado, y no es un adorno de la sonda: es la única
+   * forma de seguir UNA flecha. El primer intento la buscaba por la longitud
+   * de `flechasEnVuelo` antes y después, y eso falla en silencio —la lista
+   * también PIERDE flechas, las que cumplen sus cinco segundos clavadas—, así
+   * que a partir del duodécimo tiro la longitud no crecía y la sonda decía «no
+   * ha salido ninguna flecha» mientras el goblin perdía vida.
+   */
+  let ultimaFlecha = null;
+  /**
+   * LA MUNICIÓN ELEGIDA CON EL CICLADOR. Vivía suelta en el módulo de
+   * `main.js` y se reasignaba desde dos sitios; aquí es del arco, que es de
+   * quien era, y el ciclador la pone por `elegirMunicion`.
+   */
+  let municionElegida = null;
+
+  /**
+   * DE QUÉ FLECHA TIRA, y la respuesta por omisión es «de una gratis».
+   *
+   *     //Player not carrying any of the required ammo
+   *     if (!_stricmp(CurrentAttack->sProjectileType, "arrow")) {
+   *       //New! Give free 'blunt' arrows
+   *       … GetGlobalGenericItemByName("proj_arrow_generic");
+   *     }                                              giattack.cpp:1005-1017
+   *
+   * Un arco **nunca se queda sin munición**. Y la gratis no se gasta nunca: el
+   * motor sólo resta cantidad `if (!GENERIC)` (:947), que es la marca de los
+   * objetos cuyo nombre acaba en `_generic`. O sea que llevar flechas no es
+   * tener con qué disparar: es disparar MEJOR —30-60 de daño contra 60-90— y
+   * por eso un personaje nuevo, que no lleva ninguna, puede usar el arco desde
+   * el minuto cero. Comprobado en el catálogo: `reg.newchar` regala cuatro
+   * objetos y ninguno es una flecha.
+   */
+  function municion(ataque) {
+    const tipo = String(ataque?.proyectil ?? "arrow");
+    const p = sesion()?.personaje;
+    const catalogo = catalogoDeFlechas();
+    // Lo que el jugador haya ELEGIDO con el ciclador manda sobre la búsqueda,
+    // que es justo para lo que sirve `selectarrow`: llevando tres clases de
+    // flecha, sin esto siempre tiraría la primera que encuentre.
+    if (municionElegida) {
+      const puesta = (p?.objetos ?? []).find((o) => o?.id === municionElegida && o.n > 0);
+      if (puesta && catalogo?.has(puesta.id)) {
+        return { ficha: catalogo.get(puesta.id), gasta: puesta };
+      }
+      // Se acabaron las elegidas: se olvida la elección y se sigue como siempre.
+      municionElegida = null;
+    }
+    const enLaMochila = (p?.objetos ?? []).find((o) => {
+      if (!o?.id || !(o.n > 0)) return false;
+      if (!catalogo?.has(o.id)) return false;
+      // `msstring(sProjectileType).contains("arrow")` contra el nombre del
+      // objeto: es una comparación por TEXTO y no por tipo, así que una saeta
+      // no entra en un arco ni una flecha en una ballesta.
+      return o.id.includes(tipo) && !o.id.endsWith("_generic");
+    });
+    if (enLaMochila) return { ficha: catalogo.get(enLaMochila.id), gasta: enLaMochila };
+    return { ficha: catalogo?.get("proj_arrow_generic") ?? null, gasta: null };
+  }
+
+  /**
+   * LA TRAZA DE UNA FLECHA, y es la que NO ignora a los monstruos: al
+   * contrario que la del mandoble, aquí lo que hay en medio es justo lo que
+   * importa.
+   *
+   * Devuelve `{ punto, contra }`, donde `contra` es la instancia del bicho si
+   * le ha dado a uno y `null` si ha dado al mundo — que es la diferencia entre
+   * `game_projectile_hitnpc` y `game_projectile_hitwall`.
+   */
+  function trazaDeFlecha(desdeU, hastaU) {
+    const u = U();
+    const o = { x: desdeU[0] / u, y: desdeU[1] / u, z: desdeU[2] / u };
+    const d = { x: hastaU[0] / u - o.x, y: hastaU[1] / u - o.y, z: hastaU[2] / u - o.z };
+    const L = Math.hypot(d.x, d.y, d.z);
+    if (!(L > 0)) return null;
+    d.x /= L; d.y /= L; d.z /= L;
+    const g = world().castRay(new RAPIER.Ray(o, d), L, true,
+      undefined, undefined, undefined, player().body);
+    if (!g) return null;
+    const t = g.timeOfImpact;
+    const punto = [
+      (o.x + d.x * t) * u, (o.y + d.y * t) * u, (o.z + d.z * t) * u,
+    ];
+    const cual = (bichosSolidos()?.puestos ?? [])
+      .find((q) => q.colisionador.handle === g.collider?.handle);
+    return { punto, contra: cual?.instancia ?? null };
+  }
+
+  /**
+   * SOLTAR LA CUERDA. Devuelve la flecha, que es lo que la sonda mira.
+   *
+   * El orden es el del motor: el ángulo con sus tres sumas, la velocidad de la
+   * fracción tensada, la flecha en el ojo, y una comprobación **antes de
+   * moverse** (`Think()` al final de `TossProjectile`).
+   */
+  function tirar(ataque, sostenido) {
+    const { ficha: flecha, gasta } = municion(ataque);
+    if (!flecha) return null;
+    const u = U();
+    const elBrazo = brazo();
+    const elAudio = audio();
+    cuentas.tiros++;
+    // La munición se gasta AL SOLTAR y no al empezar a tensar. En el motor se
+    // gasta en `StartAttack` —o sea al empezar—, y eso es un regalo
+    // envenenado: si te mueres tensando, la flecha se ha ido. Aquí no hay
+    // forma de morir tensando que no sea morir, así que da el mismo resultado
+    // y se hace donde se entiende. Queda dicho porque es una diferencia, no un
+    // descubrimiento.
+    if (gasta) {
+      gasta.n -= 1;
+      const s = sesion();
+      if (gasta.n <= 0 && s?.personaje) {
+        s.personaje.objetos = s.personaje.objetos.filter((o) => o !== gasta);
+        // `HUDEVENT_UNABLE` es el gris de «no puedes hacer eso», y quedarte sin
+        // flechas es exactamente eso.
+        suceso("nopuedes", `You are out of ${flecha.nombre ?? "ammo"}`);
+      }
+    }
+
+    const r = anguloDelTiro({
+      // Se le pasan CEROS y lo que devuelve se usa como incremento: la vista de
+      // este proyecto está en radianes y en los ejes de Three, y mezclar los
+      // dos sistemas dentro de la regla sería meter la cámara en un módulo que
+      // se prueba sin navegador.
+      cabeceo: 0, guino: 0, ataque, sostenido,
+      habilidad: destrezaDe(ataque),
+    });
+    // Del sistema del motor al de la escena: su cabeceo positivo mira ABAJO y
+    // el de Three mira arriba, y los dos guiños positivos giran a la izquierda.
+    const rad = Math.PI / 180;
+    const p = player();
+    const euler = new THREE.Euler(
+      p.pitch - r.cabeceo * rad, p.yaw + r.guino * rad, 0, "YXZ");
+    const dir = new THREE.Vector3(0, 0, -1).applyEuler(euler);
+
+    // El punto de salida: el ojo más `ofs.startpos`, con sus ejes de siempre
+    // (derecha, DELANTE, arriba). Los arcos no lo declaran y salen del ojo.
+    const ojo = p.eye;
+    const derecha = new THREE.Vector3(1, 0, 0).applyEuler(euler);
+    const arriba = new THREE.Vector3(0, 1, 0).applyEuler(euler);
+    const ofs = ataque.desde ?? [0, 0, 0];
+    const desde = [0, 1, 2].map((k) => ojo[k] * u
+      + derecha.getComponent(k) * ofs[0] + dir.getComponent(k) * ofs[1]
+      + arriba.getComponent(k) * ofs[2]);
+
+    const f = new Flecha({
+      desde, hacia: [dir.x, dir.y, dir.z], velocidad: r.velocidad,
+      gravedad: flecha.gravedad ?? 1,
+      dano: dadoDeFlecha(flecha.dano, Math.random),
+      tipoDano: flecha.tipoDano ?? "pierce",
+      expira: flecha.duraEnElSuelo ?? 10,
+      ficha: flecha,
+    });
+    const pieza = flechasPuestas?.coger() ?? null;
+    if (pieza) flechasPuestas.apuntar(pieza, [ojo[0], ojo[1], ojo[2]], [dir.x, dir.y, dir.z]);
+    flechasEnVuelo.push({ flecha: f, pieza });
+    ultimaFlecha = f;
+
+    // El sonido del arco, que lo pone su propio `ranged_toss`.
+    const s = elBrazo?.arma?.sonidos?.blandir ?? "weapons/bow/bow.wav";
+    if (s && elAudio?.despierto) elAudio.unaVez(`snd/${s}`);
+    const enMano = armaEnMano();
+    if (enMano && elBrazo?.arma?.animaciones?.disparar !== null) {
+      enMano.pon(elBrazo.arma.animaciones.disparar, { unaVez: true });
+    }
+
+    // Y la comprobación del fotograma cero, que es la que hace que disparar
+    // contra una pared pegada no suelte una flecha que atraviesa la piedra.
+    const choque = f.nacer(trazaDeFlecha);
+    if (choque) aterrizar(f, choque);
+    return f;
+  }
+
+  /**
+   * LO QUE PASA CUANDO UNA FLECHA LLEGA A ALGO.
+   *
+   * `ProjectileTouch` (giprojectile.cpp:118) con lo que de verdad se aplica a
+   * una flecha de arco:
+   *
+   *   - el daño es el de la flecha por `potencia / 100`, **sin crítico y sin
+   *     tirada de acierto** — ver `danoDeFlecha`;
+   *   - si le da a un bicho, `game_projectile_hitnpc`; si no,
+   *     `game_projectile_hitwall`, que es el que trae el sonido;
+   *   - un bicho MUERTO no la para: «Hit a dead monster, keep going» (:144).
+   *     Eso aquí no se puede hacer todavía —el colisionador del cadáver se
+   *     quita al morir— y queda anotado.
+   */
+  function aterrizar(f, choque) {
+    const i = choque?.contra ?? null;
+    const elAudio = audio();
+    if (!i || i.muerto) {
+      const s = f.ficha?.sonidos?.contraPared ?? [];
+      if (s.length && elAudio?.despierto) {
+        elAudio.unaVez(`snd/${s[Math.floor(Math.random() * s.length)]}`);
+      }
+      return null;
+    }
+    cuentas.flechazos++;
+    const elBrazo = brazo();
+    const dano = danoDeFlecha({
+      dado: f.dano,
+      multiplicadorDelArco: elBrazo?.ataques?.[0]?.multiplicadorDeDano ?? 1,
+      potencia: potenciaDe(elBrazo?.ataques?.[0] ?? null),
+    });
+    // El cubo de experiencia va a ARQUERÍA, que es lo que declara el arco, y
+    // con la propiedad sorteada igual que en el mandoble.
+    const h = habilidadDeArma(elBrazo?.ataques?.[0]?.habilidad ?? "archery");
+    const props = h ? propiedadesDe(h.habilidad) : [];
+    const prop = h?.propiedad ?? props[Math.floor(Math.random() * props.length)] ?? "power";
+    // La flecha va por el mismo camino que la espada: con servidor, se pide.
+    const laRed = red();
+    if (laRed) {
+      laRed.pegar({
+        id: i.id, dano, alcance: 0,
+        cubo: `${h?.habilidad ?? "archery"}.${prop}`,
+        tipo: f.tipoDano ?? "pierce",
+      });
+      return { objetivo: i, dano, pedido: true };
+    }
+    const golpe = bichos().herir(i, dano, {
+      cubo: `${h?.habilidad ?? "archery"}.${prop}`,
+      tipo: f.tipoDano ?? "pierce",
+      ahora: reloj(),
+      dados: { quien: JUGADOR },
+    });
+    // Un escudo puede parar una flecha, y eso ya está portado en `herir`.
+    if (golpe.parado) {
+      suceso("ataque", `Your arrow was ${golpe.mensaje ?? "parried!"}`);
+      return null;
+    }
+    if (golpe.muerto) {
+      // `alMatar` es del juego y no del arco: sube la cuenta de muertes, que
+      // es compartida con el mandoble, y quita el cilindro. Se pide en vez de
+      // hacerse aquí porque ese contador lo lee la sonda desde `main.js`.
+      alMatar(i);
+      repartirExperiencia(i);
+    }
+    // La misma forma que el golpe de cuerpo a cuerpo, y a propósito: el motor
+    // no tiene dos formatos —los dos salen del mismo `fReportHit` de
+    // `giattack.cpp`— y «Flecha: 0.5 a Commoner» era un apunte de trabajo.
+    suceso("ataque", `${dano.toFixed(1)} damage to ${i.ficha.nombre ?? "a monster"}` +
+      ` — ${Math.max(0, i.vida).toFixed(0)} of ${i.vidaMaxima} left` +
+      `${golpe.muerto ? " · dead!" : ""}`);
+    return golpe;
+  }
+
+  /** Un paso de todas las flechas, con el mismo reloj fijo que la física. */
+  function pasoDeFlechas(dt) {
+    const u = U();
+    for (let n = flechasEnVuelo.length - 1; n >= 0; n--) {
+      const { flecha: f, pieza } = flechasEnVuelo[n];
+      const antes = f.volando;
+      const choque = f.paso(dt, { traza: trazaDeFlecha });
+      if (choque && antes) aterrizar(f, choque);
+      // Se la mueve y se la reorienta sólo mientras vuela: una flecha clavada
+      // se queda con el ángulo con el que entró, que es lo que hace el motor
+      // al pasar a `MOVETYPE_NONE`.
+      if (pieza && f.volando) {
+        flechasPuestas.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], f.vel);
+      } else if (pieza && choque) {
+        flechasPuestas.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], null);
+      }
+      if (f.caducada) {
+        if (f.volando) cuentas.perdidas++;
+        flechasPuestas?.soltar(pieza);
+        flechasEnVuelo.splice(n, 1);
+      }
+    }
+  }
+
+  return {
+    municion, trazaDeFlecha, tirar, aterrizar, pasoDeFlechas,
+    /** El ciclador elige con qué flecha se tira. `null` vuelve a la búsqueda. */
+    elegirMunicion(id) { municionElegida = id ?? null; },
+    get municionElegida() { return municionElegida; },
+    /** `empunar` monta el conjunto de nodos cuando hay un arco en la mano. */
+    get flechasPuestas() { return flechasPuestas; },
+    set flechasPuestas(v) { flechasPuestas = v; },
+    get flechasEnVuelo() { return flechasEnVuelo; },
+    get ultimaFlecha() { return ultimaFlecha; },
+    get tiros() { return cuentas.tiros; },
+    get flechazos() { return cuentas.flechazos; },
+    get flechasPerdidas() { return cuentas.perdidas; },
+  };
+}

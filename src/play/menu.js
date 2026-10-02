@@ -46,6 +46,12 @@ export const COMANDOS = Object.freeze({
   // Un navegador no cierra su propia pestaña si no la abrió él
   // (`window.close()` no hace nada), así que ésta no puede funcionar y no se
   // finge que sí.
+  //
+  // EL 73: y en la cáscara de escritorio **sí puede**, que es para lo que se
+  // hizo. Es la única entrada del menú cuyo `sirve` depende de DÓNDE corre el
+  // juego y no de lo que esté portado, así que no se resuelve en esta tabla:
+  // lo decide `quehace()` con el contexto que le den. La tabla sigue diciendo
+  // la verdad del navegador, que es donde el port también corre.
   Quit: { que: "salir", sirve: false, porque: "a browser cannot close its own tab" },
 });
 
@@ -65,12 +71,21 @@ export function entradasVisibles(entradas, { enJuego = false, multijugador = tru
   });
 }
 
-/** Qué hace una entrada: `{ que, sirve, porque }`, o el separador. */
-export function quehace(entrada) {
+/**
+ * Qué hace una entrada: `{ que, sirve, porque }`, o el separador.
+ *
+ * `enEscritorio` enciende «Quit». Va como contexto y no como una tabla aparte
+ * porque es **lo único** que cambia entre el navegador y la cáscara: todo lo
+ * demás del menú hace exactamente lo mismo en los dos sitios.
+ */
+export function quehace(entrada, { enEscritorio = false } = {}) {
   if (!entrada.comando && !entrada.etiqueta) return { que: "separador", sirve: true };
   const porEtiqueta = POR_ETIQUETA[entrada.texto ?? entrada.etiqueta];
   if (porEtiqueta) return { que: porEtiqueta, sirve: true };
-  return COMANDOS[entrada.comando] ?? { que: null, sirve: false, porque: `I do not know how to do '${entrada.comando}'` };
+  const c = COMANDOS[entrada.comando];
+  if (!c) return { que: null, sirve: false, porque: `I do not know how to do '${entrada.comando}'` };
+  if (c.que === "salir" && enEscritorio) return { que: "salir", sirve: true };
+  return c;
 }
 
 /**

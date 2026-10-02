@@ -17,6 +17,40 @@ Y una cifra, que es el resultado de verdad del experimento:
 O sea: **la puerta que se abre es de una misión y pico, no de ciento cuarenta**,
 y §6 dice exactamente qué haría falta para ensancharla.
 
+> **Corrección del 43.** Esas tres cifras son las del 33 y **ya no son las de
+> hoy**. Se ensanchó la puerta: con siete comandos más y un getter
+> —`stradd`, `playsound`, `setprop`, `say`, `roam`, `setmovedest`,
+> `setmoveanim` y `$randf`— van **88 / 78 / 19**, y Kendra es el primer NPC de
+> Gate City que funciona entero. Lo de arriba se deja como estaba porque es lo
+> que se midió entonces; el porqué y el método de elección están en
+> [GUIONES_43.md](GUIONES_43.md).
+>
+> **Corrección del 45.** Y con `deleteent`, `$get_by_name` y `$get_token_amt`
+> van **38 comandos, 10 getters y 88 / 78 / 20**: el alcalde cabe entero. En el
+> mismo experimento salió que **`$get_token` estaba portado mal desde aquí**:
+> se hizo con un `split(";")` y el motor usa `TokenizeString`, que es un
+> `sscanf("%[^;]")` y **para en el primer hueco** —«a;;b» son un token, no
+> tres—. En Gate City no cambia nada porque ninguna lista lleva huecos, pero
+> era un valor distinto del del juego y llevaba doce experimentos ahí. Ver
+> [ENTIDADES_45.md](ENTIDADES_45.md).
+>
+> **Corrección del 46.** Con el andamiaje de menú entero —`calleventloop`, las
+> listas, `menu.open`, `menuitem.remove` y los mensajes— van **73 comandos, 18
+> getters, 15 propiedades y 118 / 88 / 46**, y **los cinco NPC con menú de Gate
+> City caben enteros**. Con una advertencia que vale para toda esta serie de
+> correcciones: **«cabe» significa «no se encontró ningún comando
+> desconocido», no «el menú sale bien»**. Ver [MENUS_46.md](MENUS_46.md).
+>
+> **Corrección del 64.** Son **76**: `repeatdelay`, `givehp` y `givemp`, que no
+> salieron de ningún NPC sino del **guion del jugador** — en Master Sword el
+> jugador también es una entidad con guion, y este puerto no corría el suyo.
+> Ver [JUGADOR_64.md](JUGADOR_64.md).
+>
+> Lo que **no** cambió es el diagnóstico de §6, y el 43 lo confirma: el salto de
+> 7 a 19 no vino de que los comandos nuevos hagan algo —cuatro de ellos siguen
+> sin llegar a ninguna parte— sino de que el intérprete **dejó de abortar la
+> opción entera** al toparse con uno que no conocía.
+
 ---
 
 ## 1. Qué se ha portado

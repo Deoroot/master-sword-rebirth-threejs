@@ -61,15 +61,69 @@ export const ACCION = {
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 /**
+ * `$get(<quien>,range)`, QUE NO ES LA DISTANCIA ENTRE DOS PUNTOS.
+ *
+ * El motor le resta la mitad de las dos anchuras (scriptcmds.cpp:1146-1156):
+ *
+ *     Dist = (pTarget->pev->origin - pev->origin).Length()
+ *            - ((pMonster->m_Width + pMonsterMe->m_Width) / 2);
+ *                                    // «MIB JAN2010_20 - range check take
+ *                                    //  model widths into account»
+ *
+ * y lo hace porque **mide entre centros y los cuerpos se estorban**: dos cajas
+ * de 32 no pueden tener los centros a menos de 32, así que sin restar las
+ * anchuras un bicho ancho nunca alcanza a nada. Es la misma suma que hace el
+ * `dodamage` por su lado (`flMonsterDamageRange += m_Width / 2`,
+ * npcscript.cpp:1150-1154): el motor la aplica dos veces, al decidir y al pegar.
+ *
+ * LAS DOS COSAS QUE NO SON OBVIAS:
+ *
+ *  1. **La anchura del JUGADOR es 0.** `m_Width` sólo se asigna en el `width`
+ *     de un guion de NPC (npcscript.cpp:201) y el del jugador no lo trae, así
+ *     que de las dos mitades sólo cuenta la del bicho — aunque el jugador sea
+ *     un `CMSMonster` y entre por la misma rama. Es el mismo hallazgo del 81.
+ *  2. **No se topa a cero.** El motor deja que salga negativo y aquí también:
+ *     cualquier cosa menor que el alcance pasa la comparación igual, y topar a
+ *     cero sería inventarse una regla para que el número se lea mejor.
+ *
+ * Y NO vale para todo: `$dist(A,B)` entre dos vectores —el del alcance de
+ * persecución— es la distancia pelada, sin anchuras. Sólo lo que el guion pide
+ * como `NPC_RANGE_TYPE` (`const NPC_RANGE_TYPE range`,
+ * base_npc_attack_new.script:98) pasa por aquí.
+ */
+export const rangoDeAtaque = (a, b, miAncho = 0, suAncho = 0) =>
+  dist(a, b) - (Number(miAncho || 0) + Number(suAncho || 0)) / 2;
+
+/**
  * El cazador de un bicho. Uno por instancia.
  *
  * `ficha` es la `ia` que extrae `src/bsp/script.js` del `.script`, en
  * UNIDADES de GoldSrc — no en metros. Quien lo llame convierte.
  */
 export class Cazador {
-  constructor(ficha, { azar = Math.random, alcanceDePersecucion = ALCANCE_DE_PERSECUCION } = {}) {
+  constructor(ficha, {
+    azar = Math.random,
+    alcanceDePersecucion = ALCANCE_DE_PERSECUCION,
+    ancho = null,
+  } = {}) {
     this.f = ficha;
     this.azar = azar;
+    /**
+     * MI ANCHURA, en unidades, que es `m_Width` y entra en `range` (el 82).
+     *
+     * Sale de la propia ficha, que la trae horneada (`ia.ancho`, 32 para la
+     * rata) — y por eso NO hay que pasarla desde `Manada`. Lo escribí primero
+     * al revés, cableándola desde el censo porque un volcado truncado a 1200
+     * caracteres me hizo creer que el extractor la tiraba; dos fuentes para el
+     * mismo número es como se consigue que una se arregle y la otra no.
+     *
+     * El parámetro queda para que una prueba pueda fijarla sin tocar la ficha.
+     * Y el `?? 0` es el caso del motor: un bicho sin `width` tiene `m_Width` a
+     * cero y no gana alcance por el cuerpo, así que un cero aquí es legítimo y
+     * nunca va a dar un error — lo que defiende esta regla no es este valor por
+     * omisión, es que la prueba del mordisco entre por un `Manada` de verdad.
+     */
+    this.ancho = Number(ancho ?? ficha?.ancho ?? 0) || 0;
     this.alcanceDePersecucion = alcanceDePersecucion;
     /** A quién persigue, o `null`. */
     this.objetivo = null;
@@ -231,7 +285,18 @@ export class Cazador {
     // 4. ¿LE PEGO? Se mide contra `ATTACK_HITRANGE` primero y contra
     //    `ATTACK_RANGE` después, que es el orden del script — y no son el
     //    mismo número en general.
-    const rango = dist(donde, o.donde);
+    //
+    // Y SE MIDE CON `range`, NO CON LA DISTANCIA (el 82). Ver `rangoDeAtaque`:
+    // el motor le resta la mitad de las dos anchuras. Sin eso una rata no
+    // llega a morder NUNCA, y no por su alcance sino por su cuerpo: su caja es
+    // de 32, la del jugador de 32, así que los centros no bajan de 32 en
+    // horizontal; con el jugador midiéndose por su CENTRO —36 unidades sobre
+    // sus pies, que es donde el motor pone su origen— la distancia 3D nunca
+    // baja de 48,2 y `ATTACK_RANGE` de la rata es 48. Cuarenta centésimas de
+    // unidad, y el mordisco no existe. Es el borde del 81 otra vez: nuestro
+    // número aterriza pegado al umbral del motor porque la geometría lo pone
+    // ahí, y entonces el caso del borde no es el raro, es el único.
+    const rango = rangoDeAtaque(donde, o.donde, this.ancho, o.ancho);
     if (rango < (this.f.alcanceDeImpacto ?? 0)) {
       // `NPC_MUST_SEE_TARGET`: con 0 puede pegar sin línea de visión, que es
       // lo que hace el goblin. Con 1, no.

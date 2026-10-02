@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<!--
+  BANCO DE PRUEBAS DE LA ESCENA DEL MENÚ (52 bis, actualizado en 58).
+  Comparte escena y pasada de render con el menú real. Permite congelar cámara
+  y tiempo, retirar capas y comparar píxeles sin cargar un mapa jugable.
+  No entra en vite build; se abre en /sondas/torre.html durante desarrollo.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The tower — menu scene preview</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100%; height: 100%; }
+  /* El bloque del menú, sólo para comprobar que el texto cae sobre la parte
+     oscura y que la torre no le pisa. No es el menú de verdad. */
+  #falso { position: absolute; left: 6%; bottom: 8%; color: #cfc6b6;
+    font-family: Georgia, serif; text-shadow: 0 2px 6px #000, 0 0 14px rgba(0,0,0,.8); }
+  #falso h1 { margin: 0; font: 700 38px Georgia, serif; letter-spacing: .14em;
+    color: #f3ece0; }
+  #falso p { margin: .4em 0 1.1em; font-style: italic; color: #b9ae99; }
+  #falso div { font-size: 21px; padding: .24em 0; }
+</style>
+</head>
+<body>
+<div id="falso">
+  <h1>MASTER SWORD</h1>
+  <p>Rebirth — in the browser</p>
+  <div>Visit a Kingdom</div>
+  <div>Establish a Kingdom</div>
+  <div>Options</div>
+  <div>Quit</div>
+</div>
+<script type="module">
+import * as THREE from "three";
+import { escenaDeLaTorre } from "../src/render/torre.js";
+import { crearPasadaMenu } from "../src/render/pasadamenu.js";
+import { MIRADOR_DE_LA_TORRE, CAMARA_TORRE, fovDeLaTorre } from "../src/play/torre.js";
+import { paseoDeMenu } from "../src/play/miradores.js";
+
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const { escena, paso } = escenaDeLaTorre();
+const pasada = crearPasadaMenu(renderer);
+const camara = new THREE.PerspectiveCamera(fovDeLaTorre(innerWidth / innerHeight), innerWidth / innerHeight, CAMARA_TORRE.cerca, CAMARA_TORRE.lejos);
+camara.rotation.order = "YXZ";
+// `U: 1`: esta escena está en metros, no en unidades de GoldSrc.
+let paseo = paseoDeMenu({ mirador: MIRADOR_DE_LA_TORRE, U: 1 });
+let fijo = false;
+let detenido = false;
+
+let raton = null;
+addEventListener("pointermove", (e) => {
+  raton = [(e.clientX / innerWidth) * 2 - 1, 1 - (e.clientY / innerHeight) * 2];
+});
+addEventListener("pointerleave", () => { raton = null; });
+addEventListener("resize", () => {
+  camara.aspect = innerWidth / innerHeight;
+  camara.fov = fovDeLaTorre(camara.aspect);
+  camara.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+let ultimo = performance.now();
+function fotograma(ahora) {
+  requestAnimationFrame(fotograma);
+  if (detenido) return;
+  const dt = Math.min((ahora - ultimo) / 1000, 0.25);
+  ultimo = ahora;
+  if (!fijo) paso(dt);
+  const a = paseo.avanzar(fijo ? 0 : dt, { raton: fijo ? null : raton });
+  if (a) {
+    camara.position.set(a.pos[0], a.pos[1], a.pos[2]);
+    camara.rotation.set(a.pitch, a.yaw, 0);
+  }
+  pasada.render(escena, camara);
+}
+requestAnimationFrame(fotograma);
+
+/** Para la sonda: saltar a un punto del recorrido y leer dónde quedó. */
+window.vista = {
+  lista: true,
+  pausar() { detenido = true; },
+  en(s) {
+    const t = (MIRADOR_DE_LA_TORRE.segundos / (2 * Math.PI))
+      * Math.acos(Math.max(-1, Math.min(1, 1 - 2 * s)));
+    paseo = paseoDeMenu({ mirador: MIRADOR_DE_LA_TORRE, U: 1, desde: t });
+    fijo = true;
+    const a = paseo.avanzar(0, { raton: null });
+    camara.position.set(a.pos[0], a.pos[1], a.pos[2]);
+    camara.rotation.set(a.pitch, a.yaw, 0);
+    pasada.render(escena, camara);
+    return a;
+  },
+  /** Adelanta las nubes sin esperar, para ver una banda cruzando la torre. */
+  nubes(segundos) { paso(segundos); pasada.render(escena, camara); },
+  // Estas referencias sólo existen en el banco de pruebas, no en el menú.
+  escena, camara, renderer, pasada,
+};
+</script>
+</body>
+</html>

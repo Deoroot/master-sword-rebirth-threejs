@@ -30,6 +30,7 @@ import {
   RED, MENSAJE, empaquetar, abrir, orden as normalizarOrden, interpolacion, BOTON,
 } from "./protocolo.js";
 import { vitalesDe, velocidadDelPaso } from "./andar.js";
+import { MAX_LETRAS } from "../play/chat.js";
 
 /**
  * Cuánto se puede equivocar la predicción antes de corregirla, en metros.
@@ -75,6 +76,8 @@ export class ClienteDeRed {
 
     this.yo = null;
     this.mapa = null;
+    /** Quien está esperando un menú del servidor, o `null`. El 62. */
+    this._menuPendiente = null;
     this.partida = null;
     this.ticrate = red.ticrate;
     this.personajes = [];
@@ -174,6 +177,43 @@ export class ClienteDeRed {
         return m;
       case MENSAJE.FALLO:
         this._avisar("fallo", m);
+        return m;
+      // LO QUE ALGUIEN HA DICHO. El 61.
+      //
+      // No se filtra nada aquí: si el mensaje ha llegado es que el servidor ya
+      // ha decidido que lo oyes. Volver a mirar la distancia en el cliente
+      // sería mirarla con una foto vieja y borrar frases que sí te tocaban.
+      case MENSAJE.TEXTO:
+        // EL 62: por aquí viajan también los recados de los guiones, que no
+        // son chat. Se distinguen por el canal, que en el cable es un byte y
+        // aquí un número: los negativos no existen en `saytext_e`.
+        //   -1  un `suceso` -> consola de sucesos, con su color
+        //   -2  un `infomsg` -> la ventana de arriba a la izquierda
+        if (m.tipo === -1) { this._avisar("suceso", m); return m; }
+        if (m.tipo === -2) { this._avisar("aviso", m); return m; }
+        this._avisar("texto", m);
+        return m;
+      case MENSAJE.OPCIONES: {
+        // La respuesta a la F. Se entrega al que esté esperando y se suelta:
+        // hay un menú abierto a la vez, que es `m_pCurrentMenu` del motor.
+        const pendiente = this._menuPendiente;
+        this._menuPendiente = null;
+        pendiente?.({ nombre: m.nombre ?? "", opciones: m.opciones ?? [] });
+        this._avisar("opciones", m);
+        return m;
+      }
+      case MENSAJE.TIENDA:
+        this._avisar("tienda", m);
+        return m;
+      // El 63: lo que ha cambiado del personaje. Se FUNDE, no se sustituye: el
+      // servidor manda los campos que ha tocado y el resto de la ficha —el
+      // nombre, las habilidades, las manos— es el mismo de siempre.
+      case MENSAJE.FICHA:
+        if (this.personaje) {
+          if (m.oro !== undefined) this.personaje.oro = m.oro;
+          if (m.objetos !== undefined) this.personaje.objetos = m.objetos;
+        }
+        this._avisar("ficha", m);
         return m;
       default:
         return null;
@@ -488,6 +528,50 @@ export class ClienteDeRed {
    */
   pegar({ id, dano, alcance = 0, cubo = null, tipo = "" }) {
     this._mandar(MENSAJE.PEGAR, { id, dano, alcance, cubo, tipo });
+  }
+
+  /**
+   * HABLAR: el canal y lo escrito, y nada más.
+   *
+   *     ServerCmd(UTIL_VarArgs("say_text %i %s", m_Type, ...));
+   *                                              vgui_startsaytext.h:55
+   *
+   * Ni el nombre ni la frase montada: las pone el servidor. Aquí se corta a
+   * `MAX_LETRAS` porque el cajetín también lo hace, y se manda igual aunque
+   * esté vacío — quien decide que una frase vacía no se dice es `Speak`, y
+   * ponerlo en dos sitios es cómo dejan de estar de acuerdo.
+   */
+  /**
+   * LA F: pedirle el menú a un NPC, y esperar. El 62.
+   *
+   * Devuelve una promesa porque en el mod esto **es** una ida y vuelta: el
+   * cliente no tiene el guion, lo tiene el servidor. Si el servidor no
+   * contesta en dos segundos se devuelve un menú vacío en vez de dejar la F
+   * colgada — un panel que no abre se ve; una promesa que no resuelve, no.
+   */
+  pedirMenu(id) {
+    this._menuPendiente?.({ nombre: "", opciones: [] });   // el anterior, si quedaba
+    return new Promise((ok) => {
+      const reloj = setTimeout(() => {
+        if (this._menuPendiente === resolver) this._menuPendiente = null;
+        ok({ nombre: "", opciones: [] });
+      }, 2000);
+      const resolver = (r) => { clearTimeout(reloj); ok(r); };
+      this._menuPendiente = resolver;
+      this._mandar(MENSAJE.PEDIRMENU, { id });
+    });
+  }
+
+  /** `menuselect N`. `indice` a `null` es cancelar. */
+  elegirMenu(id, indice) { this._mandar(MENSAJE.ELIGEMENU, { id, indice }); }
+
+  /** `trade buy|sell <id>`. Lo que cuesta y lo que queda lo sabe el servidor. */
+  trade(que, { quien, tienda, id, flags = 0, vendedor = "" } = {}) {
+    this._mandar(MENSAJE.TRADE, { que, quien, tienda, id, flags, vendedor });
+  }
+
+  decir(tipo, texto) {
+    this._mandar(MENSAJE.DECIR, { tipo, texto: String(texto ?? "").slice(0, MAX_LETRAS) });
   }
 
   // ── el personaje, que vive allí ──────────────────────────────────────────

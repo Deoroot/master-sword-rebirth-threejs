@@ -14,7 +14,7 @@ import {
   velocidadAndando, velocidadCorriendo, ajustarVelocidad, PENALIZACION_FLECHA,
   AGUANTE_CORRIENDO, regeneracionDeAguante, aguanteDeSalto,
   CAIDA, danoDeCaida, friccion, acelerar, acelerarEnAire, TOPE_EN_AIRE,
-  deseo, puedeCorrer, pasoDeVelocidad,
+  deseo, puedeCorrer, pasoDeVelocidad, avisoDeCarrera,
   nivelDeAgua, nadar, trepar, normalDeEscalera, SALTO_DESDE_ESCALERA,
 } from "../src/play/movimiento.js";
 
@@ -385,6 +385,64 @@ test("PM_Accelerate sólo rellena lo que falta", async (t) => {
     // marcha responda en vez de tener que frenar primero.
     const v = acelerar([160, 0, 0], [0, 0, -1], 160, 10, DT);
     assert.ok(v[2] < 0, `debería haber empezado a ir a −Z: ${JSON.stringify(v)}`);
+  });
+});
+
+// Las cinco frases de `DoSprint`, que el 63 echó de menos en una captura del
+// juego: el HUD de MSR va diciendo «You break into a jog.» y «You slow down and
+// begin walking casually.» todo el rato, y aquí la consola estaba muda.
+//
+// LO QUE SE COMPRUEBA NO ES QUE HAYA TEXTO: es que el MOTIVO es el correcto.
+// Un aviso que diga «te has cansado» cuando has chocado es peor que ninguno, y
+// el orden en que el mod los decide —aguante, frenazo, soltar— es justo lo que
+// decide cuál sale.
+test("lo que el juego dice al trotar y al dejar de trotar (63)", async (t) => {
+  const corriendo = { corriendoAntes: true, corriendoAhora: false, aguante: 10, adelante: 1 };
+
+  await t.test("arrancar y parar, las dos del trote", () => {
+    assert.equal(avisoDeCarrera({ corriendoAntes: false, corriendoAhora: true })?.texto,
+      "You break into a jog.");
+    assert.equal(avisoDeCarrera(corriendo)?.texto,
+      "You slow down and begin walking casually.");
+  });
+
+  await t.test("y quedarse quieto o seguir corriendo no dice nada", () => {
+    assert.equal(avisoDeCarrera({ corriendoAntes: false, corriendoAhora: false }), null);
+    assert.equal(avisoDeCarrera({ corriendoAntes: true, corriendoAhora: true }), null);
+  });
+
+  await t.test("los tres «no puedes», cada uno por su motivo", () => {
+    // Pedir carrera sin aguante: `Stamina <= 1`, clplayer.cpp:348.
+    assert.deepEqual(avisoDeCarrera({ corriendoAntes: false, corriendoAhora: false,
+      pulsaCorrer: true, adelante: 1, aguante: 1 }),
+      { tipo: "nopuedes", texto: "You are too exhausted to run." });
+    // Quedarse sin aguante EN MARCHA es otra frase, :357.
+    assert.equal(avisoDeCarrera({ ...corriendo, aguante: 0 })?.texto,
+      "You are too exhausted to continue running.");
+    // Y chocar es la tercera, :373 — el frenazo de 50 unidades.
+    assert.equal(avisoDeCarrera({ ...corriendo, rapidez: 100, rapidezAnterior: 200 })?.texto,
+      "You lose your running speed.");
+    assert.equal(avisoDeCarrera({ ...corriendo, agachado: true })?.texto,
+      "You lose your running speed.");
+  });
+
+  await t.test("el orden importa: sin aguante Y chocando gana el aguante", () => {
+    // Es el orden del mod (:352 antes que :366). Si se invirtiera, un jugador
+    // exhausto que además choca leería «You lose your running speed.» y
+    // seguiría sin saber por qué no puede volver a arrancar.
+    assert.equal(avisoDeCarrera({ ...corriendo, aguante: 0, rapidez: 100, rapidezAnterior: 200 })?.texto,
+      "You are too exhausted to continue running.");
+  });
+
+  await t.test("`ms_sprint_verbose` calla lo que le toca", () => {
+    // «0» calla todo; «1» deja los `UNABLE` y quita el trote — la rama nueva
+    // del mod, clplayer.cpp:234-266.
+    assert.equal(avisoDeCarrera({ corriendoAntes: false, corriendoAhora: true, verbose: "0" }), null);
+    assert.equal(avisoDeCarrera({ corriendoAntes: false, corriendoAhora: true, verbose: "1" }), null);
+    assert.equal(avisoDeCarrera({ ...corriendo, verbose: "1" }), null);
+    // Pero el «no puedes» sale con «1», que es la diferencia entre 0 y 1.
+    assert.equal(avisoDeCarrera({ ...corriendo, aguante: 0, verbose: "1" })?.texto,
+      "You are too exhausted to continue running.");
   });
 });
 

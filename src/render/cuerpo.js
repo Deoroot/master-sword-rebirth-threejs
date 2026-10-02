@@ -47,6 +47,9 @@
 import * as THREE from "three";
 import { ESPACIO } from "./bsp_escena.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+import { traerJson } from "../play/json.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /** El ángulo vertical que la figura subtiende en el original, en grados. */
 //
 // 2·atan((72 × 0,025 / 2) / 5) = 20,41°. Se calcula y no se escribe para que
@@ -61,10 +64,10 @@ export const ESPERA_TIC = [6, 60];
 /**
  * Carga los dos cuerpos y devuelve con qué montar ranuras.
  *
- * `manifiesto` es `build/gatecity/cuerpos.json`, que escribe
+ * `manifiesto` es `build/msr/cuerpos.json`, que escribe
  * `npm run cuerpo`.
  */
-export async function cargarCuerpos(manifiesto, { base = "build/gatecity" } = {}) {
+export async function cargarCuerpos(manifiesto, { base = BASE_POR_DEFECTO } = {}) {
   const cargador = new THREE.TextureLoader();
   const generos = new Map();
   // Las pistas se comparten: el manifiesto dice cuál las trae, y la otra ficha
@@ -74,7 +77,8 @@ export async function cargarCuerpos(manifiesto, { base = "build/gatecity" } = {}
   const fichas = new Map();
 
   for (const [genero, g] of Object.entries(manifiesto.generos)) {
-    const ficha = await fetch(`${base}/${g.carpeta}/bicho.json`).then((r) => r.json());
+    const ficha = await traerJson(`${base}/${g.carpeta}/bicho.json`);
+    if (!ficha) throw new Error(`falta ${base}/${g.carpeta}/bicho.json: ese mapa no tiene cuerpos extraídos`);
     const bin = await fetch(`${base}/${g.carpeta}/${ficha.bin.archivo}`).then((r) => r.arrayBuffer());
     fichas.set(genero, { ...g, ficha });
     binarios.set(g.clave, { bin, tramos: ficha.bin.tramos });

@@ -24,7 +24,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5209;
@@ -42,14 +43,15 @@ const ANCHO = 1200, ALTO = 800;
 const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
 await pag.evaluate(() => window.probe.vivo.congelarPaseo(true));
 await pag.evaluate(() => window.probe.ranuras.armarse());
@@ -96,9 +98,21 @@ control("una ranura con el arma que llevas PUESTA sobrevive",
 
 // ── 2. LA BARRA DE CARGA ───────────────────────────────────────────────────
 //
-// Con la espada otra vez, que es la que tiene ataque cargado.
+// CON EL BASTÓN, y no con la espada, que es lo que el 40 corrigió.
+//
+// El tope de carga es del ARMA —`V_min(Charge, HighestCharge)`,
+// giattack.cpp:1110— y encima se salta los ataques para los que no tienes
+// destreza (`giattack.cpp:617-623`). La espada oxidada registra un solo
+// cargado y lo pide a `reqskill 2`, así que con un personaje recién hecho
+// —swordsmanship proficiency 0— **no tiene carga ninguna**: ni barra, ni
+// niveles, ni sonido. Esta sonda la usaba y medía nuestro fallo de entonces,
+// que era un reloj sin tope subiendo por niveles que el arma no tiene.
+//
+// El bastón sí sirve: registra DOS cargados, a 100 % y 200 %, los dos con
+// `reqskill 0`. Así que llega de verdad al nivel 2 y las cinco medidas de
+// abajo —color, número, sonido por subida— siguen teniendo algo que medir.
 const carga = await pag.evaluate(async () => {
-  await window.probe.ranuras.empunar("swords_rsword");
+  await window.probe.ranuras.empunar("polearms_qs");
   window.probe.hud.avanzar(1);
   return window.probe.golpe.cargar(2.4);
 });
@@ -111,9 +125,15 @@ console.log(`    primera         x=${carga.primera?.x} y=${carga.primera?.y} rel
 console.log(`    sonidos         ${carga.sonidos}`);
 control("la barra SE VE mientras se carga", carga.fotogramasVisible > 0,
   `${carga.fotogramasVisible} fotogramas`);
-control("sale a 304 ∓ 30 de 640, con la errata de precedencia portada",
-  carga.primera && Math.abs(carga.primera.x - (304 - 30) * (ANCHO / 640)) < 2,
-  `x=${carga.primera?.x}, esperado ${Math.round((304 - 30) * (ANCHO / 640))}`);
+// El arma va en la DERECHA, y la barra de la derecha sale a 304 **+** 30:
+// `LEFT_HAND == 0` (genericitem.h:15-23) y `Bar = m_Hand < 2 ? m_Hand : 1`
+// (vgui_health.h:234). Hasta el 40 los dos nombres estaban cambiados y la
+// barra que se encendía era la del otro lado, que es lo que se veía jugando.
+control("sale a 304 + 30 de 640, del lado de su mano y con la errata portada",
+  carga.primera && Math.abs(carga.primera.x - (304 + 30) * (ANCHO / 640)) < 2,
+  `x=${carga.primera?.x}, esperado ${Math.round((304 + 30) * (ANCHO / 640))}`);
+control("y es la barra de la mano DERECHA, que es donde está el arma",
+  carga.primera?.mano === "derecha", `${carga.primera?.mano}`);
 control("el primer nivel se pinta NEGRO",
   carga.colores.some((c) => /rgba\(0, 0, 0/.test(c)), carga.colores[0] ?? "");
 control("y al segundo cambia a rojo",
@@ -126,6 +146,29 @@ control("el número de la etiqueta aparece en el SEGUNDO nivel, no en el primero
 // fotograma: la barra estuvo visible 145 y sonó 2 veces.
 control("suena una vez por subida de nivel, no en cada fotograma",
   carga.sonidos === 2, `${carga.sonidos} sonidos en ${carga.fotogramasVisible} fotogramas, niveles ${carga.niveles.length}`);
+
+// Y EL NEGATIVO, que es el fallo que el jugador vio: la espada oxidada pide
+// `reqskill 2` para su único cargado, y un personaje recién hecho tiene
+// swordsmanship proficiency 0. `GetHighestAttackCharge()` devuelve 0, así que
+// `ActivateButtonDown` ni arranca el reloj: cero barra, y es lo correcto.
+const espada = await pag.evaluate(async () => {
+  await window.probe.ranuras.empunar("swords_rsword");
+  window.probe.hud.avanzar(1);
+  return window.probe.golpe.cargar(2.4);
+});
+console.log(`    espada oxidada  destreza ${espada.destreza}, tope ${espada.tope}, carga ${espada.carga.toFixed(2)}, ${espada.fotogramasVisible} fotogramas`);
+control("sin la destreza que pide, la espada no carga NADA y no hay barra",
+  espada.fotogramasVisible === 0 && espada.carga === 0,
+  `carga ${espada.carga}, ${espada.fotogramasVisible} fotogramas con destreza ${espada.destreza}`);
+control("y el tope es del ARMA: 0 la espada sin destreza, 2,5 el bastón",
+  espada.tope === 0 && carga.tope === 2.5,
+  `espada ${espada.tope}, bastón ${carga.tope}`);
+
+// De vuelta al bastón para lo que queda, que es lo que sí carga.
+await pag.evaluate(async () => {
+  await window.probe.ranuras.empunar("polearms_qs");
+  window.probe.hud.avanzar(1);
+});
 
 // LA CAPTURA, y con el ratón de VERDAD apretado.
 //

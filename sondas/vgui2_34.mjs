@@ -30,7 +30,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5219;
@@ -50,13 +51,23 @@ try {
   const ANCHO = 1200, ALTO = 800;
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+  // SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  // CON VGUI2 FORZADO, y no por comodidad.
+  //
+  // Desde el 73 el aspecto de por omisión es el códice (`src/vgui2/codice.js`),
+  // que no tiene barra de título. Casi todo lo que mide esta sonda es la
+  // FIDELIDAD del port de `TrackerScheme.res` —Verdana, 13 px, `ControlBG` negro
+  // al 50 %, el alfa 0 de `TitleBG`, el bisel, los 535 px de la captura—, y eso
+  // son hechos citados que siguen siendo verdad aunque el menú se dibuje hoy
+  // como un libro. Sin esto la sonda se cae en `getComputedStyle(null)` y la
+  // medición se pierde para siempre. El códice tiene su propio bloque al final.
+  await entrarPorElMenu(pag, PORT, { extra: "aspecto=vgui" });
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
   // Se espera al juego entero: la gracia es ver la ventana ENCIMA del juego,
   // que es de lo que iba el encargo.
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
   await pag.waitForFunction(() => window.probe.vgui.abierto() === null, null, { timeout: 60000 });
   await pag.evaluate(() => window.probe.vivo.congelarPaseo(true));
@@ -288,6 +299,51 @@ try {
     final.hud === true, JSON.stringify(final));
   // (el HUD se mide con la ventana ya cerrada: lo que importa es que el juego
   //  no se haya quedado tocado por la ida y vuelta del puntero)
+
+  // ── 9. EL CÓDICE: que quite LAS TRES, y no sólo repinte ──────────────────
+  //
+  // El 73 empezó con tres estilos y el jugador vio que eran el mismo esqueleto:
+  // caja con barra de título, pestañas en fila y OK/Cancel/Apply. El códice
+  // existe para quitar las tres, así que lo que hay que medir son las tres, y
+  // no un color — un color lo pone el tema y no demuestra nada estructural.
+  //
+  // El CONTROL POSITIVO es todo el bloque 2 de más arriba: con `?aspecto=vgui`
+  // la barra de título existe, mide 535 px y es Verdana. Si estas afirmaciones
+  // salieran verdes por no estar mirando nada, aquéllas habrían salido rojas.
+  // Se recarga en la PRIMERA PANTALLA y no con `entrarPorElMenu`, que termina
+  // dentro del mapa: al volver de ahí el menú está cerrado y el clic se queda
+  // esperando a un botón que existe y no se puede pulsar. Y la primera pantalla
+  // es el menú desde el 36, así que esto sigue siendo el camino del jugador.
+  await pag.goto(`http://localhost:${PORT}/?aspecto=codice`, { waitUntil: "load" });
+  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
+  await pag.locator(".ms-menu-op").filter({ hasText: /^Options$/ }).click();
+  await pag.waitForSelector(".v2-ventana");
+  const libro = await pag.evaluate(() => {
+    const cintas = [...document.querySelectorAll(".v2-pestana")];
+    const caja = (n) => n.getBoundingClientRect();
+    return {
+      aspecto: window.probe.vgui2.estado().aspecto,
+      barras: document.querySelectorAll(".v2-titulo").length,
+      cintas: cintas.length,
+      // En columna: la segunda está DEBAJO de la primera y empieza a su misma
+      // izquierda. En fila sería al revés, y es lo que distingue las dos.
+      enColumna: cintas.length > 1
+        && caja(cintas[1]).top > caja(cintas[0]).bottom - 1
+        && Math.abs(caja(cintas[1]).left - caja(cintas[0]).left) < 1,
+      botones: [...document.querySelectorAll(".v2-boton")].map((b) => b.textContent),
+    };
+  });
+  control("el códice está puesto y lo dice la capa, no el color de un píxel",
+    libro.aspecto === "codice", `aspecto ${libro.aspecto}`);
+  control("1 · NO hay barra de título: un libro no se arrastra por su cabecera",
+    libro.barras === 0, `${libro.barras} barras de título`);
+  control("2 · las siete pestañas son CINTAS en columna, no una fila",
+    libro.cintas === 7 && libro.enColumna === true,
+    `${libro.cintas} cintas, en columna: ${libro.enColumna}`);
+  control("3 · NO hay OK/Cancel/Apply: lo que se toca ya está aplicado",
+    !libro.botones.some((t) => /^(OK|Cancel|Apply)$/.test(t ?? ""))
+      && libro.botones.some((t) => t === "Done"),
+    `botones: ${libro.botones.join(" · ") || "ninguno"}`);
 } catch (e) {
   errores.push(`la sonda se cayó: ${String(e).slice(0, 300)}`);
 }

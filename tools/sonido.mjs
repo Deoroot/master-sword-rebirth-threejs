@@ -42,8 +42,13 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, statS
 import { dirname } from "node:path";
 
 const MSR = "../MSC/assets/msr";
-const SALIDA = "build/gatecity";
-const DESTINO = `${SALIDA}/snd`;
+import { mapaDeArgv, salidaDe } from "./mapa.mjs";
+import { salidaComun, prepararComunes } from "./recursos.mjs";
+import { leerFrases } from "../src/play/frases.js";
+const MAPA = mapaDeArgv();
+const SALIDA = salidaDe(MAPA);
+const DESTINO = salidaComun("snd");
+prepararComunes();
 
 // ── LAS DOS BUILDS DE MASTER SWORD, Y POR QUÉ ESTO ESTABA MAL ──────────────
 //
@@ -102,7 +107,7 @@ if (PEDIDA && PEDIDA !== "none" && !RAIZ_HL) {
 /** Lo que ha salido de `valve/` y no del mod. Es de Valve, y va dicho aparte. */
 const deHalfLife = [];
 
-console.log("SONIDO de Gate City\n");
+console.log(`SONIDO de ${MAPA}\n`);
 
 // --- 1. la tabla de pasos, de `pm_shared.cpp` --------------------------------
 //
@@ -409,13 +414,28 @@ if (sinArchivo.length) {
 //   La barra de carga suena `ms_chargebar_sound` = `magic/chargebar_alt1.wav`
 //   a `ms_chargebar_volume` = 15 (clientlibrary.cpp:149-151), quince sobre una
 //   API que toma de 0 a 1.
+//   MORIR suena `SOUND_DEATH`, y la sorpresa es que **no sale de
+//   `DeathSound()`**: esa función tiene su `PlaySound` comentado y sólo calla
+//   tres canales (player.cpp:360-369). El grito lo tira el guion —`playsound 0
+//   10 SOUND_DEATH`, player_main.script:291— y depende del GÉNERO:
+//   `player/death.wav` o `player/FemaleDeath.wav` (externals.script:47 y 65).
+//
+//   SUBIR DE NIVEL suena `magic/converted_EnchP01.wav`, también del guion
+//   (`const SOUND_LEVELUP1`, player_main.script:43 y 502). El
+//   `//SOUND_LEVELUP2` comentado al lado no existe en ningún sitio.
+//
+// Los nombres van tal cual los escribe el guion, mayúsculas incluidas, y
+// `traer()` es quien se entiende con el disco: en la instalación están en
+// minúsculas.
 catalogo.jugador = {};
 for (const s of ["player/hitground1.wav", "player/hitground2.wav",
   "common/bodydrop1.wav", "common/bodydrop2.wav", "common/bodydrop3.wav",
-  "player/fallpain3.wav", "magic/chargebar_alt1.wav"]) {
+  "player/fallpain3.wav", "magic/chargebar_alt1.wav",
+  "player/death.wav", "player/femaledeath.wav", "magic/converted_enchp01.wav"]) {
   const r = traer(`sound/${s}`); if (r) catalogo.jugador[s] = r;
 }
-console.log(`  jugador         ${Object.keys(catalogo.jugador).length} de 7: caída, dolor y la barra de carga`);
+console.log(`  jugador         ${Object.keys(catalogo.jugador).length} de 10: caída, dolor, ` +
+  `la barra de carga, los dos gritos de muerte y el de subir de nivel`);
 
 // La música.
 catalogo.musica = {};
@@ -430,6 +450,63 @@ for (const a of new Set(ambiente.map((x) => x.sonido).filter(Boolean))) {
 const movesnd = manifiesto.interactivas?.puertas?.[0]?.sonido ?? "doors/doormove9.wav";
 catalogo.puerta = traer(`sound/${movesnd}`);
 
+// ── EL 82: EL PREGONERO, Y SUS FRASES ──────────────────────────────────────
+//
+// El `speaker` de Edana —**el único de los 93 mapas**— no nombra un `.wav`:
+// nombra el grupo `WILD` de `sound/sentences.txt`. Así que aquí se lee el
+// fichero de frases, se resuelve el grupo y se traen sus `.wav` **por el mismo
+// `traer()` que todo lo demás**, que es el que sabe buscar primero en el mod y
+// después en `valve/`.
+//
+// Eso importa más que de costumbre, porque es el aviso de las dos builds en
+// estado puro: `sentences.txt` **sí está en el mod** (26 frases, dos grupos:
+// `WILD` y `ROCKET`) y **ninguno de sus seis `.wav` está en `assets/msr`**.
+// Son de Half-Life: `ambience/quail1.wav`, `bee1`, `bee2`, `hawk1`,
+// `des_wind1-3` y `wren1` viven en `valve/sound/ambience/`. O sea que la
+// conclusión correcta NO es «el juego no los tiene»: es que los hereda, y que
+// quien no tenga Half-Life al lado verá el pueblo callado y lo verá DICHO en
+// la lista de los que faltan, con su nombre, en vez de en un silencio.
+catalogo.frases = {};
+catalogo.pregoneros = [];
+{
+  const ruta = `${MSR}/sound/sentences.txt`;
+  const grupos = existsSync(ruta) ? leerFrases(readFileSync(ruta, "latin1")) : new Map();
+  const pregoneros = manifiesto.interactivas?.pregoneros ?? [];
+  // Sólo se traen los grupos que un `speaker` de ESTE mapa nombra. Traerlos
+  // todos metería `ROCKET` en Edana, que no lo usa nadie en el juego.
+  const quiere = new Set(pregoneros.map((p) => p.grupo).filter(Boolean));
+  for (const g of quiere) {
+    const frases = grupos.get(g);
+    if (!frases) {
+      console.log(`  SPEAKER         grupo "${g}" no está en sentences.txt — el motor avisa:`);
+      console.log(`                  "Level Design Error! SPEAKER has bad sentence group name"`);
+      continue;
+    }
+    catalogo.frases[g] = frases.map((f) => ({
+      nombre: f.nombre,
+      palabras: f.palabras.map((p) => ({ ...p, snd: traer(`sound/${p.archivo}`) })),
+    }));
+  }
+  catalogo.pregoneros = pregoneros;
+  if (pregoneros.length) {
+    const grupo = catalogo.frases[pregoneros[0].grupo] ?? [];
+    const palabras = grupo.reduce((a, f) => a + f.palabras.length, 0);
+    const sinArchivo = grupo.reduce((a, f) => a + f.palabras.filter((p) => !p.snd).length, 0);
+    console.log(
+      `  pregonero       ${pregoneros.length} speaker · grupo ${pregoneros[0].grupo}: ` +
+      `${grupo.length} frases, ${palabras} palabras, ${sinArchivo} sin archivo`
+    );
+    if (sinArchivo === palabras && palabras > 0) {
+      console.log(`                  NINGUNA suena: los .wav son de Half-Life ('valve/sound/ambience').`);
+      console.log(`                  Para traerlos: HALFLIFE=<raíz de Half-Life> npm run sonido`);
+    }
+  } else {
+    // Gate City tiene cero, y se dice: un cero callado es el sitio donde vive
+    // una regla muerta (el 69).
+    console.log(`  pregonero       0 speaker en este mapa`);
+  }
+}
+
 // EL COMBATE, y la lista no se escribe aquí: se lee de los dos manifiestos.
 //
 // Las armas dicen con qué suenan (`SOUND_SWIPE`, `SOUND_HITWALL1`) y cada bicho
@@ -443,7 +520,7 @@ const pedidosDeCombate = new Set();
 const leerSiEsta = (ruta) => {
   try { return JSON.parse(readFileSync(ruta, "utf8")); } catch { return null; }
 };
-const armas = leerSiEsta(`${SALIDA}/armas.json`);
+const armas = leerSiEsta(salidaComun("armas.json"));
 for (const a of armas?.armas ?? []) {
   for (const s of [a.sonidos?.blandir, ...(a.sonidos?.contraPared ?? []), a.sonidos?.contraCarne]) {
     // `none` es un valor, no una ruta: el script dice «este objeto no suena».
@@ -608,7 +685,7 @@ console.log(`                  del juego el ${(100 * triDe(delJuego) / triTotal)
 // del mapa: una nota puesta a mano desaparece en el siguiente `npm run
 // gatecity` y nadie se entera. Idempotente: si ya está, no se repite.
 {
-  const MARCA = "## El SONIDO, que es el caso más delicado de los que hay aquí";
+  const MARCA = `## El SONIDO de ${MAPA}`;
   const nota = `
 ${MARCA}
 
@@ -668,7 +745,8 @@ mismo trato y la misma razón que \`sprites/glow01.spr\` y el cielo
 En el catálogo van marcados \`generado: true\`, y si algún día los de verdad
 estuvieran, mandan ellos y éstos no se escriben.
 `;
-  const ruta = `${SALIDA}/PROCEDENCIA.md`;
+  // Una sección por mapa: hornear otro no borra la procedencia del anterior.
+  const ruta = salidaComun("PROCEDENCIA.md");
   const antes = existsSync(ruta) ? readFileSync(ruta, "utf8") : "";
   // Idempotente, y además SE ACTUALIZA: la primera versión de esto sólo añadía
   // si no estaba la marca, y cuando el texto cambió —los pasos generados— el

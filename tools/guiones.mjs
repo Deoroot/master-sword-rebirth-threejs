@@ -33,22 +33,24 @@
 // mueve un byte a `public/`. Lo defiende `test/procedencia.test.mjs`.
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 
-import { partirGuion, COMANDOS, GETTERS, PROPIEDADES } from "../src/play/guion.js";
+import { partirGuion, COMANDOS, GETTERS, PROPIEDADES, PROPIEDADES_VACIAS } from "../src/play/guion.js";
+// El 64: cargar un script con sus `#include` es de `tools/scriptsmsr.mjs`,
+// para que un segundo extractor pueda usarlo sin ejecutar este censo entero.
+import { leerScript, cargarGuion } from "./scriptsmsr.mjs";
 
-const RAIZ = process.argv[2] ?? "../MSC/MSCScripts/scripts";
-const SALIDA = resolve("build/gatecity/guiones.json");
+import { mapaDeArgv, posicionalesDe, salidaDe, enSalida } from "./mapa.mjs";
+const MAPA = mapaDeArgv();
+const RAIZ = posicionalesDe()[0] ?? "../MSC/MSCScripts/scripts";
+const SALIDA = enSalida(MAPA, "guiones.json");
 
 if (!existsSync(join(RAIZ, "monsters"))) {
   console.error(`No encuentro ${RAIZ}/monsters. Pásame la carpeta scripts/ de MSR como argumento.`);
   process.exit(1);
 }
 
-const leer = (ruta) => {
-  const f = join(RAIZ, `${ruta}.script`);
-  return existsSync(f) ? readFileSync(f, "latin1") : null;
-};
+const leer = (ruta) => leerScript(ruta, RAIZ);
 
 /**
  * Carga un script con sus `#include` **delante**, que es el orden del motor:
@@ -58,25 +60,21 @@ const leer = (ruta) => {
  * `RunScriptEventByName` los ejecuta **todos**, así que el «Hail / Ask about
  * Jobs / Ask about Rumors» de `base_chat` sale ANTES de lo del propio NPC.
  */
-export function cargarGuion(ruta, vistos = new Set()) {
-  if (vistos.has(ruta)) return { eventos: [], preload: [], faltan: [] };
-  vistos.add(ruta);
-  const texto = leer(ruta);
-  if (texto === null) return { eventos: [], preload: [], faltan: [ruta] };
+export { cargarGuion };
 
-  const propio = partirGuion(texto);
-  const eventos = [];
-  const preload = [];
-  const faltan = [];
-  for (const inc of propio.includes) {
-    const sub = cargarGuion(inc, vistos);
-    eventos.push(...sub.eventos);
-    preload.push(...sub.preload);
-    faltan.push(...sub.faltan);
-  }
-  eventos.push(...propio.eventos);
-  preload.push(...propio.preload);
-  return { eventos, preload, faltan };
+/**
+ * ¿Este script tiene `game_menu_getoptions`, suyo o heredado?
+ *
+ * Se pregunta sobre los eventos YA cargados y no sobre el texto, que es la
+ * diferencia entera: `cargarGuion` mete delante los de cada `#include`, en el
+ * orden del motor, y el menú de casi todos los NPC viene de ahí.
+ *
+ * El `ambito` no se mira: un `[override] game_menu_getoptions` sigue siendo un
+ * `game_menu_getoptions` —de hecho es la forma de un NPC que cambia el menú de
+ * su plantilla— y el motor los ejecuta los dos (`RunScriptEventByName`).
+ */
+export function tieneMenu(ruta) {
+  return cargarGuion(ruta).eventos.some((e) => e?.nombre === "game_menu_getoptions");
 }
 
 // ── EL CENSO ────────────────────────────────────────────────────────────────
@@ -146,7 +144,11 @@ function fuera(n) {
   return {
     faltaCmd: [...n.comandos].filter((c) => !COMANDOS.has(c)),
     faltaGet: [...n.getters].filter((c) => !GETTERS.has(c)),
-    faltaProp: [...n.props].filter((p) => !PROPIEDADES.has(p)),
+    // `PROPIEDADES_VACIAS` NO cuenta como hueco: son las que el motor mismo
+    // contesta con «0», así que contestarlo es portarlas. Ver la cabecera de
+    // `src/play/guion.js` — sin esta resta, el censo llama hueco a algo que
+    // está bien y el vendedor de Gate City nunca cerraría.
+    faltaProp: [...n.props].filter((p) => !PROPIEDADES.has(p) && !PROPIEDADES_VACIAS.has(p)),
   };
 }
 const entero = (f) => !f.faltaCmd.length && !f.faltaGet.length && !f.faltaProp.length;
@@ -168,11 +170,32 @@ console.log(`  ${GETTERS.size} getters y ${PROPIEDADES.size} propiedades de \`$g
 
 // ── 1. el censo sobre TODOS los scripts con menú ────────────────────────────
 
+// EL MENÚ SE BUSCA DESPUÉS DE LOS `#include`, y hasta el 60 no (60).
+//
+// Esto leía el texto CRUDO del script y buscaba en él el bloque
+// `{ game_menu_getoptions`. Y el menú de un NPC casi nunca está ahí: está en
+// la plantilla que incluye. El sanador de Edana es doce líneas de `setvar` y
+// cuatro `#include`; su «Buy / Sell» sale entero de `monsters/base_npc_vendor`.
+//
+// Así que el censo se hacía sobre una cosa y la carga sobre otra —`cargarGuion`
+// **sí** resuelve los `#include` y lleva haciéndolo desde el 33—, y los NPC que
+// heredan su menú no existían: ni en el censo ni en el `guiones.json`.
+//
+//     139 scripts con `game_menu_getoptions` en su propio texto
+//     262 con él una vez resueltos los `#include`
+//
+// POR QUÉ NO SE VIO EN VEINTISIETE EXPERIMENTOS: porque Gate City no pierde
+// ninguno. Sus 25 scripts colocados declaran el menú en su propio archivo, los
+// 25. Edana pierde 7 de 13 —el sanador, el herrero, el alcalde, el sacerdote,
+// la tabernera, el arquero y el mercader—, o sea casi todas sus tiendas.
+//
+// Es el apartado 4 de CLAUDE.md en la forma que enseñó el 50: con un solo caso
+// el valor correcto y el valor de reposo son el mismo, y el control no puede
+// fallar por construcción. La defensa es **un segundo mapa**, no mirar mejor.
 const rutas = todos();
 const conMenu = [];
 for (const r of rutas) {
-  const t = leer(r);
-  if (t && /^\{\s*(\[[^\]]*\]\s*)?game_menu_getoptions\b/m.test(t)) conMenu.push(r);
+  if (tieneMenu(r)) conMenu.push(r);
 }
 
 const censo = [];
@@ -234,10 +257,10 @@ for (const c of caben) console.log(`    ${c.script}`);
 /** Los NPC que hay puestos en el mapa, si el mapa ya está horneado. */
 let delMapa = [];
 try {
-  const b = JSON.parse(readFileSync(resolve("build/gatecity/bichos.json"), "utf8"));
+  const b = JSON.parse(readFileSync(enSalida(MAPA, "bichos.json"), "utf8"));
   delMapa = [...new Set((b.colocados ?? []).map((c) => c.script).filter(Boolean))];
 } catch {
-  console.log(`\n  (no hay build/gatecity/bichos.json: se guardan los ${conMenu.length} con menú)`);
+  console.log(`\n  (no hay ${enSalida(MAPA, "bichos.json")}: se guardan los ${conMenu.length} con menú)`);
   delMapa = conMenu;
 }
 
@@ -257,7 +280,7 @@ for (const r of delMapa) {
   };
 }
 
-mkdirSync(resolve("build/gatecity"), { recursive: true });
+mkdirSync(salidaDe(MAPA), { recursive: true });
 writeFileSync(SALIDA, JSON.stringify({
   procedencia: "derivado local de los .script de Master Sword Rebirth, leídos no copiados. No redistribuible.",
   raiz: RAIZ,
@@ -278,7 +301,7 @@ console.log(`  -> ${SALIDA}\n`);
 
 // ── 3. la procedencia, que en este proyecto va con lo extraído ─────────────
 
-const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+const PROC = enSalida(MAPA, "PROCEDENCIA.md");
 const MARCA = "## Los guiones de los NPC";
 if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
   appendFileSync(PROC, `

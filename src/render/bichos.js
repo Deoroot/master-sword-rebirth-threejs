@@ -46,7 +46,11 @@
 import * as THREE from "three";
 import { ESPACIO } from "./bsp_escena.js";
 import { Manada, ESPERA_ENTRE_GOLPES, ESCALON, CADAVER } from "../play/manada.js";
+import { Aparecedor, delCenso } from "../play/aparecer.js";
 
+import { MAPA_POR_DEFECTO, baseDe } from "../play/mapa.js";
+import { traerJson } from "../play/json.js";
+const BASE_POR_DEFECTO = baseDe(MAPA_POR_DEFECTO);
 // Se reexportan porque eran de aquí hasta el 28 y las miran las pruebas y las
 // sondas. La definición está en `src/play/manada.js`, con su cita del motor.
 export { ESPERA_ENTRE_GOLPES, ESCALON, CADAVER };
@@ -68,10 +72,10 @@ export { ESPERA_ENTRE_GOLPES, ESCALON, CADAVER };
  * dónde se pone, no cómo se lee.
  */
 export async function cargarModelo(carpeta, {
-  base = "build/gatecity", cargador = null, pistasDesde = null,
+  base = BASE_POR_DEFECTO, cargador = null, pistasDesde = null,
 } = {}) {
   const tex = cargador ?? new THREE.TextureLoader();
-  const ficha = await fetch(`${base}/${carpeta}/bicho.json`).then((r) => (r.ok ? r.json() : null));
+  const ficha = await traerJson(`${base}/${carpeta}/bicho.json`);
   if (!ficha) return null;
   // LAS PISTAS PUEDEN SER DE OTRO MODELO, y hay que hacerle caso.
   //
@@ -86,7 +90,7 @@ export async function cargarModelo(carpeta, {
   let fuente = null;
   if (ficha.pistasDe) {
     const dir = pistasDesde ?? `${carpeta.split("/").slice(0, -1).join("/")}/${ficha.pistasDe}`;
-    const otra = await fetch(`${base}/${dir}/bicho.json`).then((r) => (r.ok ? r.json() : null));
+    const otra = await traerJson(`${base}/${dir}/bicho.json`);
     if (!otra) throw new Error(`${carpeta}: sus pistas son de '${ficha.pistasDe}' y no está en ${dir}`);
     fuente = {
       bin: await fetch(`${base}/${dir}/${otra.bin.archivo}`).then((r) => r.arrayBuffer()),
@@ -97,14 +101,15 @@ export async function cargarModelo(carpeta, {
   return { ficha, geo, texturas, clips };
 }
 
-export async function cargarBichos(manifiesto, { base = "build/gatecity" } = {}) {
+export async function cargarBichos(manifiesto, { base = BASE_POR_DEFECTO } = {}) {
   if (!manifiesto?.colocados?.length) return null;
   const cargador = new THREE.TextureLoader();
 
   // --- 1. los modelos, una vez cada uno ------------------------------------
   const modelos = new Map();
   for (const m of manifiesto.modelos) {
-    const ficha = await fetch(`${base}/${m.carpeta}/bicho.json`).then((r) => r.json());
+    const ficha = await traerJson(`${base}/${m.carpeta}/bicho.json`);
+    if (!ficha) throw new Error(`falta ${base}/${m.carpeta}/bicho.json: ese mapa no tiene bichos extraídos`);
     const { geo, texturas, clips } = await armarModelo(ficha, `${base}/${m.carpeta}`, cargador);
     modelos.set(m.clave, { ficha, geo, texturas, clips });
   }
@@ -229,6 +234,8 @@ function montarBichos(manifiesto, modelos) {
   const grupo = new THREE.Group();
   grupo.name = "bichos";
   const U = manifiesto.unidadesPorMetro ?? 39.37;
+  // Las 16 áreas del mapa. Ver `aparecer(dt)` más abajo: sólo cuenta sin servidor.
+  const aparecedor = new Aparecedor(delCenso(manifiesto));
 
   // La simulación primero: es la dueña del estado, y el dibujo se cuelga de
   // ella. Al contrario —crear nodos y luego preguntarles dónde están— es lo que
@@ -348,6 +355,34 @@ function montarBichos(manifiesto, modelos) {
     a.setLoop(unaVez ? THREE.LoopOnce : THREE.LoopRepeat, unaVez ? 1 : Infinity);
     a.clampWhenFinished = unaVez;
     a.reset().play();
+    // ── EL PARPADEO DEL 82: UN FOTOGRAMA EN LA POSE DE REPOSO ──────────────
+    //
+    // Lo reportó el usuario comparando con el original: «un extraño parpadeo
+    // entre animaciones, parece que se resetean a su posición por defecto antes
+    // de seguir a la siguiente». Y era literal.
+    //
+    // `stopAllAction()` deja el mezclador sin ninguna acción, y Three entonces
+    // **devuelve el esqueleto a su pose de enlace**. Medido en el navegador
+    // sobre el herrero de Edana: la firma de sus doce primeros huesos salta
+    // 0,466 al pararlas, cuando el movimiento normal entre dos fotogramas es
+    // 0,021 — veintidós veces.
+    //
+    // Y el orden lo pone en pantalla. `animar(dt)` hace:
+    //
+    //     manada.relojes(dt)
+    //     mezclador.update(dt)      <- evalúa la animación VIEJA
+    //     refrescar()               <- y aquí dentro se cambia de animación
+    //
+    // así que en el fotograma del cambio nadie vuelve a evaluar nada antes de
+    // dibujar: se dibuja la pose de enlace. Al siguiente ya va bien, y por eso
+    // dura menos de un parpadeo y es difícil de pillar.
+    //
+    // `update(0)` evalúa la nueva ANTES de volver, sin avanzar su reloj. Y es
+    // lo que hace el motor: `SetAnimation` pone `pev->frame = 0` y el fotograma
+    // 0 de la secuencia nueva es lo que se ve, no la pose del modelo sin
+    // animar. GoldSrc tampoco mezcla entre secuencias — el salto seco sí es
+    // fiel; el salto a la pose de enlace no lo era.
+    i.mezclador.update(0);
     return true;
   }
 
@@ -361,6 +396,19 @@ function montarBichos(manifiesto, modelos) {
   function refrescar() {
     for (const i of manada.instancias) {
       if (!i.nodo) continue;
+      // FUERA DEL MUNDO: 38 de los 69 bichos de Gate City son la ficha de un área
+      // y no están al arrancar (`EF_NODRAW` y `SUB_Remove`,
+      // msmonsterserver.cpp:228-232 y :129). El motor no los dibuja porque no
+      // existen; aquí existen —el protocolo los manda por índice— así que se
+      // esconden. Ver src/play/aparecer.js.
+      if (i.dormido) { i.nodo.visible = false; continue; }
+      if (!i.nodo.visible && !i.muerto) {
+        // Y al volver hay que DESHACER el desvanecido del cadáver anterior, no
+        // sólo encender el nodo: sin esto el bicho vuelve invisible con la vida
+        // llena, y desde fuera se ve exactamente igual que no haber vuelto.
+        i.nodo.visible = true;
+        for (const m of i.materiales) { m.transparent = false; m.opacity = 1; }
+      }
       i.nodo.position.set(i.donde[0], i.donde[1], i.donde[2]);
       i.nodo.rotation.y = i.yaw;
       aplicarAnimacion(i);
@@ -398,6 +446,54 @@ function montarBichos(manifiesto, modelos) {
       for (const i of manada.instancias) i.mezclador?.update(dt);
       refrescar();
     },
+    /**
+     * LAS ÁREAS DE APARICIÓN, para la partida SIN servidor.
+     *
+     * Con servidor esto no se llama: allí quien saca los bichos es la `Fauna` y
+     * aquí sólo se pinta lo que llega por el cable (`d: 1` en la foto). Jugando
+     * en local hace falta o el pueblo sale con los 38 monstruos de pie al entrar,
+     * que es lo que hacía hasta el 39.
+     *
+     * Devuelve los ids que han cambiado de estado, porque los cilindros los lleva
+     * `main.js` y tiene que cuadrarlos.
+     */
+    aparecer(dt, { disparar = null } = {}) {
+      const cambian = [];
+      for (const s of aparecedor.tic(dt)) {
+        if (s.que !== "aparece") {
+          // `FireTargets` (el 68): a las áreas **y** al mapa. Hasta el 68 esto
+          // sólo llamaba a `aparecedor.disparar`, y bastaba en Gate City porque
+          // el único `fireallperish` del mapa apunta a otra área; el corral de
+          // Edana apunta a un `mstrig_multi` y a dos `trigger_relay`, que son del
+          // `.bsp`, así que la cadena de las tres oleadas moría en la primera.
+          // Ver el mismo arreglo en `src/red/fauna.js`, `_fireTargets`.
+          if (s.dispara) { aparecedor.disparar(s.dispara); disparar?.(s.dispara); }
+          continue;
+        }
+        const i = manada.de(s.id);
+        if (!i) continue;
+        manada.revivir(i);
+        i.dormido = false;
+        i.avisadoAlArea = false;
+        cambian.push(s.id);
+      }
+      // Las muertes, por estado y no por sucesos: ver el comentario en fauna.js,
+      // donde leerlas de `sucesos` costó un monstruo que volvía atravesable.
+      for (const i of manada.instancias) {
+        if (!i.muerto || i.avisadoAlArea) continue;
+        i.avisadoAlArea = true;
+        aparecedor.muerto(i.id);
+        // El `killtarget` DEL MONSTRUO (el 68): no mata, dispara
+        // (msmonsterserver.cpp:2568-2569). Va aquí, en el camino de la muerte, y
+        // por eso se dispara en cada muerte y no sólo al agotar las vidas — que es
+        // lo que hace el `perishtarget`, y son cosas distintas. En Edana es el
+        // jefe jabalí avisando al viejo del huerto de que ya está hecho.
+        if (i.ficha?.alMorir) disparar?.(i.ficha.alMorir);
+      }
+      for (const i of manada.instancias) if (i.dormido && !cambian.includes(i.id)) cambian.push(i.id);
+      return cambian;
+    },
+    aparecedor,
     /** Colocar los bichos donde diga el servidor. */
     aplicar(lista) { manada.aplicar(lista); },
     herir(i, dano, opciones) { return manada.herir(i, dano, opciones); },

@@ -13,7 +13,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5197;
@@ -30,15 +31,16 @@ const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 const foto = async (n) => { await pag.waitForTimeout(300); await pag.screenshot({ path: `build/gatecity/vistas/mapa-${n}.png` }); };
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 // Un personaje, que hace falta para que la sesión mande y para que el daño cobre.
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda"));
 await pag.waitForTimeout(400);
@@ -466,7 +468,23 @@ const sol = await pag.evaluate(() => window.probe.mundo.solidos());
 console.log(`  chocan ${sol.adornos} adornos de ${sol.adornosTotal} (${sol.atravesables} se atraviesan) y ` +
   `${sol.bichos} bichos de ${sol.bichosTotal}`);
 control("los adornos sólidos tienen colisión", sol.adornos > 50, `${sol.adornos}`);
-control("y los bichos también", sol.bichos > 50, `${sol.bichos} de ${sol.bichosTotal}`);
+// LA CUENTA SE CALCULA. Esto era `sol.bichos > 50` y llevaba en rojo diciendo
+// «31 de 69» sin que nadie supiera si era un fallo o lo correcto. Es lo
+// correcto: `solidosDeBichos` **se salta a los que nacen dormidos**
+// (`src/play/solidos.js:111`), porque al aparecedor le toca sacarlos más
+// tarde, y Gate City empieza con 38 durmiendo. El umbral escrito no envejeció
+// porque alguien lo rompiera: envejeció porque era un número.
+//
+// Ahora es una igualdad, que además es un control más fuerte que el umbral:
+// sobra un cilindro o falta uno y esto se cae, en vez de tolerar cualquier
+// cosa por encima de cincuenta.
+control("y los bichos también, todos menos los que nacen dormidos",
+  sol.bichos === sol.bichosTotal - sol.bichosDormidos,
+  `${sol.bichos} sólidos = ${sol.bichosTotal} − ${sol.bichosDormidos} dormidos`);
+// EL POSITIVO: y no es que estén TODOS dormidos, que dejaría la igualdad de
+// arriba en `0 === 0` y verde sobre un mapa sin un solo cilindro.
+control("CONTROL: y hay bichos sólidos de verdad, no cero",
+  sol.bichos > 0, `${sol.bichos} con cilindro`);
 // Y NO todos, que es lo que dice el mod: sin este control habríamos «arreglado»
 // los helechos y el jugador se quedaría enganchado en uno.
 control("y los que el juego deja pasar NO la tienen", sol.atravesables > 0,

@@ -25,6 +25,11 @@
 // nombre local. Lo comprueban las trece sondas: unos cuatrocientos controles.
 
 import * as THREE from "three";
+// RAPIER se importa AQUÍ y no se pide por `S` (el 80): `montarSonda` no lo
+// recibe, y añadirle un getter sería editar la lista alfabética de `main.js`,
+// que es de todos. El módulo es el mismo —ESM da una sola instancia— y para
+// cuando la sonda existe, `initPhysics()` ya ha corrido.
+import RAPIER from "@dimforge/rapier3d-compat";
 import { AJUSTES, COMO_EL_MOTOR } from "../play/proyectil.js";
 import { FASE, elegirObjetivo } from "../play/golpe.js";
 import { GLOW } from "../render/bsp_escena.js";
@@ -36,6 +41,7 @@ import { atlasDe } from "../render/studio.js";
 import { defensaDelJugador, dentroDelCono2D } from "../play/escudo.js";
 import { listarPartidas } from "../red/navegador.js";
 import { ACCIONES, nombreDeTecla } from "../juego/teclas.js";
+import { CINTURA } from "../play/manada.js";
 import { choques, enPantallaCompleta, hayAtrapaTeclado, tecladoAtrapado }
   from "../juego/navegador.js";
 import { relacionDeRazas } from "../bsp/razas.js";
@@ -47,7 +53,62 @@ import { relacionDeRazas } from "../bsp/razas.js";
  * `mainGateCity`, a propósito: así una línea de aquí se puede comparar con la
  * de allí sin traducir nada.
  */
+/**
+ * UN PASO DE LOS BICHOS, para la sonda, con las APARICIONES dentro.
+ *
+ * Desde el 39, 38 de los 69 bichos de Gate City son la ficha de un area y no estan
+ * en el mundo al entrar: aparecen a los 3 s. `bichos.cazar` no los saca —lo hace
+ * `bichos.aparecer`, que en el juego llama el bucle de `main.js`— asi que una sonda
+ * que llame solo a `cazar` mide un pueblo sin monstruos y no se entera.
+ *
+ * Paso: `sonda:ia` se puso en 11 de 15 con cuatro «null» seguidos, y el bicho al
+ * que teletransportaba al jugador no existia todavia. **El paso de la sonda tiene
+ * que ser el paso del jugador**, y por eso hay UNA funcion y no siete llamadas.
+ */
+function pasoDeBichos(S, dt, arnes = null, { cazar = true } = {}) {
+  if (!S.bichos) return;
+  const a = arnes ?? S.arnesDePaseo;
+  for (const id of S.bichos.aparecer?.(dt) ?? []) {
+    const i = S.bichos.manada.de(id);
+    if (!i) continue;
+    // Ver el comentario en fauna.js: el invariante es **cilindro si y solo si esta
+    // en el mundo**, y escribirlo al reves deja 69 bichos y 31 cilindros.
+    const debeTenerlo = !i.dormido;
+    if (i.conCilindro === debeTenerlo) continue;
+    if (debeTenerlo) i.conCilindro = Boolean(S.bichosSolidos?.poner(i));
+    else { S.bichosSolidos?.quitar(i); i.conCilindro = false; }
+  }
+  if (cazar) S.bichos.cazar(dt, a);
+  else S.bichos.pasear(dt, a);
+}
+
 export function montarSonda(S) {
+  /**
+   * LA CÁMARA, con las dos ramas que tiene el bucle desde el 41.
+   *
+   * Muerto la vista pasa a otra entidad (`CinematicCamera`, player.cpp:1068) y
+   * el ojo ya no manda. Está aquí y no repetida en cada sitio para que no pueda
+   * quedarse una rama sin la otra — que es como la sonda acabaría midiendo una
+   * cámara que el jugador no ve.
+   */
+  const aplicarCamara = () => {
+    if (S.camaraMuerte) {
+      const c = S.camaraMuerte;
+      S.camera.position.set(c.pos[0], c.pos[1], c.pos[2]);
+      S.camera.rotation.set(c.pitch, c.yaw, 0);
+      return;
+    }
+    // EL 65: LA RAMA DEL OJO YA NO SE COPIA AQUÍ. Era una copia de tres líneas
+    // del bucle, y el aviso de arriba se cumplió en cuanto el guion del jugador
+    // empezó a mover la vista: el juego le sumaba el hundimiento del
+    // aterrizaje y **esta copia lo borraba al medirlo**. La sonda habría dicho
+    // «la cámara no se mueve» con la cámara moviéndose. Ahora se llama a la
+    // del juego; el respaldo es para las pruebas que montan la sonda sin él.
+    if (S.colocarCamaraDelOjo) { S.colocarCamaraDelOjo(); return; }
+    const eye = S.player.eye;
+    S.camera.position.set(eye[0], eye[1], eye[2]);
+    S.camera.rotation.set(S.player.pitch, S.player.yaw, 0);
+  };
   return {
     level: S.level, player: S.player, camera: S.camera, renderer: S.renderer, keys: S.keys, ready: true, kit: null,
     medidas: S.level.medidas,
@@ -360,6 +421,183 @@ export function montarSonda(S) {
         : null,
     },
     /**
+     * LO QUE SE VE AL MORIR Y AL SUBIR (experimento 41).
+     *
+     * Se mide lo que está en pantalla y no lo que la regla diría: el velo con
+     * su color y su alfa, el centrado con su texto, los carteles con el color
+     * de cada letra, dónde ha quedado la cámara y cuántas chispas hay vivas.
+     * Las reglas ya se comprueban en Node; esto es el camino del jugador.
+     */
+    muerte: {
+      /** El estado de la capa entera. */
+      pantalla: () => S.mensajes?.estado() ?? null,
+      /**
+       * Dónde está la cámara y hacia dónde mira, AHORA.
+       *
+       * `delCuerpo` es lo que hace falta para saber si de verdad se está
+       * mirando el sitio donde te caíste: el ángulo entre hacia dónde apunta la
+       * cámara y la dirección al cuerpo. Cero grados es «lo mira de frente». Sin
+       * esto una sonda sólo sabría que la cámara se ha movido.
+       */
+      camara: () => {
+        aplicarCamara();
+        const c = S.camera;
+        const cm = S.camaraMuerte;
+        const m = new THREE.Vector3(0, 0, -1).applyEuler(c.rotation);
+        const cuerpo = S.player.eye;
+        const d = new THREE.Vector3(cuerpo[0] - c.position.x, cuerpo[1] - c.position.y, cuerpo[2] - c.position.z);
+        const dist = d.length();
+        const grados = dist > 0 ? (Math.acos(Math.max(-1, Math.min(1, m.dot(d.normalize())))) * 180) / Math.PI : null;
+        return {
+          activa: Boolean(cm),
+          pos: [c.position.x, c.position.y, c.position.z],
+          yaw: c.rotation.y, pitch: c.rotation.x,
+          chocada: cm?.chocada ?? null,
+          // En unidades del motor, que es como están las 70 y las 25 del código.
+          distancia: dist * (S.level.unitsPerMetre ?? 39.37),
+          delCuerpo: grados,
+        };
+      },
+      /**
+       * LA CAJA DE CIELO Y LA CÁMARA, en la MISMA lectura.
+       *
+       * El cielo de GoldSrc no se traslada nunca respecto al que mira: sus
+       * vértices se construyen sumando el origen de vista.
+       *
+       *     v[j] = (k < 0) ? -b[-k-1] : b[k-1];
+       *     v[j] += RI.cullorigin[j];
+       *                                     gl_warp.c:239-243
+       *     VectorCopy( RI.vieworg, RI.cullorigin );
+       *                                     gl_rmain.c:359
+       *
+       * O sea que lo que hay que medir no es dónde está el cielo, que es un número
+       * grande y sin interés, sino que **la diferencia entre el cielo y la cámara no
+       * cambie**. Un cielo que se mueve respecto a la vista tiene paralaje, y el
+       * paralaje lo convierte en una caja pintada.
+       *
+       * Y van en UNA llamada a propósito. Leerlos con dos `evaluate` deja que el
+       * bucle avance entre medias, así que la resta saldría entre dos fotogramas
+       * distintos: el aviso del 75 —«un `evaluate` no mide décimas»—, y aquí sería
+       * mortal porque lo que se mide ES la resta. Saltando, el ojo recorre nueve
+       * centímetros por fotograma, o sea más que el fallo que se busca.
+       *
+       * Y AQUÍ NO SE LLAMA A `aplicarCamara()`, que es lo contrario de lo que hace
+       * `camara()` doce líneas arriba. Cuesta explicarlo y es el centro del
+       * control, así que va escrito:
+       *
+       * `aplicarCamara()` RECALCULA la cámara desde el estado del jugador en el
+       * instante de la lectura. El nodo del cielo, en cambio, lo dejó el bucle en
+       * el último fotograma dibujado. Entre los dos hay el tiempo que la física ha
+       * avanzado desde entonces, así que recalcular la cámara aquí no compara el
+       * cielo con la cámara: compara **la cámara de ahora con el cielo de antes**,
+       * y la resta sale distinta de cero con el juego perfecto. Medido: con el
+       * anclaje ya arreglado, llamarlo daba 11,6 unidades de deriva andando y
+       * 12,3 saltando — o sea los mismos números que el fallo que se buscaba, y
+       * por los dos lados.
+       *
+       * Es el 65 otra vez y en el archivo que lo documenta: «cuando una sonda
+       * RECALCULA algo en vez de leerlo, deja de ser un testigo». Allí la copia
+       * borraba el movimiento al medirlo; aquí la llamada lo INVENTA. Las dos
+       * veces, el remedio es leer lo que el bucle dejó puesto y no rehacerlo.
+       */
+      cielo: () => {
+        const n = S.escena?.getObjectByName?.("cielo") ?? null;
+        const c = S.camera;
+        return {
+          hay: Boolean(n),
+          visible: Boolean(n?.visible),
+          cielo: n ? [n.position.x, n.position.y, n.position.z] : null,
+          camara: [c.position.x, c.position.y, c.position.z],
+          // La resta, ya hecha, para que ninguna sonda la rehaga mal.
+          diferencia: n
+            ? [n.position.x - c.position.x, n.position.y - c.position.y, n.position.z - c.position.z]
+            : null,
+          // En unidades del motor, que es en las que están las citas.
+          unidadesPorMetro: S.level?.unitsPerMetre ?? 39.37,
+          pies: [...S.player.feet],
+          // `grounded`, que es como se llama en este puerto. Con `onGround` —que no
+          // existe— esto diría «en el aire» SIEMPRE y en silencio, porque `!undefined`
+          // es `true`: un campo mal escrito no da error, da un booleano constante.
+          enElAire: !S.player.grounded,
+        };
+      },
+      /** Mata y devuelve lo que ha quedado en pantalla en el mismo instante. */
+      matar(o) { return S.sesion?.matar({ tipo: "monstruo", ...o }); },
+      /** El cadáver: si está puesto, dónde y con qué animación. */
+      cadaver: () => S.cadaver?.estado() ?? null,
+      /**
+       * Un paso del reloj de los mensajes, sin depender del de dibujo.
+       *
+       * Dibuja también, y no es un adorno: con el bucle parado la cámara no se
+       * mueve sola, y sin esto una sonda que pausa mediría la cámara de antes
+       * de morir mientras la regla ya dice otra cosa.
+       */
+      paso(dt = 1 / 60) {
+        S.mensajes?.paso(dt);
+        if (S.cadaver?.puesto) S.cadaver.paso(dt);
+        aplicarCamara();
+        return S.mensajes?.estado() ?? null;
+      },
+    },
+    nivel: {
+      /** Dispara las cinco cosas de una subida. `donde` es «swordsmanship.power». */
+      subir(donde = "swordsmanship.power") { S.celebrarSubida?.(donde); return S.mensajes?.estado() ?? null; },
+      /** Apaga la luz dinámica del efecto, para poder mirar sólo las chispas. */
+      luz(on) { const l = S.chispas?.grupo?.children?.find((c) => c.isPointLight); if (l) l.visible = Boolean(on); },
+      /** Lo que hay en la lluvia: cuántas vivas, sus colores y cuánto han subido. */
+      chispas: () => S.chispas?.estado() ?? null,
+      /** Un paso de la lluvia, con el cuerpo donde esté. */
+      paso(dt = 1 / 60) {
+        if (S.chispas?.corriendo) { S.chispas.seguir(S.player.eye); S.chispas.paso(dt); }
+        S.mensajes?.paso(dt);
+        return { chispas: S.chispas?.estado() ?? null, pantalla: S.mensajes?.estado() ?? null };
+      },
+    },
+    /**
+     * LAS DOS VENTANAS DE ARRIBA (experimento 60).
+     *
+     * Lo que hay que poder medir aquí es **en qué esquina sale cada cosa**, que
+     * es lo que estaba mal: `SendHUDMsg` acababa en la consola de sucesos, en
+     * la esquina de abajo a la derecha. Por eso `esquinas()` devuelve las tres
+     * a la vez y leídas del DOM: comparar una contra otra es la medida, y una
+     * sola no dice nada.
+     */
+    aviso: {
+      /** `SendHUDMsg`. Devuelve el estado justo después de ponerla. */
+      poner(titulo = "Gate City", texto = "A city of dwarves.") {
+        S.mensajes?.aviso(titulo, texto);
+        return S.mensajes?.estado()?.ventanas ?? null;
+      },
+      /** `SendHelpMsg`, la de la derecha. */
+      ayuda(titulo = "Tip", texto = "Press E to talk.") {
+        S.mensajes?.ayuda(titulo, texto);
+        return S.mensajes?.estado()?.ventanas ?? null;
+      },
+      /** Las ventanas vivas, con su rectángulo real. */
+      ventanas: () => S.mensajes?.estado()?.ventanas ?? null,
+      /** Un tic sólo de esto, para ver el desvanecido sin esperar de verdad. */
+      paso(dt = 1 / 60) { S.mensajes?.paso(dt); return S.mensajes?.estado()?.ventanas ?? null; },
+      /**
+       * Las TRES esquinas, en píxeles de pantalla, leídas del DOM.
+       *
+       * La de la consola sale de su caja y no de la regla: si se leyera de la
+       * regla, esto seguiría diciendo que están separadas aunque el navegador
+       * las pintara encima la una de la otra.
+       */
+      esquinas() {
+        const caja = document.querySelector(".ms-consola");
+        const c = caja?.getBoundingClientRect?.();
+        const de = (v) => (v ? { x: v.x, y: v.y, ancho: v.ancho, alto: v.alto } : null);
+        const vs = S.mensajes?.estado()?.ventanas ?? [];
+        return {
+          pantalla: [window.innerWidth, window.innerHeight],
+          consola: c ? { x: Math.round(c.left), y: Math.round(c.top), ancho: Math.round(c.width), alto: Math.round(c.height) } : null,
+          aviso: de(vs.find((v) => v.clase === "aviso")),
+          ayuda: de(vs.find((v) => v.clase === "ayuda")),
+        };
+      },
+    },
+    /**
      * LA FISICA, para poder cronometrarla contra las cifras del motor.
      *
      * Que las 50 comprobaciones de `movimiento.js` pasen en Node no dice que
@@ -553,6 +791,39 @@ export function montarSonda(S) {
       estatus: () => ({ escondida: S.status.hidden, texto: S.status.textContent }),
     },
     /**
+     * EL CHAT — experimento 61. SÓLO LEE Y AVANZA EL RELOJ.
+     *
+     * No hay aquí ningún `abrir()` ni ningún `decir()`: la ventana se abre
+     * pulsando la Y de verdad y la frase se escribe letra a letra con el
+     * teclado del navegador, porque lo que hay que comprobar es justamente
+     * que la tecla llega, que el juego deja de oír las suyas mientras
+     * escribes, y que el Enter manda. Una puerta que abriera el cajetín
+     * desde aquí pondría todo en verde con las tres teclas desconectadas —
+     * que es el fallo del 35 con otro nombre.
+     */
+    chat: {
+      hay: () => Boolean(S.chatMs),
+      estado: () => S.chatMs?.estado() ?? null,
+      /** `n` segundos del reloj del chat, por el mismo sitio que el bucle. */
+      avanzar(segundos, paso = 1 / 60) {
+        const n = Math.max(1, Math.round(segundos / paso));
+        for (let k = 0; k < n; k++) S.chatMs?.paso(paso);
+        return S.chatMs?.estado() ?? null;
+      },
+      /** Los cvars de la consola del chat, para no esperar nueve segundos. */
+      cvars(cambios = {}) {
+        if (!S.chatMs) return null;
+        for (const [k, v] of Object.entries(cambios)) {
+          if (k === "tamano") S.chatMs.consola.tamano = v;
+          if (k === "historial") S.chatMs.consola.historial = v;
+          if (k === "decaimiento") S.chatMs.consola.decaimiento = v;
+        }
+        const c = S.chatMs.consola;
+        return { tamano: c.tamano, historial: c.historial, decaimiento: c.decaimiento };
+      },
+      desplazar: (abajo) => { S.chatMs?.desplazar(Boolean(abajo)); return S.chatMs?.estado() ?? null; },
+    },
+    /**
      * LOS PANELES DE VGUI. Esto SÓLO LEE, y es a propósito.
      *
      * No hay aquí ningún `abrir()`: el panel se abre pulsando la F de verdad con
@@ -706,6 +977,17 @@ export function montarSonda(S) {
       hay: () => Boolean(S.vgui),
       /** Qué panel está abierto, o null. Es `m_pCurrentMenu`. */
       abierto: () => S.vgui?.abierto?.nombre ?? null,
+      /**
+       * Cierra el panel que esté abierto y devuelve el que quede.
+       *
+       * El 63. Dos sondas llamaban a `probe.vgui.cerrar?.()`, que **no
+       * existía**: el `?.` se lo tragaba y el panel seguía delante. Cerrar con
+       * la Escape no vale de sustituto, porque con un panel del juego delante
+       * la Escape abre el menú —«Esc menu»— y el menú se come las teclas:
+       * el jugador de la sonda se quedaba clavado en el sitio y el control de
+       * al lado leía un cero que no medía nada.
+       */
+      cerrar: () => { S.vgui?.cerrar?.(); return S.vgui?.abierto?.nombre ?? null; },
       /** ¿El juego deja de moverse? `m_NoMouse` es la excepción. */
       atrapaElRaton: () => Boolean(S.vgui?.atrapaElRaton),
       /**
@@ -766,6 +1048,50 @@ export function montarSonda(S) {
       /** A quién ve delante el panel, con la misma regla con la que se pega. */
       delante: () => S.vgui?.buscar?.("interact")?.aQuien?.() ?? null,
       /**
+       * LA TIENDA (60): lo que enseña la lista y lo que hace un clic.
+       *
+       * Las filas se leen del DOM y no del modelo. El modelo ya lo comprueba
+       * `npm test`; lo que aquí hay que saber es si el jugador las VE, y
+       * sobre todo si al pulsar una pasa lo que tiene que pasar.
+       */
+      tienda: {
+        /** Las filas de la lista, con su id y si están apagadas. */
+        filas() {
+          const p = S.vgui?.abierto;
+          if (!p?.listaObjetos) return [];
+          return [...p.listaObjetos.children].map((f) => ({
+            id: f.dataset.id ?? null,
+            texto: f.textContent,
+            apagada: f.dataset.apagada === "si",
+            marcada: f.dataset.marcada === "si",
+          }));
+        },
+        /** Un clic en la fila `i` de la lista, con el ratón del navegador. */
+        pulsar(i) {
+          const p = S.vgui?.abierto;
+          const f = p?.listaObjetos?.children?.[i];
+          if (!f) return false;
+          f.click();
+          return true;
+        },
+        /**
+         * Señalar una fila SIN pulsarla, que en la lista de compra no es lo
+         * mismo: un clic compra. Es el `SlotInput` del panel.
+         */
+        senalar(i) { return Boolean(S.vgui?.abierto?.ranura?.(i)); },
+        /** El precio que enseña el panel de información del señalado. */
+        precio: () => S.vgui?.abierto?.precioTexto?.texto ?? null,
+        /** La etiqueta de «Selling N items for G gold». */
+        venta: () => S.vgui?.abierto?.etiquetaVenta?.texto ?? null,
+        /** Lo que el vendedor tiene, del modelo: para comparar con las filas. */
+        existencias() {
+          const p = S.vgui?.buscar?.("storebuy");
+          return (p?.lineas?.() ?? []).map((l) => ({
+            id: l.id, nombre: l.nombre, cantidad: l.cantidad, precio: l.precio,
+          }));
+        },
+      },
+      /**
        * Los NPC vivos con su script y su sitio, para poder ponerse delante de
        * uno. Va aquí y no en la sonda de fuera porque `S.bichos.instancias` es
        * estado del juego y la sonda de fuera no tiene que saber su forma.
@@ -783,6 +1109,73 @@ export function montarSonda(S) {
       /** Lo que se le ha dicho al jugador al elegir una opción. */
       ultimoSuceso: () => S.hudMs?.estado().consola?.at?.(-1) ?? null,
     },
+    /**
+     * TU PROPIO MENÚ: sentarse y los tres emotes, del experimento 85.
+     *
+     * **Sólo lee, y no hay `sentar()`.** Es la regla del 29 y del 33: la sonda
+     * tiene que pulsar la F y hacer clic en «Sit Down (Rest)» como lo hace una
+     * persona. Con un `probe.emociones.sentar()` los controles saldrían verdes
+     * con la costura que este experimento vino a cerrar todavía abierta, que es
+     * literalmente el fallo medido — `pedir` contestaba y `elegido` no tenía
+     * rama, así que el estado se puede poner a mano y el juego seguir roto.
+     *
+     * `vueltas` son las del `repeatdelay 5` que han dado algo, y se lee la LISTA
+     * y no un contador de intentos: el 82 se dejó medio experimento leyendo un
+     * estado que persiste en vez de un suceso que ocurre.
+     */
+    emociones: {
+      hay: () => Boolean(S.emociones),
+      estado: () => {
+        const e = S.emociones;
+        if (!e) return null;
+        return {
+          sentado: e.sentado,
+          emocion: e.emocion,
+          postura: e.postura(),
+          /** El hundimiento de la vista, en unidades del motor. Negativo. */
+          vistaZ: e.vistaZ(),
+          /** `regen.hp.amt` y `regen.mp.amt`, que son acumuladores. */
+          vidaAcumulada: e.vidaAcumulada,
+          manaAcumulada: e.manaAcumulada,
+          /** `STRUCK_TIME`: vueltas que quedan de castigo. */
+          golpe: e.golpe,
+          vueltas: e.vueltas.length,
+          /** Lo último que cada vuelta ha regalado, para poder sumarlo. */
+          dado: e.vueltas.slice(-8),
+        };
+      },
+      /** Lo que de verdad tiene el personaje ahora, para comparar antes/después. */
+      vitales: () => {
+        const p = S.sesion?.personaje;
+        if (!p) return null;
+        // El MÁXIMO va aquí al lado y no se supone: el aguante máximo se deriva
+        // de las habilidades y el del perfil —3— es sólo el respaldo de cuando no
+        // hay personaje. La primera pasada de la sonda del 85 comparó contra ese
+        // 3 y leyó «quedan 5,55 de 3», que es el 75: el umbral medía mi supuesto.
+        return {
+          vida: p.vida ?? 0, mana: p.mana ?? 0,
+          aguante: S.aguante ?? 0,
+          aguanteMax: S.vitalesDelPersonaje?.().aguanteMax ?? null,
+        };
+      },
+      /**
+       * QUÉ ANIMACIÓN TIENE PUESTA EL MUÑECO DEL HUD (`ms_lildude`).
+       *
+       * Es la pieza que convierte «el estado dice sentado» en «se ve sentado», y
+       * va aparte de `estado()` a propósito: son las dos mitades de la costura, y
+       * leerlas juntas invitaría a creer que una demuestra la otra.
+       */
+      muneco: () => S.muneco?.animacion ?? null,
+      /**
+       * Si el muñeco tiene una animación de UN PASE todavía sonando.
+       *
+       * Es la pieza que impide que el bucle de dibujo pise un asentimiento en el
+       * fotograma siguiente, y se lee aparte para que «se ve nod_no» y «nod_no
+       * no se ha acabado» sean dos medidas y no una.
+       */
+      deUnPase: () => Boolean(S.muneco?.deUnPase),
+    },
+
     /**
      * LAS MISIONES, del experimento 33.
      *
@@ -809,6 +1202,16 @@ export function montarSonda(S) {
       dar(id, n = 1) {
         const p = S.sesion?.personaje; if (!p) return null;
         (p.objetos ??= []).push({ id, n });
+        return this.bolsa();
+      },
+      /**
+       * El oro, puesto a un número. Para la tienda (60): el control negativo
+       * de «sin dinero no se compra» necesita poder dejar la bolsa a cero, y
+       * el positivo, poder llenarla. Se dice que lo pone la sonda.
+       */
+      oro(n) {
+        const p = S.sesion?.personaje; if (!p) return null;
+        p.oro = Number(n) || 0;
         return this.bolsa();
       },
       /** Quitarlo, para el control positivo de «perdí la cabeza por el camino». */
@@ -943,8 +1346,111 @@ export function montarSonda(S) {
       mover: (paso) => { S.menuMs?.mover(paso); return S.menuMs?.estado() ?? null; },
       elegir: () => S.menuMs?.elegir() ?? null,
       estado: () => S.menuMs?.estado() ?? null,
+      /**
+       * EL VOLUMEN DE LOS SONIDOS DEL MENÚ — el 85.
+       *
+       * Se lee del `volume` de los propios elementos `Audio` y NO de la variable
+       * que lo guarda, que es la diferencia entre «el ajuste se apuntó» y «el
+       * ajuste llegó». El fallo que esto vigila era exactamente ése: el
+       * deslizador guardaba su número y nadie lo repartía, porque quien reparte
+       * (`aplicarAjustes`) no existe hasta que carga un mapa — y el menú es el
+       * sitio donde todavía no hay mapa.
+       *
+       * `null` si el menú no está montado o si no se horneó ningún sonido; eso lo
+       * distingue de un 0, que es un volumen legítimo y es lo que se ve al bajar
+       * el deslizador del todo.
+       */
+      volumen: () => S.menuMs?.volumen ?? null,
     },
     mundo: {
+      /** La escala del mundo, para poder escribir un umbral en unidades. */
+      unidadesPorMetro: () => S.level?.unitsPerMetre ?? null,
+      /**
+       * HABLAR EN VOZ LOCAL SIN PASAR POR EL CAJETÍN — experimento 79.
+       *
+       * ── CUIDADO, Y HAY QUE DECIRLO ──────────────────────────────────────
+       *
+       * Esto **se salta el camino del jugador**, y la regla de la casa es que
+       * «si su camino no pasa por `menuselect`, no cuenta». Por eso la sonda
+       * del 79 mide lo que importa —que la opción del menú hace hablar y que
+       * el NPC contesta— **pulsando el botón con el ratón** y **escribiendo en
+       * el chat con el teclado**, y usa esta puerta sólo para lo que por ahí
+       * no se puede medir sin falsearlo: **el alcance**. Para comprobar que a
+       * 500 unidades no te oyen hay que hablar desde 500 unidades, y desde
+       * allí no hay menú que abrir porque no tienes a nadie delante.
+       *
+       * Devuelve lo que pasó —cuántos oyeron y quién contestó qué— que es lo
+       * que distingue «no me oyó» de «me oyó y no tenía nada que decir».
+       */
+      hablaElJugador: (texto) => S.interacciones?.hablaElJugador?.(texto) ?? null,
+
+      // ── EL 81: TRES LECTORES PARA LA MISIÓN DE LA SIDRA ─────────────────
+      //
+      // Tres NPC se pasan el estado de una misión entre ellos con
+      // `callexternal`, y **el jugador no lleva nada encima**: lo único que
+      // cambia está dentro de los guiones. Así que lo que hay que poder leer
+      // es eso, y no hay pantalla donde mire.
+      //
+      // Son LECTORES, no puertas: ninguno ejecuta nada del juego. Lo que la
+      // sonda del 81 hace, lo hace escribiendo en el chat con el teclado, que
+      // es por donde empieza una misión de Edana (`catchspeech`). Esto sólo
+      // sirve para VER si llegó, que es lo que una captura de pantalla no
+      // puede contar.
+
+      /** El registro de nombres: lo que resuelve `$get_by_name`. */
+      nombreDeEntidad(nombre) {
+        S.interacciones?.ponerNombresDeNpc?.();
+        return S.interacciones?.entidades?.porNombre?.(String(nombre)) ?? null;
+      },
+
+      /** Variables del guion de un NPC, por su id de instancia. */
+      variablesDeNpc(id, claves = []) {
+        const i = S.interacciones;
+        const inst = (i?.losNpc?.() ?? []).find((x) => x?.id === id);
+        const g = inst ? i.guionDe(inst) : null;
+        if (!g) return null;
+        const una = (k) => g.guion?.variables?.get?.(k) ?? g.guion?.vars?.get?.(k) ?? null;
+        return Object.fromEntries(claves.map((k) => [k, una(k)]));
+      },
+
+      /**
+       * `$cansee(player,<rango>)` tal como lo ve ESE NPC, ahora mismo.
+       *
+       * Hace falta porque el getter decide si un bloque entero se ejecuta —con
+       * el `if` VIEJO, un «no» abandona el bloque— y desde fuera eso se ve
+       * como «el NPC no contesta», que es lo mismo que se vería si el fallo
+       * estuviera en otro sitio. Preguntarle al getter separa las dos cosas.
+       */
+      ve(id, rango = "128") {
+        const i = S.interacciones;
+        const inst = (i?.losNpc?.() ?? []).find((x) => x?.id === id);
+        // Un `id` que no está en la manada NO es «no te ve»: es que la sonda
+        // está preguntando por otro. Se distingue, porque si no el instrumento
+        // devuelve el valor de reposo del getter y parece una medida.
+        if (!inst) return "sin ese npc";
+        const g = i.guionDe(inst);
+        if (!g) return "sin guion";
+        const personaje = S.sesion?.personaje ?? null;
+        if (!personaje) return "sin personaje";
+        /**
+         * **SE ATA AL JUGADOR, QUE ES LO QUE HACE `pedirOpciones`.**
+         *
+         * `$cansee` pregunta por el jugador que tiene delante, y ese atado lo
+         * pone el menú al abrirse (`npcguion.js:966`). Preguntarle al getter
+         * sin atar nada devolvía «0» —correctamente, porque para él no había
+         * nadie— y la sonda lo leía como «no te ve»: el apartado 4 metido en
+         * el instrumento. Se ata, se pregunta y **se deja como estaba**, que
+         * una sonda que recalcula en vez de leer deja de ser testigo (el 65).
+         */
+        const antes = g.jugador;
+        g.jugador = {
+          personaje,
+          ref: personaje.id ?? "player",
+          origen: (S.player?.feet ?? []).join(" ") || null,
+        };
+        try { return g.entorno?.ve?.("player", String(rango)) ?? null; }
+        finally { g.jugador = antes; }
+      },
       /** Deja los pies donde se le diga. Sin esto no se puede llegar al agua. */
       poner(x, y, z) {
         S.player.body.setTranslation({ x, y: y + S.player.perfil.height / 2, z }, true);
@@ -998,6 +1504,12 @@ export function montarSonda(S) {
         atravesables: S.solidos?.atravesables ?? 0,
         bichos: S.bichosSolidos?.n ?? 0,
         bichosTotal: S.bichosSolidos?.deCuantos ?? 0,
+        // LOS DORMIDOS, que es lo que explica por que `bichos` no es
+        // `bichosTotal`: `solidosDeBichos` se salta a los que nacen dormidos
+        // (src/play/solidos.js:111), porque el aparecedor los sacara mas
+        // tarde. Sin esta cuenta, quien mira la de arriba no puede saber si
+        // 31 de 69 esta bien o es un fallo, y acaba escribiendo un umbral.
+        bichosDormidos: (S.bichos?.instancias ?? []).filter((i) => i.dormido).length,
         // Donde esta cada caja solida, para poder ir a chocar con una.
         cajas: (S.solidos?.puestos ?? []).map((p) => ({ modelo: p.modelo, caja: p.caja })),
         // Y los que NO chocan, para el control de que no se les ha puesto.
@@ -1013,6 +1525,711 @@ export function montarSonda(S) {
           dano: S.volumenes.danoEn(pies),
           zonas: S.volumenes.zonasEn(pies).map((z) => z.clase),
         };
+      },
+      /**
+       * EL CABLEADO (49), para la sonda: `target` y `targetname`.
+       *
+       * Lo que una sonda necesita saber no es el estado interno sino QUE SE
+       * HA DISPARADO y QUE PASO AL LLEGAR, porque en Gate City la cadena
+       * entera acaba en un area que la ignora y eso, en pantalla, se ve
+       * exactamente igual que un bus que no funciona.
+       */
+      disparadores: () => {
+        const d = S.disparadores;
+        if (!d) return null;
+        return {
+          n: d.n,
+          reloj: Number((S.relojDisparadores ?? 0).toFixed(2)),
+          // Cuantas veces se ha disparado cada nombre, desde que empezo.
+          cuenta: Object.fromEntries(d.cuenta),
+          total: [...d.cuenta.values()].reduce((a, v) => a + v, 0),
+          // Los que quedan vivos: un `trigger_once` se borra al dispararse.
+          vivos: d.entidades.filter((e) => e.vivo).length,
+          tocables: d.entidades.filter((e) => e.piezas && e.vivo).length,
+          pendientes: d.pendientes.length,
+          // Lo que el bus pidio y el mundo no sabe hacer todavia, contado.
+          sinPortar: Object.fromEntries(S.disparosSinPortar ?? []),
+        };
+      },
+      /**
+       * EL 67: lo que los `ms_npcscript` han lanzado, con si el NPC contesto.
+       *
+       * Son las misiones de Edana. Se lee APARTE de `disparadores().cuenta`
+       * porque son dos preguntas: que la escena se disparo, y que el NPC de
+       * verdad tenia ese evento. Un `contesto: false` es un guion que no lo
+       * trae, y eso no es lo mismo que un cable roto.
+       */
+      escenasDeNpc: () => [...(S.escenasDeNpc ?? [])],
+      /**
+       * Dispara un nombre a mano, para no tener que andar hasta el volumen.
+       *
+       * ── CUIDADO, Y ES DEL 76 ─────────────────────────────────────────────
+       *
+       * Esto llama al BUS y no al juego: mete las salidas en la cola y **no las
+       * reparte**, porque `aplicarDisparos` vive en `main.js`. Sirve para
+       * mirar el modelo y no sirve para medir un efecto en pantalla: con esto,
+       * `disparar("apple5spawn")` sube el contador del bus y no mueve ni la
+       * manzana del arbol ni la del suelo. Para eso esta `disparaDelMapa`.
+       */
+      disparar: (nombre) => (S.disparadores ? S.disparadores.disparar(nombre, null) : null),
+      /**
+       * EL 76: dispara un nombre POR DONDE LO DISPARA EL JUEGO.
+       *
+       * Devuelve a cuantas entidades del bus llego, que no es lo mismo que el
+       * efecto: un `env_render` que apunta a un ADORNO llega a cero del bus y
+       * aun asi apaga el adorno. Las dos cosas se leen por separado a proposito.
+       */
+      disparaDelMapa: (nombre) => S.dispara?.(nombre) ?? null,
+      /**
+       * EL 76: los adornos CON NOMBRE y su estado de dibujo.
+       *
+       * Un `env_model` con `targetname` no va fundido en la malla de los 46:
+       * tiene su propia malla para que un `env_render` pueda esconderlo. Esto
+       * trae `visible`, el `alfa` y cuantas veces le han cambiado el aspecto.
+       */
+      adornos: () => S.censoDeAdornos?.() ?? [],
+      // ── EL 77: LOS NPC QUE ANDAN PORQUE EL MAPA SE LO MANDA ──────────────
+      /**
+       * UN NPC POR SU `targetname` DEL MAPA.
+       *
+       * Hace falta porque los dos accesos que ya habia —`probe.ia.estado` y
+       * `probe.ia.irA`— van **por indice de la lista de hostiles**, y Edrin es
+       * un vecino: no esta en esa lista. Un indice sobre otra lista no da un
+       * error, da a otro bicho, y entonces «no se ha movido» seria cierto y de
+       * alguien a quien nadie habia mandado a ningun sitio.
+       *
+       * Y el nombre que se pide es el del MAPA (`edrin`), no el que se lee en
+       * pantalla («Edrin, Captain of the Guard»): son dos campos distintos y el
+       * bus usa el primero. El 67 ya tuvo que anadir `objetivo` al censo por
+       * esto mismo.
+       */
+      npc(nombre) {
+        const i = S.bichos?.manada?.porObjetivo?.(nombre);
+        if (!i) return null;
+        const g = (r) => (((r * 180) / Math.PI) % 360 + 360) % 360;
+        return {
+          nombre: i.ficha.nombre, objetivo: i.ficha.objetivo ?? null,
+          // EL NODO DE THREE, que no es la cuenta. El 71 ya enseño que «el bus
+          // dice que se ha movido» y «el dibujo se ha movido» son dos cosas, y
+          // que compararlas es lo unico que distingue un numero de una imagen.
+          nodo: i.nodo ? [i.nodo.position.x, i.nodo.position.y, i.nodo.position.z] : null,
+          donde: [...i.donde],
+          yaw: g(i.yaw),
+          animacion: i.nombreActual ?? null,
+          // La PEDIDA, que no es la puesta: `moveanim run` con un `.mdl` sin
+          // `run` deja la anterior y sin esto no se podria ver cual se pidio.
+          animPedida: i.animPedida ?? null,
+          mandado: i.mandado
+            ? { origen: [...i.mandado.origen], proximidad: i.mandado.proximidad } : null,
+          ultimoDestino: i.ultimoDestino
+            ? { origen: [...i.ultimoDestino.origen], proximidad: i.ultimoDestino.proximidad } : null,
+          enEscena: Boolean(i.enEscena), sinIa: Boolean(i.sinIa),
+          llegadas: i.llegadas ?? 0, frenado: i.frenado ?? null,
+          pasea: Boolean(i.vagabundo?.pasea), muerto: Boolean(i.muerto), dormido: Boolean(i.dormido),
+        };
+      },
+      /** EL 77: que escenas de `ms_npcscript` corren y que ha pasado. */
+      escenas: () => ({
+        corriendo: S.directorDeEscenas?.censo?.() ?? [],
+        diario: (S.directorDeEscenas?.diario ?? []).slice(-40),
+      }),
+      /** EL 76: el estado de un adorno por su nombre; varios si se repite. */
+      adornosLlamados: (nombre) => (S.censoDeAdornos?.() ?? []).filter((a) => a.nombre === nombre),
+      /**
+       * EL 76: donde cae un punto del mundo EN LA PANTALLA, en pixeles.
+       *
+       * Hace falta para poder contar pixeles en la ventana donde esta la cosa en
+       * vez de en la pantalla entera: la taberna tiene antorchas y parroquianos
+       * que se mueven, asi que un recuento global mide el ruido y no el plato.
+       *
+       * `delante` es el signo de la Z en coordenadas de camara: un punto a la
+       * espalda tambien proyecta a un pixel de la pantalla, y creerselo es mirar
+       * donde no se esta mirando.
+       */
+      puntoEnPantalla(p) {
+        const c = S.camera;
+        const lienzo = S.renderer?.domElement;
+        if (!c || !lienzo || !p) return null;
+        // LA MATRIZ, AL DIA. `mirar` cambia `camera.rotation` y la matriz no se
+        // recalcula hasta que el render la toca: preguntar en el mismo
+        // `evaluate` devuelve la camara ANTERIOR, y eso sale como un punto a la
+        // espalda estando delante. Lo primero que midio esta sonda fue eso.
+        c.updateMatrixWorld(true);
+        const v = new THREE.Vector3(p[0], p[1], p[2]);
+        const enCamara = v.clone().applyMatrix4(c.matrixWorldInverse);
+        v.project(c);
+        // `clientWidth` y no `width`: el lienzo lleva el `devicePixelRatio`
+        // dentro, y una captura de Playwright esta en pixeles de CSS.
+        const w = lienzo.clientWidth, h = lienzo.clientHeight;
+        return {
+          x: Math.round((v.x * 0.5 + 0.5) * w),
+          y: Math.round((-v.y * 0.5 + 0.5) * h),
+          ancho: w, alto: h,
+          delante: enCamara.z < 0,
+          dentro: v.x >= -1 && v.x <= 1 && v.y >= -1 && v.y <= 1 && enCamara.z < 0,
+          distancia: Number(c.position.distanceTo(new THREE.Vector3(p[0], p[1], p[2])).toFixed(3)),
+        };
+      },
+      /**
+       * EL 76: pone el aspecto de un adorno A MANO. **Es un instrumento.**
+       *
+       * No es el camino del juego y no se mide con esto: sirve para DEJAR una
+       * cosa en el estado del que se quiere partir. Hizo falta porque los platos
+       * de sopa se encienden solos —`player_joined` llena la taberna— y entonces
+       * «disparo y aparece» se mide con el plato ya puesto, o sea no se mide
+       * nada. Con esto se apaga uno, y el encendido que se mide lo sigue
+       * haciendo el bus.
+       */
+      aspectoDeAdorno: (nombre, como) => S.adornos?.aplicarRender?.(nombre, como) ?? 0,
+      /**
+       * EL 76: QUE HAY ENTRE EL OJO Y UN PUNTO, en orden.
+       *
+       * Hace falta porque la primera medida de esta pieza plantaba a la sonda a
+       * 1,3 m del plato de sopa, leia «esta en el centro de la pantalla» y
+       * contaba cero pixeles de cambio: **la camara estaba dentro de una mesa**.
+       * El punto proyectado no dice si se ve; lo dice un rayo.
+       *
+       * Es el aviso del 69 —«comprueba que el que mide esta de pie y a la
+       * distancia que cree»— convertido en instrumento.
+       */
+      loQueSeVe(p, { cuantos = 3 } = {}) {
+        const c = S.camera;
+        if (!c || !p) return null;
+        c.updateMatrixWorld(true);
+        const dir = new THREE.Vector3(p[0], p[1], p[2]).sub(c.position);
+        const largo = dir.length();
+        if (!(largo > 0)) return null;
+        dir.normalize();
+        const rc = new THREE.Raycaster(c.position.clone(), dir, 0.05, largo + 0.5);
+        const objetivos = [S.mundo, S.adornos?.grupo, S.mallaDetalle].filter(Boolean);
+        return rc.intersectObjects(objetivos, true).slice(0, cuantos).map((h) => ({
+          que: h.object.name || h.object.type,
+          d: Number(h.distance.toFixed(3)),
+        }));
+      },
+      /**
+       * EL 76: plantarse donde SE VEA una cosa, probando sitios.
+       *
+       * Devuelve el primero desde el que un rayo llega al adorno sin que se
+       * interponga nada, o `null` si no hay ninguno — y `null` es un resultado:
+       * significa que esa cosa no se ve desde ningun sitio razonable, no que
+       * «no cambia nada».
+       */
+      plantarseAnte(nombre, { radios = [1.2, 1.8, 2.5, 3.2], rumbos = 12 } = {}) {
+        const a = (S.censoDeAdornos?.() ?? []).find((x) => x.nombre === nombre);
+        if (!a) return null;
+        // EL CENTRO DE SUS VERTICES y no `escena`, que es el `origin` de la
+        // entidad: el plato de sopa esta 0,8 m por encima del suyo, asi que
+        // apuntar a `escena` es apuntar a la mesa que tiene debajo.
+        const p = a.centro ?? a.escena;
+        for (const r of radios) {
+          for (let k = 0; k < rumbos; k++) {
+            const t = (k / rumbos) * Math.PI * 2;
+            const x = p[0] + Math.cos(t) * r, z = p[2] + Math.sin(t) * r;
+            S.player.body.setTranslation({ x, y: p[1] + 0.2 + S.player.perfil.height / 2, z }, true);
+            S.player.body.setNextKinematicTranslation({ x, y: p[1] + 0.2 + S.player.perfil.height / 2, z });
+            S.player.vel = [0, 0, 0];
+            S.player.caida = 0;
+            S.world.world.step();
+            const ojo = S.player.eye;
+            S.camera.position.set(ojo[0], ojo[1], ojo[2]);
+            const dx = p[0] - ojo[0], dy = p[1] - ojo[1], dz = p[2] - ojo[2];
+            S.player.yaw = Math.atan2(-dx, -dz);
+            S.player.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+            S.camera.rotation.set(S.player.pitch, S.player.yaw, 0);
+            const ve = this.loQueSeVe(p, { cuantos: 1 });
+            if (ve && ve[0] && ve[0].que === `adorno:${nombre}`) {
+              return { radio: r, rumbo: Math.round((t * 180) / Math.PI), pies: S.player.feet, primero: ve[0] };
+            }
+          }
+        }
+        return null;
+      },
+      /** EL 76: lo que la tarjeta dice que ha dibujado en el ultimo fotograma. */
+      /**
+       * EL 82: LOS HACES montados, y su lado tal como está AHORA.
+       *
+       * Se leen los vértices de la geometría y no la ficha del manifiesto,
+       * porque lo que hay que poder medir es que el lado **gira con la
+       * cámara**: es lo único que distingue un haz de un plano pegado, y la
+       * ficha diría lo mismo con el plano quieto.
+       *
+       * Lee, no recalcula. La lección del 65: una sonda que se construye ella
+       * el valor que iba a medir deja de ser un testigo.
+       */
+      haces: () => {
+        const g = S.escena?.getObjectByName?.("haces");
+        if (!g) return null;
+        return g.children.map((m) => {
+          const p = m.geometry.getAttribute("position");
+          const centro = [
+            (p.getX(0) + p.getX(3)) / 2, (p.getY(0) + p.getY(3)) / 2, (p.getZ(0) + p.getZ(3)) / 2,
+          ];
+          return {
+            nombre: m.name,
+            vertices: p.count,
+            conTextura: Boolean(m.material.map),
+            aditivo: m.material.blending === THREE.AdditiveBlending,
+            visible: m.visible,
+            // El vector que va de un lado al otro del extremo de inicio. Su
+            // LARGO es la anchura y su DIRECCIÓN es lo que gira.
+            lado: [p.getX(1) - p.getX(0), p.getY(1) - p.getY(0), p.getZ(1) - p.getZ(0)],
+            centro,
+            // El brillo por vértice: `BEAM_FSHADEIN` arranca en 0 en el inicio.
+            brilloInicio: m.geometry.getAttribute("color")?.getX(0) ?? null,
+            brilloFin: m.geometry.getAttribute("color")?.getX(3) ?? null,
+          };
+        });
+      },
+      /**
+       * EL 82: la SALA que el jugador tiene puesta, y quién se la puso.
+       *
+       * Son dos cosas y hacen falta las dos: `tipo` es lo que suena y `dueño`
+       * es cuál de los once `env_sound` ganó. Sin el segundo, «la sala es la
+       * 13» no distingue el reparto de un valor que se quedó pegado.
+       */
+      sala: () => ({
+        // LO QUE DICE LA REGLA, que es del reparto y corre siempre.
+        tipo: S.salaDelJugador?.tipo ?? null,
+        dueño: S.salaDelJugador?.dueño ?? null,
+        rango: S.salaDelJugador?.rango ?? null,
+        cambios: S.salaDelJugador?.cambios ?? null,
+        fuentes: S.fuentesDeSala?.length ?? 0,
+        // Y LO QUE EL AUDIO TIENE PUESTO, que es otra cosa y puede ir detrás:
+        // el audio nace dormido hasta el primer gesto del usuario. Separarlos
+        // es la lección del 60 —una regla dice *qué* y otra decide *dónde*, y
+        // la segunda no la ve ninguna prueba de la primera—; juntos, «la sala
+        // es null» no distinguía «el reparto no corre» de «nadie ha tocado una
+        // tecla todavía».
+        enElAudio: S.audio?.salaActual ?? null,
+        audioDespierto: Boolean(S.audio?.despierto),
+        // EL POR QUÉ NO, fuente por fuente. `unTic` ya lo devuelve; sacarlo es
+        // lo que convierte «no gana nadie» en un diagnóstico. Un cero sin
+        // motivo es el sitio donde vive una regla muerta (el 69).
+        vistos: (S.salaDelJugador?.vistos ?? []).map((v) => ({
+          clave: v.clave,
+          alcanza: v.alcanza,
+          distancia: v.distancia === null ? null : Math.round(v.distancia),
+          porQueNo: v.porQueNo,
+          radio: S.fuentesDeSala?.[v.clave]?.radio ?? null,
+          tipo: S.fuentesDeSala?.[v.clave]?.tipo ?? null,
+        })),
+      }),
+      dibujado: () => {
+        const i = S.renderer?.info;
+        if (!i) return null;
+        // `renderer.info.render` se reinicia en cada `render()`, y el bucle hace
+        // DOS —el mundo y, con `autoClear` en falso, el arma en primera persona
+        // (main.js:5092 y 5110)—, asi que leerlo a secas devuelve el del ARMA: 8
+        // llamadas y 2 904 triangulos, iguales con el pueblo delante o detras.
+        // Encender un adorno no movia ese numero y el control salia rojo
+        // midiendo la pasada equivocada. Con `autoReset` en falso el contador
+        // suma las dos, y se lee entre dos fotogramas para que sea UNO y no los
+        // que quepan en la espera.
+        return new Promise((listo) => {
+          i.autoReset = false;
+          requestAnimationFrame(() => {
+            i.reset();
+            requestAnimationFrame(() => {
+              const r = { llamadas: i.render.calls, triangulos: i.render.triangles };
+              i.autoReset = true;
+              listo(r);
+            });
+          });
+        });
+      },
+      /**
+       * EL 68: el estado de una FICHA del aparecedor, por su `targetname`.
+       *
+       * Se lee por NOMBRE y no por indice porque es asi como la llama el mapa, y
+       * porque el indice de un bicho no dice nada en un informe. Trae `despertada`
+       * y `apariciones` juntos a proposito: «no esta puesto» no distingue un jefe
+       * que no ha salido nunca de uno que salio y se murio.
+       */
+      fichaLlamada: (nombre) => S.fichaLlamada?.(nombre) ?? null,
+      /** EL 68: los nombres de ficha que un `MSQuery` ha despertado. */
+      despertadas: () => [...(S.despertadas ?? [])],
+
+      // ── EL 69: lo que se rompe, se pulsa y se suelta ─────────────────────
+      /**
+       * Los `func_breakable` del mapa, con su vida, su nombre y su centro.
+       *
+       * El centro va en METROS DE ESCENA porque es lo que come `mundo.poner`, y
+       * la caja del manifiesto ya esta en eso. La lista del bus la da en unidades
+       * de GoldSrc, que es otra cosa: mezclarlas pone al jugador a 39 veces la
+       * distancia y la sonda diria «no le llego» midiendo la conversion.
+       */
+      rompibles: () => {
+        const r = S.rompibles;
+        if (!r) return [];
+        return r.rompibles.map((x, k) => {
+          const e = S.estadoRompible?.(x.ficha.entidad) ?? {};
+          const c = x.ficha.caja;
+          return {
+            k, entidad: x.ficha.entidad,
+            nombre: e.nombre ?? null, objetivo: e.objetivo ?? null,
+            vidaInicial: e.vidaInicial ?? null, vida: e.vida ?? null,
+            roto: Boolean(e.roto), enPie: !x.roto, visible: x.nodo.visible,
+            choca: Boolean(x.colisionador),
+            material: e.material ?? null,
+            centro: [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, (c.min[2] + c.max[2]) / 2],
+            alto: c.max[1] - c.min[1],
+          };
+        });
+      },
+      /** Cuantos siguen en pie. Se calcula, no se escribe. */
+      rompiblesEnPie: () => S.rompibles?.enPie ?? null,
+      /** Lo que se ha roto, lo que se ha pulsado y lo que ha salido. */
+      rotos: () => [...(S.rotos ?? [])],
+      botonesPulsados: () => [...(S.botonesPulsados ?? [])],
+      objetosSueltos: () => [...(S.objetosSueltos ?? [])],
+      golpesARompibles: () => S.golpesARompibles ?? 0,
+      /** Todos los rompibles, botones y aparecedores de objetos del mapa. */
+      censoRompibles: () => S.censoRompibles?.() ?? [],
+      /**
+       * Pone al jugador delante del rompible `k`, a `d` metros, y le hace mirarlo.
+       *
+       * A la ALTURA del rompible y no a la suya: un almiar esta en el suelo y el
+       * cono del golpe se mide en tres dimensiones, asi que mirarlo desde los ojos
+       * sin bajar la cabeza deja el centro fuera del cono y el golpe no entra.
+       */
+      irAlRompible(k = 0, parteDelAlcance = 0.5) {
+        const x = S.rompibles?.rompibles?.[k];
+        if (!x) return null;
+        const c = x.ficha.caja;
+        const cen = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, (c.min[2] + c.max[2]) / 2];
+        const U = S.level.unitsPerMetre;
+        // EL ALCANCE SE LEE DEL ARMA, no se pone a ojo. Y hay que descontar la
+        // ALTURA: un almiar esta en el suelo y el ojo a metro y medio, asi que a un
+        // metro en horizontal la distancia de verdad es 1,56 m. Esto me costo una
+        // pasada: a un metro la espada no llegaba y parecia que el cono estaba mal.
+        const alcance = (S.brazo?.ataques?.[0]?.alcance ?? 40) / U;
+        const pies = c.min[1] + 0.2;
+        const alto = (S.player.perfil?.height ?? 1.6) * 0.9;
+        const dy = pies + alto - cen[1];
+        const quiero = alcance * parteDelAlcance;
+        const horizontal = Math.sqrt(Math.max(0.05, quiero * quiero - dy * dy));
+        window.probe.mundo.poner(cen[0] + horizontal, pies, cen[2]);
+        window.probe.mundo.mirar(cen[0], cen[1], cen[2]);
+        return {
+          centro: cen, desde: [...S.player.feet],
+          alcance, horizontal, dy,
+          distanciaAlOjo: Math.hypot(S.player.eye[0] - cen[0], S.player.eye[1] - cen[1],
+            S.player.eye[2] - cen[2]),
+        };
+      },
+      /**
+       * Lo mismo con el `func_button`, que no tiene malla propia.
+       *
+       * Se usa su CAJA y no su `escena`: un `func_button` es un brush y no trae
+       * `origin`, asi que su `escena` es el cero del mapa. Poner ahi al jugador
+       * seria medir un boton que nadie encuentra.
+       */
+      irAlBoton(d = 1.2) {
+        const e = (S.disparadores?.entidades ?? []).find((x) => x.clase === "func_button");
+        const c = e?.caja;
+        if (!c) return null;
+        const cen = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, (c.min[2] + c.max[2]) / 2];
+        window.probe.mundo.poner(cen[0] + d, c.min[1], cen[2]);
+        window.probe.mundo.mirar(cen[0], cen[1], cen[2]);
+        return { centro: cen, desde: [...S.player.feet] };
+      },
+      /**
+       * ANDAR CONTRA UN PUNTO con el `player.step` del bucle, y decir hasta donde
+       * se ha llegado. Es el control del CHOQUE, y hace falta que sea andando.
+       *
+       * «El almiar ha desaparecido» se veria igual apagando solo el dibujo. La
+       * unica pregunta que distingue las dos cosas es si se puede PASAR, y para
+       * responderla hay que andar: teletransportar al jugador dentro de la caja no
+       * mide nada, porque `poner` no resuelve colisiones.
+       */
+      andarHacia(punto, segundos = 1.5) {
+        window.probe.mundo.mirar(punto[0], punto[1], punto[2]);
+        // PRIMERO SE DEJA CAER HASTA QUE APOYA, y no es un detalle: el control en
+        // el aire de GoldSrc es casi cero (`airaccelerate`), asi que andar desde
+        // 20 cm por encima del suelo avanza 27 cm en dos segundos y medio. Lo medi
+        // creyendo que el almiar le paraba, y le paraba estar cayendose: andando
+        // hacia el lado LIBRE avanzaba lo mismo. El control que lo caz0 fue andar
+        // al reves, no mirar mejor.
+        for (let k = 0; k < 120 && !S.player.grounded; k++) S.player.step(S.DT, {});
+        const apoyado = S.player.grounded;
+        const antes = [...S.player.feet];
+        const v = S.vitalesDelPersonaje();
+        const max = velocidadAndando(v);
+        const pasos = Math.max(1, Math.round(segundos / S.DT));
+        for (let k = 0; k < pasos; k++) {
+          S.player.step(S.DT, { forward: 1, strafe: 0, jump: false, agachar: false,
+            maxima: max, agua: 0, escalera: null });
+        }
+        const luego = [...S.player.feet];
+        return {
+          antes, luego, apoyado, enSuelo: S.player.grounded,
+          avanzado: Math.hypot(luego[0] - antes[0], luego[2] - antes[2]),
+          // Lo que importa: cuanto queda para el punto al que iba.
+          queda: Math.hypot(punto[0] - luego[0], punto[2] - luego[2]),
+        };
+      },
+      /**
+       * ¿HAY ALGO SÓLIDO EN ESE PUNTO? Se lo pregunta a Rapier, no a nuestra
+       * contabilidad.
+       *
+       * Es el control del choque del 69, y llegué a el despues de dos medidas
+       * falsas. Andar contra el monton no servia: los cuatro almiares caben en dos
+       * metros, asi que romper uno lo tapa el de al lado, y romper los cuatro deja
+       * la PARED de la casa detras — 3,33 m antes y 3,33 m despues, con el trabajo
+       * bien hecho. Un rayo corto centrado en la caja del almiar solo puede tocar
+       * al almiar, asi que responde la pregunta y nada mas.
+       *
+       * Y le pregunta a la fisica y no a `choca`, que es nuestro apunte: si el
+       * colisionador se quitara de la lista y no del mundo, `choca` diria false y
+       * el jugador seguiria chocando.
+       */
+      solidoEn(punto, largo = 0.5) {
+        if (!S.trazaLibre) return null;
+        // `trazaLibre` es la MISMA traza que usa el golpe y habla en UNIDADES de
+        // GoldSrc, no en metros de escena. Se reaprovecha en vez de montar otro
+        // rayo al lado: dos trazas distintas serian dos mundos, que es el fallo del
+        // 63 con otra ropa.
+        //
+        // Y EL RAYO TIENE QUE ENTRAR DESDE FUERA. Lo escribi centrado en la caja y
+        // daba `false` con el almiar puesto: los colisionadores son TRIMESH, y un
+        // trimesh no tiene interior — un rayo que empieza y acaba dentro no cruza
+        // ni un triangulo. Asi que se tira de arriba abajo, cruzando la tapa.
+        const U = S.level.unitsPerMetre;
+        const u = (p) => [p[0] * U, p[1] * U, p[2] * U];
+        const a = u([punto[0], punto[1] + largo, punto[2]]);
+        const b = u([punto[0], punto[1] - largo, punto[2]]);
+        return !S.trazaLibre(a, b);
+      },
+      /**
+       * A QUE ALTURA esta lo primero solido bajo ese punto, en metros de escena.
+       *
+       * Es la medida del choque que no se puede confundir con otra cosa: encima de
+       * un almiar entero el rayo se para en su tapa, y roto se para en el suelo.
+       * Andar contra el no servia —los cuatro caben en dos metros y detras hay una
+       * pared— y un rayo horizontal corto tampoco, por lo del trimesh.
+       */
+      alturaSolidaBajo(punto, desde = 4) {
+        if (!S.trazaLibre) return null;
+        const U = S.level.unitsPerMetre;
+        const arriba = punto[1] + desde;
+        // Busqueda binaria sobre `trazaLibre`, que solo dice si o no. Veinte
+        // vueltas dan menos de un centimetro en cuatro metros.
+        let alto = arriba, bajo = punto[1] - desde;
+        const libreHasta = (y) => S.trazaLibre(
+          [punto[0] * U, arriba * U, punto[2] * U], [punto[0] * U, y * U, punto[2] * U]);
+        if (libreHasta(bajo)) return null;      // no hay nada debajo en ese tramo
+        for (let i = 0; i < 20; i++) {
+          const m = (alto + bajo) / 2;
+          if (libreHasta(m)) alto = m; else bajo = m;
+        }
+        return Math.round(((alto + bajo) / 2) * 1000) / 1000;
+      },
+      /** Golpea el boton como lo golpea la espada, por `danar` del bus. */
+      golpearBoton(dano = 1) {
+        const e = (S.disparadores?.entidades ?? []).find((x) => x.clase === "func_button");
+        if (!e) return null;
+        const hizo = S.disparadores.danar(e, dano, { tipo: "club", deJugador: true });
+        S.aplicarDisparos(S.disparadores.recoger());
+        return { hizo, pulsado: e.est.pulsado, vida: e.est.vida };
+      },
+      /**
+       * Golpea el rompible `k` como lo golpea la espada, y devuelve su estado.
+       *
+       * Entra por `danar` del bus, que es por donde entra `pegar`, y con
+       * `tipo: "club"` porque una espada es `DMG_CLUB`. NO es un atajo: es la
+       * misma llamada. Lo que este atajo se salta es el CONO, y por eso la sonda
+       * mide el cono aparte, con `atacar()` de verdad.
+       */
+      golpearRompible(k = 0, dano = 3) {
+        const x = S.rompibles?.rompibles?.[k];
+        if (!x) return null;
+        const e = S.disparadores?.entidades.find((y) => y.entidad === x.ficha.entidad);
+        if (!e) return null;
+        S.disparadores.danar(e, dano, { tipo: "club", deJugador: true });
+        S.aplicarDisparos(S.disparadores.recoger());
+        return window.probe.mundo.rompibles()[k];
+      },
+      // ── EL 70: las puertas que se corren ───────────────────────────────────
+      /** Donde esta cada deslizante AHORA, leido del nodo y no de nuestra cuenta. */
+      correderas: () => S.censoCorrederas?.() ?? [],
+      /** El estado que lleva el BUS de cada puerta, por indice del lump. */
+      estadoPuerta: (entidadDelBsp) => S.estadoPuerta?.(entidadDelBsp) ?? null,
+      censoDePuertas: () => S.censoDePuertas?.() ?? null,
+      /** Las rotatorias con su angulo, para ver que NO se abren al tocarlas. */
+      rotatorias: () => S.censoRotatorias?.() ?? [],
+      puertasMovidas: () => S.puertasMovidas ?? [],
+      puertasAbiertas: () => S.puertasAbiertas ?? [],
+      /**
+       * EL CENTRO de una deslizante por su nombre, en metros de escena.
+       *
+       * Sale de la CAJA del manifiesto y no de `escena`: una `func_door` es un
+       * brush sin `origin`, asi que su `escena` es el cero del mapa. Es el mismo
+       * tropiezo que el boton del 69 y se resuelve igual.
+       */
+      centroDeCorredera(nombre) {
+        const f = (S.level.manifiesto.interactivas?.correderas ?? []).find((p) => p.nombre === nombre);
+        if (!f) return null;
+        return [0, 1, 2].map((k) => (f.caja.min[k] + f.caja.max[k]) / 2);
+      },
+      /**
+       * Rompe el almiar que abre la cloaca —el de 8 de vida— por donde lo rompe
+       * la espada, y devuelve lo que ha pasado.
+       *
+       * No busca por indice: busca por VIDA, que es lo que lo distingue de los
+       * otros tres. Un indice escrito a mano se queda viejo con el primer
+       * rehorneado y no da error: da otro almiar.
+       */
+      romperElDeLaCloaca(dano = 20) {
+        const e = (S.disparadores?.entidades ?? [])
+          .find((x) => x.clase === "func_breakable" && Number(x.vida) === 8);
+        if (!e) return null;
+        S.disparadores.danar(e, dano, { tipo: "club", deJugador: true });
+        S.aplicarDisparos(S.disparadores.recoger());
+        return { roto: e.est.roto, entidad: e.entidad };
+      },
+      // ── EL 71: los objetos en el suelo ────────────────────────────────────
+      /** El censo del BUS: qué hay tirado, dónde y cuánto le queda. */
+      suelo: () => S.censoDelSuelo?.() ?? [],
+      /**
+       * Y el de los NODOS de Three, que es OTRA fuente a propósito.
+       *
+       * El 69 lo enseñó con los almiares: leer nuestra propia contabilidad y
+       * llamarlo medida es el verde vacío del apartado 4. Si el bus dice que la
+       * manzana está en el suelo y el nodo sigue en el árbol, esto lo enseña.
+       */
+      nodosDelSuelo: () => S.censoDeNodosDelSuelo?.() ?? [],
+      cuentasDelSuelo: () => S.cuentasDelSuelo ?? null,
+      /** Cada aterrizaje con el sonido que pidió y su tono. */
+      caidasDelSuelo: () => S.caidasDelSuelo ?? [],
+      catalogoDelSuelo: () => S.catalogoDelSuelo?.() ?? [],
+      /** Qué se cogería AHORA, sin cogerlo. Para medir el alcance y el cono. */
+      aManoAhora: () => S.loQueHayAMano?.() ?? [],
+      /** Y por qué NO: la respuesta de `aMano` con su motivo. */
+      porQueNoSeCoge: (i) => S.porQueNoSeCoge?.(i) ?? null,
+      /** La tecla `x`, por la misma puerta por la que entra el teclado. */
+      coger: () => S.coger?.() ?? null,
+      /**
+       * Dispara un `msitem_spawn` por su guion, por donde lo dispara el cable.
+       *
+       * No por índice: un índice escrito a mano se queda viejo con el primer
+       * rehorneado y no da error, da otro aparecedor (la lección del 69 con el
+       * almiar). Los tres `item_log` de Edana **no los puede disparar nadie**
+       * —no tienen nombre y traen `spawnstart`—, así que ésta es la única
+       * manera de tener un SEGUNDO objeto en el suelo, y por eso existe.
+       */
+      soltarPorGuion(guion) {
+        const es = (S.disparadores?.entidades ?? [])
+          .filter((x) => x.clase === "msitem_spawn" && x.guion === guion);
+        if (!es.length) return null;
+        // TODOS los que haya, y eso importa: Edana tiene DOS `item_log` en el
+        // MISMO punto (480, −200, −136). Dispararlos es la manera honrada de
+        // tener dos cosas a los pies para medir el `ItemCount = 1`, sin mover
+        // nada a mano.
+        for (const e of es) {
+          // `USE_TOGGLE` (3), que es con lo que llega un `multi_manager`.
+          S.disparadores.usar(e, null, 3, 0, null);
+        }
+        S.aplicarDisparos(S.disparadores.recoger());
+        return { cuantos: es.length, entidades: es.map((e) => e.entidad) };
+      },
+      /**
+       * Planta al jugador a `d` metros de un objeto tirado, mirándolo.
+       *
+       * Sin meterlo dentro: el 70 enseñó que teletransportarse al centro de una
+       * cosa mide el rebote y no la regla.
+       */
+      irAlObjeto(i, d = 1) {
+        const o = (S.censoDelSuelo?.() ?? []).find((x) => x.i === i);
+        if (!o) return null;
+        const U = S.level.unitsPerMetre;
+        const m = [o.donde[0] / U, o.donde[1] / U, o.donde[2] / U];
+        window.probe.mundo.poner(m[0] + d, m[1] + 0.2, m[2]);
+        window.probe.mundo.mirar(m[0], m[1], m[2]);
+        return { objeto: m, desde: [...S.player.feet] };
+      },
+      // ── EL 75: soltar del inventario ──────────────────────────────────────
+      /** La tecla `c`, por la misma puerta por la que entra el teclado. */
+      soltar: () => S.soltar?.() ?? null,
+      /** Que lleva la mano derecha: es lo que `drop` sin argumento suelta. */
+      loQueLlevaLaMano: () => S.loQueLlevaLaMano ?? null,
+      /**
+       * Los que se quedaron QUIETOS encima de una entidad de brush.
+       *
+       * Lo que define este caso es lo que NO pasa —no suena, no se tumba, no
+       * reinicia el reloj—, y una ausencia no se mide sola: esto es el apunte
+       * positivo que permite medirla.
+       */
+      posados: () => S.posadosDelSuelo ?? [],
+      /**
+       * El `pev->angles` y el `v_forward` con los que se tiraria AHORA.
+       *
+       * Para medir el TERCIO sin soltar nada: el cabeceo que sale no es el de
+       * la vista, es un tercio y del reves (sv_user.cpp:993).
+       */
+      rumboDeSoltarAhora: () => S.rumboDeSoltarAhora?.() ?? null,
+      /**
+       * Pone en la mano derecha lo que sea, por la lista del personaje.
+       *
+       * Es lo que hace `cumplir` al empuñar algo del ciclador; la sonda necesita
+       * poder elegir el arma porque el personaje de partida trae la que eligio
+       * el menu y lo que se mide aqui es soltar un arma concreta.
+       */
+      empunarPorId(id) {
+        const p = S.sesion?.personaje;
+        if (!p) return null;
+        p.objetos = (p.objetos ?? []).filter((o) => o.id !== id);
+        p.manos.derecha = id;
+        return p.manos.derecha;
+      },
+      /**
+       * Planta al jugador ENCIMA de una deslizante, mirando hacia abajo.
+       *
+       * Para la tapa de la cloaca de Edana, que es el caso del 75: un objeto que
+       * se queda sobre una `func_door` no toca suelo para el motor. Se coloca a
+       * `alto` metros por encima de la tapa y no dentro, que es el tropiezo del
+       * 70.
+       */
+      irSobreCorredera(nombre, { alto = 0.1, margen = 0.3 } = {}) {
+        const f = (S.level.manifiesto.interactivas?.correderas ?? []).find((p) => p.nombre === nombre);
+        if (!f) return null;
+        const cen = [0, 1, 2].map((k) => (f.caja.min[k] + f.caja.max[k]) / 2);
+        const arriba = f.caja.max[1];
+        // AL BORDE DE ACA Y MIRANDO AL DE ALLA, y pegado a la tapa.
+        //
+        // No en el centro y a un metro de alto, que es lo que habia aqui y no
+        // servia: un objeto soltado SALE DISPARADO —175 de empuje y como poco
+        // 30 grados de subida— y desde el centro vuela 2,8 m, o sea que se pasa
+        // la tapa de largo y cae al suelo de verdad. Lo que se mide entonces es
+        // que mi tiro no llega, no que una `func_door` no es suelo.
+        const largo = f.caja.max[2] - f.caja.min[2] > f.caja.max[0] - f.caja.min[0] ? 2 : 0;
+        const aca = [...cen], alla = [...cen];
+        aca[largo] = f.caja.max[largo] - margen;
+        alla[largo] = f.caja.min[largo] + margen;
+        window.probe.mundo.poner(aca[0], arriba + alto, aca[2]);
+        window.probe.mundo.mirar(alla[0], arriba - 10, alla[2]);
+        return {
+          centro: cen, arriba, tamano: [0, 1, 2].map((k) => f.caja.max[k] - f.caja.min[k]),
+          pies: [...S.player.feet], mirandoA: alla,
+        };
+      },
+      /**
+       * SOLTAR A MEDIA ESTOCADA, que es el unico candado de `CanDrop` que esta
+       * conectado (`if (CurrentAttack) return false;`, genericitem.cpp:1293).
+       *
+       * `atacar()` corre el ataque entero dentro de la llamada y acaba con el
+       * brazo quieto, asi que no sirve: hay que pulsar la `c` MIENTRAS. Esto
+       * adelanta el brazo unos tics, comprueba que esta atacando de verdad —si
+       * no lo estuviera, el control medira el reposo y pasaria— y suelta.
+       */
+      soltarAtacando(tics = 6) {
+        if (!S.brazo) return null;
+        for (let k = 0; k < tics; k++) {
+          S.brazo.tic(S.DT, { pulsado: true, destreza: S.destrezaDe(S.brazo.ataques[0]) });
+        }
+        const atacando = Boolean(S.brazo.atacando);
+        const r = S.soltar?.() ?? null;
+        return { atacando, soltado: r, fase: S.brazo.fase };
       },
       /** Donde estan las cosas, para que la sonda no las escriba a mano. */
       sitios: () => ({
@@ -1083,6 +2300,100 @@ export function montarSonda(S) {
       },
     },
     /** Las asignaciones de teclas, para poder tocarlas sin raton. */
+    /**
+     * EL GUION DEL JUGADOR — el 64. Sólo de LECTURA a propósito.
+     *
+     * Lo que hace falta para medir es saber qué consejos se han enseñado y qué
+     * relojes están armados; disparar los eventos desde aquí mediría que el
+     * intérprete sabe ejecutarlos, no que el juego los llame — que es el fallo
+     * del apartado 4. La sonda mata al jugador con la K, como un jugador.
+     */
+    jugador: {
+      hay: () => Boolean(S.guionJugador),
+      /** `m_ViewedHelpTips`: los consejos que este personaje ya ha visto. */
+      vistos: () => [...(S.guionJugador?.vistos ?? [])],
+      /** Los enseñados en ESTA partida, en orden. */
+      ensenados: () => [...(S.guionJugador?.enseñado ?? [])],
+      /** Los eventos con `repeatdelay` y cuándo les toca. */
+      repeticiones: () => (S.guionJugador?.guion?.repeticiones ?? []).map((r) => ({
+        evento: r.evento.nombre, cada: r.cada, cuando: Number(r.cuando.toFixed(2)),
+      })),
+      /** Lo que el guion pidió y no se supo hacer. */
+      noSoportados: () => (S.guionJugador?.noSoportados ?? []).map((x) => `${x.tipo} ${x.nombre}`),
+      /**
+       * EL 65: lo que el guion le está haciendo a la vista, en unidades de
+       * GoldSrc. Es la variable `game.cleffect.view_ofs.*`, leída como la lee
+       * el cliente del mod. Se da APARTE de la cámara a propósito: comparar
+       * las dos —lo que el guion pide y dónde acaba la cámara— es la medida.
+       */
+      vista: (cual = "view") => S.guionJugador?.vista(cual) ?? null,
+      /**
+       * EL 67: los nombres que el guion ha disparado con `usetrigger`.
+       *
+       * Se lee APARTE de `probe.disparadores().cuenta`, y ahi esta la medida:
+       * uno dice lo que el guion PIDIO y el otro lo que el bus RECIBIO. Con los
+       * dos se distingue «el evento no corrio» de «corrio y el cable esta roto»,
+       * que en pantalla se ven igual —la taberna vacia— y tienen arreglos
+       * distintos.
+       */
+      disparados: () => [...(S.guionJugador?.disparados ?? [])],
+      /**
+       * EL 67: una variable del guion del jugador, por nombre.
+       *
+       * Hace falta para distinguir «el evento no corrio» de «corrio y su guarda
+       * era falsa», que son dos arreglos distintos y el mismo sintoma. La
+       * cadena de la taberna vive detras de un `if ( !PLR_LIGHTS_SYNCED )`, y
+       * sin poder leer esa variable la unica forma de saberlo es adivinar.
+       */
+      variable: (nombre) => S.guionJugador?.guion?.buscarVar?.(String(nombre))?.valor ?? null,
+      /**
+       * EL 67: llama un evento del guion a mano y dice si alguien contesto.
+       *
+       * Es para el CONTROL POSITIVO de un cero: si `usetrigger` no llega, hay
+       * que poder ver si el evento existe y contesta antes de acusar al cable.
+       * No sustituye al camino del jugador —eso lo mide llamar al evento desde
+       * donde el juego lo llama— y por eso esta aqui y no en la sonda.
+       */
+      llamar: (nombre, params = []) => Boolean(S.guionJugador?.llamar(String(nombre), params)),
+    },
+    /**
+     * EL 66: LOS GUIONES DE LOS OBJETOS, que es lo que le afecta al jugador.
+     *
+     * Casi todo lo que le pasa se lo hace un objeto que lleva encima, y la
+     * interfaz es `callexternal ent_owner <evento>` — que era un no-op en todo
+     * el proyecto. `pedidos` es lo que cada objeto le ha pedido de verdad al
+     * guion del jugador, con si lo contestó: leerlo aparte del efecto es lo que
+     * separa «el objeto no llama» de «el jugador no sabe contestar».
+     */
+    objetos: {
+      /** Si la tabla horneada está cargada. Sin esto, todo lo demás son ceros. */
+      hay: () => Boolean(S.guionesDeObjeto),
+      /** Cuántos guiones de objeto hay horneados. */
+      horneados: () => (S.guionesDeObjeto?.ids ?? []).length,
+      /** Los objetos del personaje que están CORRIENDO su guion. */
+      vivos: () => [...(S.objetosVivos ?? new Map()).entries()].map(([clave, o]) => ({
+        clave, id: o.id, hay: o.hay,
+        bucles: (o.guion?.repeticiones ?? []).map((r) => r.evento.nombre),
+        pedidos: o.pedidos.length,
+      })),
+      /** Lo que un objeto le ha pedido al jugador, en orden. */
+      pedidos: (id) => {
+        for (const o of (S.objetosVivos ?? new Map()).values()) {
+          if (o.id === id) return o.pedidos.map((x) => ({ ...x }));
+        }
+        return null;
+      },
+      /** Lo que los guiones de objeto piden y no sabemos hacer. */
+      noSoportados: () => {
+        const fuera = [];
+        for (const o of (S.objetosVivos ?? new Map()).values()) {
+          for (const x of o.noSoportados) fuera.push(`${o.id}: ${x.tipo} ${x.nombre}`);
+        }
+        return fuera;
+      },
+      /** Volver a mirar la mochila, que es la costura entre comprar y correr. */
+      sincronizar: () => S.sincronizarObjetosVivos?.() ?? 0,
+    },
     teclas: {
       mapa: () => ({ ...S.teclas.mapa }),
       nombre: (c) => nombreDeTecla(c),
@@ -1140,7 +2451,7 @@ export function montarSonda(S) {
      * la roca. Las tres cosas fallan de formas distintas y ninguna da error.
      */
     pasoBichos(dt = 1 / 60) {
-      if (S.bichos) S.bichos.pasear(dt, S.arnesDePaseo);
+      if (S.bichos) pasoDeBichos(S, dt, S.arnesDePaseo, { cazar: false });
       return S.bichos ? S.bichos.instancias.map((i) => [i.nodo.position.x, i.nodo.position.y, i.nodo.position.z]) : [];
     },
     /** Donde esta cada bicho ahora mismo, sin tocarlos. */
@@ -1158,7 +2469,13 @@ export function montarSonda(S) {
       // con su propia cápsula y el suelo sale a la altura de su cabeza — que es
       // justo el fallo del 17, aquí en el instrumento de medir.
       const i = n === null ? null : (S.bichos?.instancias ?? [])[n] ?? null;
-      return { suelo: S.arnesDePaseo.suelo(x, y, z, i), libre: S.arnesDePaseo.libre(x, y, z, 1, 0, 0.35, i) };
+      // La CINTURA la suma quien anda (ver `CINTURA` en manada.js), así que aquí
+      // también: sin ella esto mediría a ras de suelo y diría «no hay hueco»
+      // delante de cada adoquín, que no es lo que decide si un bicho avanza.
+      return {
+        suelo: S.arnesDePaseo.suelo(x, y, z, i),
+        libre: S.arnesDePaseo.libre(x, y + CINTURA, z, 1, 0, 0.35, i),
+      };
     },
     /** Le pone a UN bicho otra animacion, por indice. Para mirarlas. */
     ponAnimacion(i, nombre) {
@@ -1174,11 +2491,225 @@ export function montarSonda(S) {
      * te pegue el pueblo entero. Las cinco se ven igual de bien en una captura.
      */
     ia: {
+      /**
+       * QUIEN ESTA EN EL MUNDO Y QUIEN NO, de solo lectura.
+       *
+       * 38 de los 69 bichos de Gate City son la ficha de un `msarea_monsterspawn`
+       * y no estan al entrar (src/play/aparecer.js). Hace falta poder verlo desde
+       * fuera: un bicho dormido tiene la posicion de su ficha, asi que en una
+       * captura y en `censo()` se ve igual que uno vivo — y se atraviesa.
+       */
+      apariciones() {
+        const l = S.bichos?.instancias ?? [];
+        return {
+          de: l.length,
+          enElMundo: l.filter((i) => !i.dormido).length,
+          dormidos: l.filter((i) => i.dormido).length,
+          plantillas: l.filter((i) => i.plantilla).length,
+          conCilindro: S.bichosSolidos?.n ?? 0,
+        };
+      },
+      /** La ficha de aparicion de uno, por indice de bicho. */
+      fichaDeAparicion(n) { return S.bichos?.aparecedor?.fichaDe(n) ?? null; },
+
+      // ── EL BLOQUE DEL 80: UN BICHO CONCRETO, SU CUERPO Y SU ANIMACION ─────
+      //
+      // Las tres sondas de combate del proyecto miden todas contra goblins y
+      // zombis, y los dos fallos del 80 viven en lo pequeno: una rata de 32
+      // unidades de alto. Esto es lo que hace falta para ponerle un control
+      // delante a UNA rata y no al primer hostil que salga en la lista.
+
+      /**
+       * UNO POR SU GUION, que es lo unico que no cambia.
+       *
+       * Por indice no vale: el censo se reordena con las apariciones. Por
+       * nombre tampoco —«Giant Rat» hay varias— y ademas el 79 acaba de
+       * ensenar que un nombre puede resolver a quien no existia.
+       */
+      _buscar(guion, n = 0) {
+        const l = (S.bichos?.instancias ?? [])
+          .filter((i) => String(i.ficha?.script ?? "").includes(guion));
+        return l[n] ?? null;
+      },
+
+      /**
+       * LA FICHA COMPLETA DE UNO: donde esta, que animacion lleva y si choca.
+       *
+       * `choca` NO se lee de nuestra contabilidad: se le pregunta a un rayo. Es
+       * la leccion del 69 —`choca === false` se quedo verde con la fisica
+       * parando al jugador— y ademas es lo unico que distingue «tiene cilindro
+       * apuntado» de «hay algo solido ahi».
+       */
+      bicho(guion, n = 0) {
+        const i = this._buscar(guion, n);
+        if (!i) return null;
+        const u = S.level?.unitsPerMetre ?? 39.37;
+        const puesto = (S.bichosSolidos?.puestos ?? []).find((q) => q.instancia === i);
+        return {
+          guion: i.ficha.script, nombre: i.ficha.nombre, clave: i.ficha.clave,
+          donde: [...i.donde],
+          // El sitio y el tamano en UNIDADES, que es como los escribe el mod.
+          unidades: i.donde.map((v) => v * u),
+          dormido: Boolean(i.dormido), muerto: Boolean(i.muerto),
+          vida: i.vida, vidaMaxima: i.vidaMaxima,
+          // Los dos tamanos que el 80 encontro que NO coinciden: el del guion
+          // (`setsize`, que es el casco del motor) y el de la caja medida de la
+          // malla, que es de donde sale el colisionador.
+          delGuion: { ancho: i.ficha.ia?.ancho ?? i.ficha.ancho ?? null, alto: i.ficha.ia?.alto ?? i.ficha.alto ?? null },
+          cajaMedida: i.caja ?? null,
+          cilindro: puesto ? { alto: puesto.alto * u, radio: puesto.radio * u } : null,
+          conCilindro: Boolean(i.conCilindro),
+          anim: { nombre: i.anim?.nombre ?? null, gen: i.anim?.gen ?? 0, unaVez: Boolean(i.anim?.unaVez) },
+          sigue: { ...(i.sigue ?? {}) },
+          intencion: i.intencion?.accion ?? null,
+          rango: i.intencion?.rango ?? null,
+          alcanceDeGolpe: i.ficha.ia?.alcanceDeGolpe ?? null,
+        };
+      },
+
+      /**
+       * ¿HAY ALGO SOLIDO DONDE ESTA ESE BICHO? Se lo contesta un rayo.
+       *
+       * Y el rayo va HORIZONTAL y de lado a lado, empezando FUERA: un
+       * colisionador de Rapier se cruza, no se habita — en el 69, un rayo que
+       * empezaba dentro de un trimesh no cortaba ni un triangulo y daba cero
+       * con la caja puesta. Aqui es un cilindro y si tiene interior, pero la
+       * regla se respeta igual para que el instrumento sirva para los dos.
+       *
+       * `aQue` es la altura sobre sus pies, en unidades: hace falta poder
+       * apuntar a la mitad de una rata de 32 y no al aire que tiene encima.
+       */
+      hayCuerpoEn(guion, { n = 0, aQue = 16, desdeCuanto = 100 } = {}) {
+        const i = this._buscar(guion, n);
+        if (!i || !S.world) return null;
+        const u = S.level?.unitsPerMetre ?? 39.37;
+        const y = i.donde[1] + aQue / u;
+        const d = desdeCuanto / u;
+        const o = { x: i.donde[0] - d, y, z: i.donde[2] };
+        const g = S.world.world.castRay(
+          new RAPIER.Ray(o, { x: 1, y: 0, z: 0 }), d * 2, true,
+          undefined, undefined, undefined, S.player?.body);
+        if (!g) return { toca: false, aQue, deQuien: null };
+        const mano = g.collider?.handle;
+        const suyo = (S.bichosSolidos?.puestos ?? []).find((q) => q.colisionador.handle === mano);
+        return {
+          toca: true,
+          aQue,
+          // A CUANTAS UNIDADES de su eje esta lo que se ha tocado: con esto se
+          // ve si el rayo choco con el bicho o con la pared de detras.
+          aQueDistancia: (g.timeOfImpact - d) * u,
+          // Y DE QUIEN es: «toca algo» no es «toca al bicho». Sin esto, una
+          // pared al lado da un verde que no mide el cilindro de nadie.
+          deQuien: suyo ? (suyo.instancia === i ? "el mismo" : "otro bicho") : "el mundo",
+        };
+      },
+
+      /**
+       * ¿HAY MUNDO DE VERDAD A TIRO, Y HACIA DONDE? — el 80.
+       *
+       * Existe porque el control negativo del `hitwall` nacio rojo con el
+       * trabajo bien hecho, DOS VECES, y las dos por el instrumento:
+       *
+       *   1. girando sobre el sitio en dieciseis rumbos HORIZONTALES no habia
+       *      pared a 60 unidades en ninguno. Eso medía el tamaño de la sala.
+       *   2. mirando al suelo tampoco llega: el ojo esta a 64 unidades y la
+       *      espada alcanza 60, asi que **en vertical la hoja no toca el piso**.
+       *      No es un fallo, es la geometria del motor.
+       *
+       * Asi que se busca: se tiran rayos en muchas direcciones y se devuelve la
+       * primera que toca MUNDO —ni un bicho ni un rompible— dentro del alcance.
+       * Quien quiera el control, apunta ahi y dice a que distancia estaba.
+       */
+      mundoATiro(alcanceU = 60, { cuantos = 24 } = {}) {
+        if (!S.world || !S.player) return null;
+        const u = S.level?.unitsPerMetre ?? 39.37;
+        const L = alcanceU / u;
+        const o0 = S.player.eye;
+        const o = { x: o0[0], y: o0[1], z: o0[2] };
+        const manos = new Set((S.bichosSolidos?.puestos ?? []).map((q) => q.colisionador.handle));
+        const probados = [];
+        // Se barre en rumbo Y en inclinacion: la pared puede estar arriba (un
+        // techo bajo) o abajo, y con un solo plano ya se fallo una vez.
+        for (let k = 0; k < cuantos; k++) {
+          const a = (k / cuantos) * Math.PI * 2;
+          for (const inc of [0, -0.4, 0.4, -0.8]) {
+            const d = {
+              x: Math.cos(a) * Math.cos(inc), y: Math.sin(inc), z: Math.sin(a) * Math.cos(inc),
+            };
+            const g = S.world.world.castRay(new RAPIER.Ray(o, d), L, true,
+              undefined, undefined, undefined, S.player.body);
+            if (!g) continue;
+            if (manos.has(g.collider?.handle)) continue;   // un bicho no es la pared
+            probados.push({ a, inc, aQue: g.timeOfImpact * u });
+            return {
+              hacia: [o.x + d.x * L, o.y + d.y * L, o.z + d.z * L],
+              aQue: g.timeOfImpact * u, rumbos: k + 1,
+            };
+          }
+        }
+        return null;
+      },
+
+      /**
+       * GRABAR LA ANIMACION DE UNO, fotograma a fotograma y DENTRO de la pagina.
+       *
+       * Desde fuera no se puede: un `evaluate` no mide decimas (el 75), y aqui
+       * lo que hay que medir son tramos de 120 ms contra tramos de 1000. Se
+       * muestrea en `requestAnimationFrame`, que es el mismo reloj con el que el
+       * juego mueve la animacion.
+       *
+       * Devuelve TRAMOS y no muestras: «la animacion de ataque estuvo puesta
+       * alguna vez» es cierto con el fallo y sin el. Lo que los separa es
+       * cuanto duro cada vez.
+       */
+      grabarAnimacion(guion, { n = 0, segundos = 8 } = {}) {
+        const i = this._buscar(guion, n);
+        if (!i) return false;
+        const cinta = [];
+        const t0 = performance.now();
+        S._cinta80 = { guion, n, cinta, hasta: t0 + segundos * 1000 };
+        const paso = () => {
+          const c = S._cinta80;
+          if (!c || c.cinta !== cinta) return;          // otra grabacion la releva
+          const ahora = performance.now();
+          const a = i.anim ?? {};
+          const ultimo = cinta[cinta.length - 1];
+          if (ultimo && ultimo.nombre === a.nombre && ultimo.gen === a.gen) ultimo.hasta = ahora;
+          else cinta.push({ nombre: a.nombre ?? null, gen: a.gen ?? 0, desde: ahora, hasta: ahora });
+          if (ahora < c.hasta) requestAnimationFrame(paso);
+          else c.acabada = true;
+        };
+        requestAnimationFrame(paso);
+        return true;
+      },
+
+      /**
+       * LA CINTA, en tramos con su duracion en segundos.
+       *
+       * El ULTIMO tramo se marca `alBorde`: la ventana de grabacion lo corta por
+       * la mitad y medirlo es medir mi reloj, no el juego. Esto ya salio en la
+       * prueba de Node del 80 con un 0,83 que no era un ataque cortado.
+       */
+      cinta() {
+        const c = S._cinta80;
+        if (!c) return null;
+        return {
+          guion: c.guion, acabada: Boolean(c.acabada),
+          tramos: c.cinta.map((t, k) => ({
+            nombre: t.nombre, gen: t.gen,
+            dura: (t.hasta - t.desde) / 1000,
+            alBorde: k === c.cinta.length - 1,
+          })),
+        };
+      },
       /** El censo: quien es hostil segun la tabla de razas. */
       censo() {
         const l = (S.bichos?.instancias ?? []).map((i) => ({
           nombre: i.ficha.nombre, raza: i.ficha.ia?.raza ?? null,
           hostil: Boolean(i.ficha.hostil), relacion: i.ficha.relacion,
+          // Un bicho DORMIDO no caza: está fuera del área activa. Quien mida
+          // «¿reacciona solo?» tiene que poder descartarlo, o mide el sueño.
+          dormido: Boolean(i.dormido),
           escena: [i.nodo.position.x, i.nodo.position.y, i.nodo.position.z],
           alcanceDeGolpe: i.ficha.ia?.alcanceDeGolpe ?? null,
         }));
@@ -1238,7 +2769,7 @@ export function montarSonda(S) {
         const i = (S.bichos?.instancias ?? []).filter((x) => x.ficha.hostil)[n];
         if (!i) return null;
         const a = [i.nodo.position.x, i.nodo.position.z];
-        S.bichos.cazar(1 / 60, S.arnesDePaseo);
+        pasoDeBichos(S, 1 / 60, S.arnesDePaseo);
         return {
           movido: Math.hypot(i.nodo.position.x - a[0], i.nodo.position.z - a[1]),
           frenado: i.frenado ?? null, destino: i.destino ?? null, cerca: i.cerca ?? null,
@@ -1247,7 +2778,7 @@ export function montarSonda(S) {
       },
       /** Corre la caza `s` segundos sin depender del fotograma. */
       correr(s = 3) {
-        for (let t = 0; t < s; t += 1 / 60) S.bichos?.cazar(1 / 60, S.arnesDePaseo);
+        for (let t = 0; t < s; t += 1 / 60) pasoDeBichos(S, 1 / 60, S.arnesDePaseo);
         S.bichosSolidos?.seguir();
         return this.estado(0);
       },
@@ -1363,6 +2894,13 @@ export function montarSonda(S) {
           contra: f?.choque?.contra ? (f.choque.contra.ficha?.nombre ?? "bicho") : (f?.choque ? "mundo" : null),
           recorrido: f?.recorrido ?? null,
           caida: f ? f.pos[1] - (S.player.eye[1] * S.U) : null,
+          // La caída DESDE LA MANO, que es la única que se puede comparar con
+          // la física: `caida` la mide desde el ojo y la flecha no sale del
+          // ojo, así que se lleva puesto el desnivel de la mano —unas 17
+          // unidades— y eso no es gravedad. Con el desnivel dentro, la caída
+          // medida salía el triple de la libre y ningún control podía
+          // comprobarla sin un umbral atado a una pared (59).
+          caidaDesdeLaMano: f ? f.pos[1] - f.salida[1] : null,
           dano: f?.dano ?? null,
           enVuelo: S.flechasEnVuelo.length,
           puestas: S.flechasPuestas?.puestas ?? 0,
@@ -1555,11 +3093,12 @@ export function montarSonda(S) {
         const antes = (S.bichos?.instancias ?? []).map((i) => [i.nodo.position.x, i.nodo.position.z]);
         const rein0 = (S.bichos?.instancias ?? []).map((i) => i.sigue?.reinicios ?? 0);
         const rep0 = (S.bichos?.instancias ?? []).map((i) => i.sigue?.veces ?? 0);
+        const act0 = (S.bichos?.instancias ?? []).map((i) => i.sigue?.cambiosDeActividad ?? 0);
         const DT = 1 / 60;
         let t0 = S.reloj;
         for (let t = 0; t < s; t += DT) {
           t0 += DT;
-          S.bichos?.cazar(DT, { ...S.arnesDePaseo, ahora: t0 });
+          pasoDeBichos(S, DT, { ...S.arnesDePaseo, ahora: t0 });
           S.bichos?.animar(DT);
         }
         S.bichosSolidos?.seguir();
@@ -1569,6 +3108,7 @@ export function montarSonda(S) {
           movido: Math.hypot(i.nodo.position.x - antes[n][0], i.nodo.position.z - antes[n][1]),
           reinicios: (i.sigue?.reinicios ?? 0) - rein0[n],
           repeticiones: (i.sigue?.veces ?? 0) - rep0[n],
+          cambiosDeActividad: (i.sigue?.cambiosDeActividad ?? 0) - act0[n],
           animacion: i.nombreActual ?? null,
         }));
         return {
@@ -1592,7 +3132,15 @@ export function montarSonda(S) {
           // ciclo andar→chocar→quieto→esperar→andar, y en el motor no existe
           // porque chocar no suelta el destino. Antes eran las cuatro ratas
           // hundidas; tiene que ser cero.
-          temblando: l.filter((x) => x.pasea && x.movido < 0.05 && x.reinicios > 4).length,
+          // Se cuentan los saltos andar↔parado y NO todos los rebobinados: desde
+          // que la pose de reposo vuelve a sortearse de verdad (59), un bicho
+          // quieto acumula `reinicios` legítimos y esta cuenta lo marcaba como
+          // temblón. El temblor es cambiar de ACTIVIDAD sin moverse.
+          temblando: l.filter((x) => x.pasea && x.movido < 0.05 && x.cambiosDeActividad > 4).length,
+          // El positivo de la cuenta de arriba: cuántos cambian de actividad
+          // en absoluto. Sin esto, «0 temblando» estaría verde también con el
+          // contador roto y sin incrementarse nunca.
+          conCambioDeActividad: l.filter((x) => x.cambiosDeActividad > 0).length,
           lista: l,
         };
       },
@@ -1607,7 +3155,7 @@ export function montarSonda(S) {
         // y es verdad en ese instante y mentira en el resto.
         const vioAndar = (S.bichos?.instancias ?? []).map(() => false);
         for (let t = 0; t < s; t += DT) {
-          S.bichos?.pasear(DT, S.arnesDePaseo);
+          pasoDeBichos(S, DT, S.arnesDePaseo, { cazar: false });
           (S.bichos?.instancias ?? []).forEach((i, n) => {
             if (i.andando === "pasea" && i.ficha.andando &&
                 i.nombreActual === String(i.ficha.andando).toLowerCase()) vioAndar[n] = true;
@@ -1644,20 +3192,49 @@ export function montarSonda(S) {
        * Sólo anima (no pasea ni caza), que es lo que hace falta para ver el
        * dado del `SetActivity` sin que nadie se mueva de sitio.
        */
+      /**
+       * LAS POSES QUE PASA **CADA BICHO**, una por una.
+       *
+       * Agrupaba por `ficha.nombre`, que es la ESPECIE, y eso convertía «dos
+       * enanos distintos, cada uno en su pose» en «un enano cambió de pose».
+       * Las dos cosas daban una lista de dos, y el control de `sonda:mundo`
+       * que pregunta si el sorteo se repite no podía distinguirlas: con 69
+       * bichos y tres poses posibles, salía verde aunque ninguno cambiara
+       * nunca. Es el apartado 4 con la clave de un `Map` (59).
+       *
+       * Ahora la clave es la INSTANCIA, y cada fila dice además si ese bicho
+       * pasea: quien anda no puede volver a sortear su pose de reposo, y
+       * mezclarlo con los quietos es lo que hacía falta poder separar.
+       *
+       * Y SE LLAMA A `relojes`, que es donde vive el sorteo.
+       *
+       * Esto era lo gordo: el bucle sólo llamaba a `animar(DT)`, que mueve los
+       * mezcladores, y el nuevo dado se echa en `manada.relojes(DT)`
+       * (`src/play/manada.js:499`, el `SetActivity(ACT_IDLE)` de
+       * `msmonsterserver.cpp:596-600`). O sea que **el mecanismo bajo prueba
+       * no llegaba a dispararse nunca**: lo único que hacía verde al control
+       * era que dos bichos distintos de la misma especie cayeran en poses
+       * distintas al nacer. El apartado 4 entero en una función de quince
+       * líneas (59).
+       */
       poses(s = 30) {
         const vistas = new Map();
         const DT = 1 / 60;
+        const instancias = (S.bichos?.instancias ?? []);
         for (let t = 0; t < s; t += DT) {
           S.bichos?.animar(DT);
-          for (const i of S.bichos?.instancias ?? []) {
-            if (i.muerto || i.ficha.parado) continue;
+          S.bichos?.relojes?.(DT);
+          instancias.forEach((i, idx) => {
+            if (i.muerto || i.ficha.parado) return;
             const n = i.nombreActual ?? i.actual?.seq?.nombre ?? null;
-            if (!n) continue;
-            if (!vistas.has(i.ficha.nombre)) vistas.set(i.ficha.nombre, new Set());
-            vistas.get(i.ficha.nombre).add(n);
-          }
+            if (!n) return;
+            if (!vistas.has(idx)) {
+              vistas.set(idx, { nombre: i.ficha.nombre, pasea: Boolean(i.vagabundo?.pasea), poses: new Set() });
+            }
+            vistas.get(idx).poses.add(n);
+          });
         }
-        return [...vistas].map(([nombre, s2]) => ({ nombre, poses: [...s2] }))
+        return [...vistas].map(([idx, v]) => ({ idx, nombre: v.nombre, pasea: v.pasea, poses: [...v.poses] }))
           .sort((a, b) => b.poses.length - a.poses.length);
       },
       /**
@@ -1775,6 +3352,10 @@ export function montarSonda(S) {
           t: S.brazo?.t ?? null, cargando: S.brazo?.cargando ?? 0,
           cargaHecha: S.brazo?.cargaHecha ?? 0, pulsadoAntes: S.brazo?.pulsadoAntes ?? null,
           golpesDados: S.golpesDados, impactos: S.impactos, muertes: S.muertes, aguante: S.aguante,
+          // El 80: por dónde entró. «Impactos» no distingue la esfera de la
+          // línea, y el arreglo del 80 es justo la segunda: sin estos dos, tener
+          // el segundo intento o no tenerlo se lee igual desde fuera.
+          porLaLinea: S.porLaLinea ?? 0, contraPared: S.contraPared ?? 0,
         };
       },
       /** Empuña otra arma del catálogo, para probar varias. */
@@ -1789,7 +3370,10 @@ export function montarSonda(S) {
        */
       atacar(s = 1.5, { pulsado = true } = {}) {
         if (!S.brazo) return null;
-        const antes = { golpesDados: S.golpesDados, impactos: S.impactos, muertes: S.muertes };
+        const antes = {
+          golpesDados: S.golpesDados, impactos: S.impactos, muertes: S.muertes,
+          porLaLinea: S.porLaLinea ?? 0, contraPared: S.contraPared ?? 0,
+        };
         let empiezos = 0, finales = 0;
         // EL BOTÓN ARRIBA HASTA QUE EL BRAZO ESTÉ EN REPOSO, y entonces se
         // pulsa. Es «un clic desde quieto», que es lo que quiere medir esto.
@@ -1818,6 +3402,10 @@ export function montarSonda(S) {
           golpes: S.golpesDados - antes.golpesDados,
           impactos: S.impactos - antes.impactos,
           muertes: S.muertes - antes.muertes,
+          // Los dos del 80, ya restados: lo que el control necesita es el
+          // incremento de ESTA tanda, no el total de la partida.
+          porLaLinea: (S.porLaLinea ?? 0) - antes.porLaLinea,
+          contraPared: (S.contraPared ?? 0) - antes.contraPared,
           fase: S.brazo.fase,
         };
       },
@@ -1857,6 +3445,12 @@ export function montarSonda(S) {
         }
         return {
           carga: S.brazo.carga, cargando: S.brazo.cargando, fase: S.brazo.fase,
+          // El TOPE del arma y la destreza con la que se mide, que es lo que
+          // decide si hay carga siquiera: `GetHighestAttackCharge()` se salta
+          // los ataques para los que no tienes destreza, y `Attack_Charge()`
+          // corta ahí (giattack.cpp:600-628 y 1110).
+          tope: S.brazo.cargaTope(S.destrezaDe(S.brazo.ataques[0])),
+          destreza: S.destrezaDe(S.brazo.ataques[0]),
           sonidos: S.sonidosDeCarga - antes,
           // El primero y el último fotograma en que la barra se vio, que es lo
           // que hace falta para saber si cambia de color y de número.
@@ -2095,7 +3689,7 @@ export function montarSonda(S) {
         for (let k = 0; k < pasos; k++) {
           S.reloj += S.DT;
           S.bichos?.animar(S.DT);
-          S.bichos?.cazar(S.DT, { ...S.arnesDePaseo, ahora: S.reloj });
+          pasoDeBichos(S, S.DT, { ...S.arnesDePaseo, ahora: S.reloj });
         }
         S.bichosSolidos?.seguir();
         return { reloj: S.reloj, pasos };
@@ -2181,7 +3775,7 @@ export function montarSonda(S) {
           S.pasoDelEscudo(S.DT, true);
           S.reloj += S.DT;
           S.bichos?.animar(S.DT);
-          S.bichos?.cazar(S.DT, { ...S.arnesDePaseo, ahora: S.reloj });
+          pasoDeBichos(S, S.DT, { ...S.arnesDePaseo, ahora: S.reloj });
         }
         S.sesion.personaje.vida = max;
         S.bichosSolidos?.seguir();
@@ -2404,8 +3998,9 @@ export function montarSonda(S) {
     },
     draw() {
       const eye = S.player.eye;
-      S.camera.position.set(eye[0], eye[1], eye[2]);
-      S.camera.rotation.set(S.player.pitch, S.player.yaw, 0);
+      // Las DOS ramas, no una: ver `aplicarCamara`. Esto ponía la cámara en el
+      // ojo a pelo, y desde el 41 un muerto no mira por su ojo.
+      aplicarCamara();
       if (S.mallaCielo) S.mallaCielo.position.set(eye[0], eye[1], eye[2]);
       S.renderer.render(S.escena, S.camera);
       return { eye, width: S.canvas.width, height: S.canvas.height };

@@ -32,7 +32,8 @@ import { tablasDeGamma, AJUSTES } from "../src/bsp/gamma.js";
 import { escribirPng } from "./png.mjs";
 
 const MODELOS = "../MSC/assets/msr/models/monsters";
-const SALIDA = resolve("build/gatecity/bichos");
+import { mapaDeArgv, posicionalesDe, enSalida, MAPA_POR_DEFECTO } from "./mapa.mjs";
+const SALIDA = enSalida(MAPA_POR_DEFECTO, "bichos");
 const RAMPA = tablasDeGamma(AJUSTES).tex;
 
 export const nombreArchivo = (s) => s.replace(/[^A-Za-z0-9_.-]/g, "_");
@@ -75,6 +76,7 @@ export function verticesCrudos(m, cuerpo = 0) {
  */
 export function extraerBicho(relativo, {
   cuerpo = 0, base = "../MSC/assets/msr/models", salida = SALIDA, callar = false,
+  raizSalida = enSalida(MAPA_POR_DEFECTO),
   // Qué secuencias se EMITEN. El oráculo se comprueba sobre TODAS de todas
   // formas —es gratis y es el juez—, pero al navegador sólo van las que alguien
   // va a pedir: `npc/human1.mdl` tiene 129 secuencias y 6 882 fotogramas, o sea
@@ -371,7 +373,7 @@ export function extraerBicho(relativo, {
     // fueron a `build/gatecity/props_tree2` y la ficha siguió diciendo
     // `bichos/props_tree2`. **No dio error** — dio cuatro modelos que el visor
     // no encontraba y un aviso en la consola que es fácil no leer.
-    carpeta: relative(resolve("build/gatecity"), dir).replaceAll("\\", "/"),
+    carpeta: relative(raizSalida, dir).replaceAll("\\", "/"),
     triangulos: malla.triangulos, huesos: huesos.length,
     secuencias: secOut.map((s) => s.nombre),
     // Y las cabeceras enteras, que hacen falta para resolver la animación de
@@ -386,14 +388,17 @@ export function extraerBicho(relativo, {
 
 // --- y la línea de órdenes, para mirar un modelo suelto ---------------------
 if (process.argv[1]?.endsWith("bicho.mjs")) {
-  const pedidos = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+  const mapa = mapaDeArgv();
+  const pedidos = posicionalesDe().filter((a) => !a.startsWith("--"));
   if (!pedidos.length) {
     console.error("uso: node tools/bicho.mjs <ruta-del-modelo> [...]   p.ej. monsters/goblin_new");
     process.exit(2);
   }
   for (const p of pedidos) {
     try {
-      const r = extraerBicho(p.endsWith(".mdl") ? p : `${p}.mdl`);
+      const r = extraerBicho(p.endsWith(".mdl") ? p : `${p}.mdl`, {
+        salida: enSalida(mapa, "bichos"), raizSalida: enSalida(mapa),
+      });
       if (!r) console.error(`  FALTA ${p}`);
     } catch (e) {
       console.error(`  FALLO: ${e.message}`);

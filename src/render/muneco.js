@@ -39,6 +39,8 @@ import * as THREE from "three";
 import { cargarModelo } from "./bichos.js";
 import { ESPACIO } from "./bsp_escena.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /** `INSET_SCALE` (clrender.h:34). El 0,02 de antes está comentado al lado. */
 export const ESCALA = 0.026;
 
@@ -48,12 +50,12 @@ export const DESPLAZAMIENTO = { adelante: 4.7, arriba: -3.1 };
 /**
  * Monta el muñeco con el modelo del género que se le pida.
  *
- * `manifiesto` es `build/gatecity/cuerpos.json`, el mismo que usa la hoja de
+ * `manifiesto` es `build/msr/cuerpos.json`, el mismo que usa la hoja de
  * personaje: el modelo es `human/reference.mdl` con el submodelo del género, y
  * las animaciones las nombra `global.script`.
  */
 export async function cargarMuneco(manifiesto, {
-  base = "build/gatecity", genero = "male", U = 39.37,
+  base = BASE_POR_DEFECTO, genero = "male", U = 39.37,
 } = {}) {
   const g = manifiesto?.generos?.[genero] ?? manifiesto?.generos?.male;
   if (!g) return null;
@@ -107,13 +109,45 @@ export async function cargarMuneco(manifiesto, {
 
   const mezclador = new THREE.AnimationMixer(nodo);
   let actual = null;
-  function pon(nombre) {
+  /**
+   * `playanim <modo> <nombre>`, y **el modo importa** desde el 85.
+   *
+   * Hasta entonces esto ponía siempre `LoopRepeat`, que es lo correcto para las
+   * tres posturas que le pedía el bucle —`run`, `idle`, `attention`— y no para
+   * las del menú del jugador:
+   *
+   *   `once`  MONSTER_ANIM_ONCE: se reproduce y vuelve al reposo. Un
+   *           asentimiento en bucle es un personaje diciendo «sí» para siempre.
+   *   `hold`  MONSTER_ANIM_HOLD: se queda en la última postura. Sentarse en
+   *           bucle es levantarse y volver a sentarse cada dos segundos — que es
+   *           exactamente lo que le pasó a la hoja de personaje en el 48, con su
+   *           comentario en `src/render/cuerpo.js:388-398`.
+   *                                            npcscript.cpp:1512-1519
+   *
+   * `clampWhenFinished` es lo que sostiene el último fotograma, y hace falta con
+   * los dos: sin él, una animación de un solo pase deja el esqueleto donde el
+   * mezclador quiera.
+   */
+  let accion = null;
+  let modoActual = "move";
+  function pon(nombre, modo = "move") {
     const e = clips.get(String(nombre ?? "").toLowerCase());
     if (!e || actual === e) return actual;
     mezclador.stopAllAction();
     const a = mezclador.clipAction(e.clip);
-    a.setLoop(THREE.LoopRepeat, Infinity);
+    const unaVez = modo === "once" || modo === "hold";
+    a.setLoop(unaVez ? THREE.LoopOnce : THREE.LoopRepeat, unaVez ? 1 : Infinity);
+    a.clampWhenFinished = unaVez;
     a.reset().play();
+    accion = a;
+    modoActual = modo;
+    // EL 82, EN LA OTRA PIEZA. Un mezclador al que se le paran todas las
+    // acciones devuelve el esqueleto a su POSE DE ENLACE, y aquí no se notaba
+    // porque el bucle llama a `animar(dt)` justo después de `pon`. Pero eso es
+    // una propiedad de quien llama, no de esta función: en cuanto alguien la use
+    // sin animar después, el muñeco sale un fotograma sin animar. Ver
+    // `doc/PARPADEO_82.md` y `aplicarAnimacion` en `src/render/bichos.js`.
+    mezclador.update(0);
     actual = e;
     return e;
   }
@@ -125,6 +159,25 @@ export async function cargarMuneco(manifiesto, {
   return {
     nodo, malla, ficha, clips, pon,
     get animacion() { return actual?.seq?.nombre ?? null; },
+    /**
+     * ¿ESTÁ SONANDO TODAVÍA UNA ANIMACIÓN DE UN SOLO PASE? — el 85.
+     *
+     * Hace falta porque el bucle de dibujo le pide una postura **cada
+     * fotograma**, y un `playanim once` tiene que poder acabar. Sin esto el
+     * asentimiento duraba un fotograma y el muñeco se quedaba en `idle`: medido
+     * en la primera pasada de `sonda:menujugador85`, que leyó «el muñeco tiene
+     * idle» con el estado diciendo `player_nodno`. Es el fallo que el 80 encontró
+     * en el ataque de los bichos, en otra pieza y con la misma forma.
+     *
+     * `hold` NO entra: ésa se sostiene para siempre y quien la suelta es
+     * `Emociones.postura()`. Aquí sólo se pregunta por `once`, que es la que
+     * vuelve sola al reposo cuando termina (MONSTER_ANIM_ONCE,
+     * npcscript.cpp:1515-1517).
+     */
+    get deUnPase() {
+      if (modoActual !== "once" || !accion) return false;
+      return accion.time < accion.getClip().duration - 1e-3;
+    },
     get visible() { return nodo.visible; },
     set visible(v) { nodo.visible = v; },
     animar(dt) { mezclador.update(dt); },

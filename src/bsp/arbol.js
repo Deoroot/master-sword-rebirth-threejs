@@ -75,9 +75,42 @@ export function contenidoEn(bsp, punto, modelo = 0) {
 }
 
 /** Si en un punto se puede estar: vacío o agua, pero no roca. */
-export function sePuedeEstar(bsp, punto) {
-  const c = contenidoEn(bsp, punto).contenido;
+export function sePuedeEstar(bsp, punto, modelo = 0) {
+  const c = contenidoEn(bsp, punto, modelo).contenido;
   return c === -1 || c === -3 || c === -4;
+}
+
+/**
+ * SÓLIDO PARA QUIEN CHOCA, que no es lo mismo que sólido para el árbol del mundo.
+ *
+ * Y ésta es la corrección que costó cuatro ratas. `sePuedeEstar` camina el árbol
+ * del **modelo 0**, o sea el mundo; los `func_*` con brushes viven cada uno en su
+ * propio modelo (`"model" "*242"`) y **no están en ese árbol**. Así que un punto
+ * encima de una caja rompible sale «vacío», y `sueloBajo` sigue bajando hasta el
+ * suelo de verdad — dejando lo que se coloque ahí DENTRO de la caja.
+ *
+ * Las cuatro `msmonster_giantrat` de Gate City tienen una `func_breakable` cada
+ * una, de z −791 a −771, y el censo las puso a −791: veinte unidades enterradas,
+ * y `m_StepSize` son 18, así que no podían salir ni andando ni hacia arriba. Con
+ * `roam 1` puesto, 0,00 m en cinco minutos y ni un error.
+ *
+ * `extras` son las entidades con brushes que SÍ cuentan, y quién cuenta lo decide
+ * quien llama: tiene que ser la misma lista que se mete en la malla de colisión
+ * (`SOLIDAS` en tools/gatecity.mjs — `func_wall` y `func_breakable`), porque si
+ * las dos listas no coinciden el mundo del extractor y el mundo del jugador son
+ * dos mundos, que es este fallo otra vez con otra ropa.
+ *
+ * Cada extra es `{ modelo, origin }`: el índice del `*N` y su `origin`, que hay
+ * que restar porque el árbol del modelo está en coordenadas locales.
+ */
+export function solidoPara(bsp, punto, extras = []) {
+  if (!sePuedeEstar(bsp, punto)) return true;
+  for (const e of extras) {
+    const o = e.origin ?? [0, 0, 0];
+    const p = [punto[0] - (o[0] ?? 0), punto[1] - (o[1] ?? 0), punto[2] - (o[2] ?? 0)];
+    if (!sePuedeEstar(bsp, p, e.modelo)) return true;
+  }
+  return false;
 }
 
 /**
@@ -88,10 +121,13 @@ export function sePuedeEstar(bsp, punto) {
  * tiene la ventaja de no necesitar física — o sea que se puede hacer en Node, al
  * extraer, y el navegador recibe el número ya calculado.
  */
-export function sueloBajo(bsp, punto, maximo = 1024) {
+export function sueloBajo(bsp, punto, opciones = {}) {
+  // Compatible con la firma vieja `sueloBajo(bsp, punto, 512)`.
+  const { maximo = 1024, extras = [] } =
+    typeof opciones === "number" ? { maximo: opciones } : opciones;
   for (let d = 0; d < maximo; d++) {
     const z = punto[2] - d;
-    if (!sePuedeEstar(bsp, [punto[0], punto[1], z])) return z + 1;
+    if (solidoPara(bsp, [punto[0], punto[1], z], extras)) return z + 1;
   }
   return null;
 }

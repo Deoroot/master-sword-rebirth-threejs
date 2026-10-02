@@ -32,9 +32,11 @@
 // La ficha (`build/gatecity/menus.json`) se queda como respaldo: un NPC cuyo
 // guion no esté horneado sigue enseñando su menú, apagado y con el motivo.
 
-import { Guion, GLOBALES } from "./guion.js";
+import { Guion, GLOBALES, numDe } from "./guion.js";
 import { leerMision, ponerMision, limpiarMisiones, volcarMisiones } from "./misiones.js";
 import { usarOpcion, nombreVisibleDe } from "./usaropcion.js";
+import { oirFrase, limpiarTexto } from "./oir.js";
+import { Tiendas, flagsDe } from "./tienda.js";
 
 /**
  * EL RELOJ DE LOS EVENTOS CON RETARDO.
@@ -82,9 +84,69 @@ export class RelojDeGuiones {
  * lo que no se pase, no pasa nada — es lo que permite probar esto en Node sin
  * montar el juego.
  */
+/**
+ * El 81. Cuántos saltos de `callexternal` se permiten encadenar.
+ *
+ * **Esto no es del motor y va dicho aquí.** El mod no lleva guarda ninguna: dos
+ * NPC que se llamen el uno al otro cuelgan el servidor, y ése es su problema.
+ * Aquí hace falta porque una recursión en JavaScript no cuelga nada: revienta
+ * la pila y deja al jugador sin pestaña. Es el `VUELTAS_MAXIMAS` de `guion.js`
+ * —la guarda de los bucles— aplicada al salto de un guion a otro. La cadena
+ * más larga que se le conoce al juego es la de la sidra, que son dos saltos.
+ */
+const SALTOS_MAXIMOS = 8;
+let saltos = 0;
+
 export function entornoDe({
   npc = null, jugador = null, catalogo = null,
   suceso = null, animar = null, programar = null, azar = null,
+  // El 60. `infomsg` NO es la consola de sucesos: es la ventana de arriba a la
+  // izquierda (`src/play/aviso.js`). Va aparte de `suceso` porque son dos
+  // sitios distintos de la pantalla, y hasta el 60 eran el mismo.
+  ventanaDeAviso = null,
+  // El 60. Abre el panel de la tienda. Devuelve `true` si lo ha abierto; sin
+  // ella —Node, el servidor— la oferta se dice por la consola y ya.
+  abrirTienda = null,
+  // El 44. `tiendas` es la lista GLOBAL por nombre (`CStore::m_gStores`), y va
+  // inyectada en vez de ser un módulo con estado suelto: si fuera suelta, dos
+  // pruebas se pisarían y dos partidas del mismo navegador compartirían
+  // inventario de vendedor.
+  tiendas = new Tiendas(), llamarEvento = null, apuntar = null,
+  // El 62. El trato con ESTE vendedor: `ocupado()` dice si ya está atendiendo
+  // a otro —lo que decide entre abrir y `_busy`, npcscript.cpp:875— y
+  // `abrir(retrollamada)` lo marca en los dos lados, como `CStore::Offer`
+  // (store.cpp:77-80). Quien no lo inyecte se queda como antes: un vendedor
+  // que atiende a todo el mundo, que es lo correcto cuando sólo hay uno.
+  trato = null,
+  // El 64. Adónde va un `helptip`. Se inyecta como todo lo que acaba en la
+  // pantalla; si no está, el comando se apunta como no soportado y nada más.
+  mandarConsejo = null,
+  // El 45. `entidades` es el registro nombre <-> asa (`src/play/entidades.js`) y
+  // `borrarDelMundo` lo que de verdad quita la cosa: se pasan los dos porque
+  // borrar es dos pasos, deshacer el asa y avisar a quien lleve esa entidad.
+  entidades = null, borrarDelMundo = null,
+  // El 81. `(asa) => Guion | null`: el guion de OTRO NPC, resuelto por el asa
+  // que devuelve `$get_by_name`. Lo pone quien monta la manada, porque esta
+  // clase sólo se conoce a sí misma. Sin él, `callexternal` a un vecino se
+  // apunta y no llega — que es lo que pasaba hasta el 81.
+  guionDeOtro = null,
+  // El 81. `() => Guion[]`: todos los que corren, para `callexternal all`.
+  todosLosGuiones = null,
+  // El 81, para `setmovedest` (lo pide la sesión que lleva ese experimento).
+  // `mandarADestino(destino, opciones)` es `SetMoveDest` y `animarAndando(n)`
+  // es `m_MoveAnim`. Quien no los inyecte se queda como hasta el 81: el
+  // comando se ejecuta, no se atranca y no llega a ninguna parte.
+  mandarADestino = null, animarAndando = null,
+  // El 81. SÓLO el rayo del `$cansee`: `(refObjetivo) => boolean`, que es
+  // el `FMVisible` de npcscript.cpp:1824. La aritmética del rango se queda
+  // en `ve`, con sus citas. Sin esto, `$cansee` da «0» y lo apunta.
+  lineaDeVision = null,
+  // El 81. **Las posiciones de este puerto están en METROS y los rangos de
+  // los guiones en UNIDADES del motor** (`RANGO_LOCAL = 300`, chat.js:131).
+  // Sin convertir, `$cansee(player,128)` daría que sí a 128 METROS, que es
+  // tres veces el pueblo entero — un alcance infinito y callado, que es la
+  // forma del 79. Va inyectado porque la escala la sabe el nivel.
+  unidadesPorMetro = 39.37,
 } = {}) {
   /** `RetrieveEntity(ref)`: aquí sólo hay dos entidades, el jugador y el NPC. */
   const esElJugador = (ref) => {
@@ -92,8 +154,32 @@ export function entornoDe({
     return Boolean(jugador) && (r === jugador.ref || r === "ent_lastspoke" || r === "player");
   };
   const personaje = () => jugador?.personaje ?? null;
+  /** «x y z» o «(x,y,z)» a tres números, que es como los guardan los guiones. */
+  const vector = (v) => {
+    const n = String(v ?? "").replace(/[()]/g, "").split(/[\s,]+/).filter(Boolean).map(Number);
+    return n.length >= 3 && n.every((x) => Number.isFinite(x)) ? n : null;
+  };
 
-  return {
+  /**
+   * El 81. Un salto de `callexternal`, con la guarda de `SALTOS_MAXIMOS`.
+   *
+   * Que el otro no tenga ese evento NO es un fallo —`CallScriptEvent` sobre un
+   * nombre que no existe no hace nada y no avisa—, pero sí se apunta: así se
+   * puede contar cuántas llamadas de los guiones caen en el vacío.
+   */
+  const conGuarda = (otro, evento, params, apunta) => {
+    if (saltos >= SALTOS_MAXIMOS) {
+      apuntar?.("callexternal", `${evento}: más de ${SALTOS_MAXIMOS} saltos encadenados`);
+      return;
+    }
+    saltos++;
+    let dicho = false;
+    try { dicho = Boolean(otro?.llamar(evento, params.map(String))); }
+    finally { saltos--; }
+    if (!dicho) apunta();
+  };
+
+  const entorno = {
     // `$item_exists(<target>,<item>)`, script.cpp:3097. Los distintivos
     // (`nohands`, `noworn`...) se leen pero aquí sólo hay manos y mochila.
     llevaObjeto(ref, clave, distintivos = "0") {
@@ -138,12 +224,18 @@ export function entornoDe({
     animar: (nombre, modo) => animar?.(nombre, modo),
 
     /**
-     * `infomsg <player|all> <title> <text>` — scriptcmds.cpp:4058. Es una
-     * ventana emergente con el título en rojo; aquí es una línea de la consola
-     * de sucesos, porque este puerto no tiene esa ventana y perder el aviso
-     * sería peor que enseñarlo en otro sitio.
+     * `infomsg <player|all> <title> <text>` — scriptcmds.cpp:4058. Una ventana
+     * emergente con el título en rojo, arriba a la izquierda.
+     *
+     * DESDE EL 60 va a esa ventana. Antes decía aquí que «este puerto no tiene
+     * esa ventana» y se imprimía como una línea verde de la consola de
+     * sucesos, abajo a la derecha. La ventana existe: `src/play/aviso.js`.
+     *
+     * `_aQuien` sigue sin usarse y sigue siendo correcto: con un solo jugador,
+     * `ent_me` y `all` acaban los dos en tu pantalla — `SendHUDMsgAll` recorre
+     * los jugadores y le llama a `SendHUDMsg` a cada uno (svglobals.cpp:346).
      */
-    aviso(_aQuien, titulo, texto) { suceso?.("bueno", `${titulo}${texto ? ` — ${texto}` : ""}`); },
+    aviso(_aQuien, titulo, texto) { ventanaDeAviso?.(titulo, texto); },
 
     /** `offer <target> gold <n>` — npcscript.cpp:680, `pMonster->GiveGold`. */
     darOro(ref, cuanto) {
@@ -177,12 +269,52 @@ export function entornoDe({
     registrarOpcion: () => {},
 
     /**
-     * `callexternal all <evento>` llama a TODAS las entidades con script
-     * (`CallScriptEventAll`, script.cpp:5893). Aquí no hay más guiones
-     * corriendo que el del NPC de delante, así que esto no llega a nadie y se
-     * apunta para que no parezca que sí.
+     * `callexternal <ref> <evento> [params]` — scriptcmds.cpp, `RetrieveEntity`
+     * y después `CallScriptEvent`; con `all`, `CallScriptEventAll`
+     * (script.cpp:5893).
+     *
+     * ── CORRECCIÓN DEL 81 ──────────────────────────────────────────────────
+     * Aquí decía «no hay más guiones corriendo que el del NPC de delante, así
+     * que esto no llega a nadie». **Era verdad cuando se escribió y dejó de
+     * serlo en el 79**, cuando `InteraccionesNpc` empezó a tener el guion de
+     * los 48 NPC de Edana para repartir lo que dice el jugador. Otra vez un
+     * diagnóstico correcto con fecha de caducidad y sin fecha, como el
+     * `catchspeech` del 79 — y además el 66 ya había arreglado este mismo
+     * `=> {}` en `guionjugador.js` y en `guionobjeto.js` y se dejó el tercero.
+     *
+     * Lo que destapó el hueco: la misión de la sidra de Edana es **entera**
+     * NPC→NPC (`callexternal $get_by_name(wench) cider2`). En los 2 884
+     * guiones hay **63 llamadas así en 27 ficheros**, más 111 `all` y 82
+     * `players`.
+     *
+     * Lo que NO llega, y se apunta en vez de fingirse: el jugador —su guion es
+     * `guionjugador.js` y no lo monta esta clase—, `players`, y cualquier asa
+     * que no sea la de un NPC con guion.
      */
-    llamarExterno: () => {},
+    llamarExterno(ref, nombre, params = []) {
+      const r = String(ref ?? "");
+      const evento = String(nombre ?? "");
+      const apunta = () => apuntar?.("callexternal", `${r || "<nada>"} ${evento}`);
+
+      // `CallScriptEventAll`: todas las entidades con guion. Aquí son los NPC
+      // montados; el jugador y los objetos van por otros dos entornos.
+      if (r === "all") {
+        const todos = todosLosGuiones?.() ?? null;
+        if (!todos?.length) { apunta(); return; }
+        for (const g of todos) conGuarda(g, evento, params, apunta);
+        return;
+      }
+      // `players` es el bucle sobre los clientes. Con el guion del jugador
+      // fuera de esta clase, no llega: se apunta.
+      if (r === "players" || esElJugador(r)) { apunta(); return; }
+
+      const otro = guionDeOtro?.(r) ?? null;
+      // `RetrieveEntity` devolviendo NULL: el motor no hace nada y no avisa.
+      // Aquí sí se apunta, porque un nombre que no resuelve es casi siempre un
+      // hueco nuestro y no del mapa.
+      if (!otro) { apunta(); return; }
+      conGuarda(otro, evento, params, apunta);
+    },
 
     /** `callevent <retardo> <evento>`: lo encola quien tenga reloj. */
     programar: (segundos, que) => programar?.(segundos, que),
@@ -193,23 +325,462 @@ export function entornoDe({
       switch (String(prop)) {
         case "isplayer": return esElJugador(ref) ? "1" : "0";
         case "exists": return esElJugador(ref) ? "1" : "0";
-        case "isalive": return esElJugador(ref) && (p?.vida ?? 0) > 0 ? "1" : "0";
+        case "alive": case "isalive": return esElJugador(ref) && (p?.vida ?? 0) > 0 ? "1" : "0";
         case "id": return esElJugador(ref) ? (jugador?.ref ?? "0") : "0";
         case "name": return esElJugador(ref) ? (p?.nombre ?? "0") : (npc?.nombre ?? "0");
         case "origin": return esElJugador(ref) ? (jugador?.origen ?? "0") : (npc?.origen ?? "0");
+
+        // ── el 46 ─────────────────────────────────────────────────────────
+        // `RETURN_FLOAT(pTarget->pev->health)` — scriptcmds.cpp:960.
+        case "hp": return esElJugador(ref) ? String(p?.vida ?? 0) : String(npc?.vida ?? 0);
+
+        /**
+         * `maxhp` — y aquí hay una que se lee al revés de como está:
+         * **la rama vive dentro de `else if (pMonster)`** (:1388-1391), o sea
+         * que `$get(<un jugador>,maxhp)` **no casa con nada** y sale por
+         * `return fSuccess ? "1" : "0"` valiendo **«0»**.
+         *
+         * No es teórico: `NPCs/base_storage.script:150-151` hace
+         *
+         *     setvard USE_FEE $get(PARAM1,maxhp)
+         *     multiply USE_FEE FEE_HP_RATIO
+         *
+         * con PARAM1 = el jugador. O sea que **la tarifa del guardarropa de
+         * Gate City es cero en el juego de verdad**, y siempre lo ha sido.
+         * Devolver aquí la vida máxima del personaje sería «arreglarlo» y
+         * cobrar un dinero que el original no cobra.
+         */
+        case "maxhp": return esElJugador(ref) ? "0" : String(npc?.vidaMax ?? 0);
+
+        /**
+         * `dist`/`range` y sus versiones en 2D — :1146-1165.
+         *
+         * `range` y `dist` son **lo mismo**, y las dos le restan la mitad de
+         * los anchos de los dos bichos cuando los dos son monstruos
+         * («MIB JAN2010_20 - range check take model widths into account»).
+         * Con un jugador delante no se resta nada, que es el caso de Gate
+         * City: el armero mira `$get(PARAM1,dist) <= 90`.
+         */
+        case "dist": case "range": case "dist2D": case "range2D": {
+          const a = vector(esElJugador(ref) ? jugador?.origen : npc?.origen);
+          const b = vector(npc?.origen);
+          if (!a || !b) return "0";
+          const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+          const plano = String(prop).endsWith("2D");
+          return String(Math.sqrt(dx * dx + dy * dy + (plano ? 0 : dz * dz)));
+        }
+
+        case "gold": return esElJugador(ref) ? String(p?.oro ?? 0) : "0";
+
+        /**
+         * `steamid` — :1232, `pPlayer->AuthID()`. Aquí no hay Steam y no lo
+         * habrá: este puerto no tiene cuentas. Vale «0», que es justo lo que
+         * devuelve el motor en un servidor local cuando no hay AuthID.
+         */
+        case "steamid": return "0";
+
         default: return "0";
       }
     },
 
-    /** `$dist(a,b)` en unidades del motor. Sin sitios, cero. */
-    distancia: () => 0,
-
-    /** `$get_token(<lista>,<n>)`: las listas de los scripts van por `;`. */
-    token(lista, n) { return String(lista ?? "").split(";")[n] ?? "0"; },
+    /**
+     * `$dist(a,b)` en unidades del motor — script.cpp:131.
+     *
+     * El 81. Los dos lados pueden ser un vector «(x,y,z)» o una entidad, y lo
+     * que se resuelve aquí es lo que esta clase sabe: un vector literal, el
+     * jugador y el propio NPC. **Una entidad cualquiera del mapa todavía no**,
+     * y por eso devuelve `0` y lo apunta en vez de inventarse un número — un
+     * cero callado en una distancia es un `if $dist(...) < 100` que se cumple
+     * siempre. (La resolución general es de `setmovedest`, que lleva la sesión
+     * de ese experimento; cuando esté, este getter se cuelga de ella.)
+     */
+    distancia(a, b) {
+      const sitio = (x) => {
+        const v = vector(x);
+        if (v) return v;
+        const o = entorno.propiedad(x, "origin");
+        return vector(o);
+      };
+      const p = sitio(a), q = sitio(b);
+      if (!p || !q) { apuntar?.("getter", `$dist(${a},${b})`); return 0; }
+      return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+    },
 
     // `RANDOM_LONG(a, b)`, los dos extremos incluidos. script.cpp:3554.
     azar: azar ?? ((a, b) => a + Math.floor(Math.random() * (b - a + 1))),
+
+    // ── EL 43: los siete ganchos de los comandos nuevos ────────────────────
+    //
+    // Cuatro de los siete **todavía no llegan a ninguna parte**, y eso va
+    // dicho aquí en vez de fingir que sí. Lo que cambia con el 43 es que el
+    // intérprete YA NO SE ATRANCA en ellos: antes, encontrarse un `roam` en
+    // mitad de una retrollamada abortaba la opción entera y el NPC no hacía
+    // nada. Ahora la opción se ejecuta hasta el final y lo que falta es el
+    // efecto, no la conversación. Es la diferencia entre 7 y 19 NPCs enteros.
+    //
+    // Cada uno dice dónde acaba hoy, que es la regla de «un ajuste no puede
+    // quedarse callado» aplicada a los comandos.
+
+    /** `RANDOM_FLOAT(a, b)`. script.cpp:3552. Comparte dado con `azar`. */
+    azarFlotante: (a, b) => a + (azar ? (azar(0, 1000000) / 1000000) : Math.random()) * (b - a),
+
+    /**
+     * `say`: SUENA, no escribe — son `.wav` con la boca abierta tantos
+     * segundos. LLEGA a la consola de sucesos y no al altavoz: el catálogo de
+     * voces de los NPC no está horneado (`npm run sonido` trae pasos y
+     * combate, no diálogo). Se anota para que se vea que el NPC habló.
+     */
+    decir(archivo, _cuanto) {
+      if (!archivo) return;          // `*` y `RND*` son sólo mover la boca
+      suceso?.("normal", `${npc?.nombre ?? "Someone"} speaks`);
+    },
+
+    /**
+     * `playsound` / `playrandomsound`: NO llega al altavoz — el catálogo de
+     * estos `.wav` no está horneado (`npm run sonido` trae pasos y combate, no
+     * los de los guiones). Se apunta el archivo para que se vea cuál pedía y
+     * con qué volumen, que es lo que el 46 vino a poder medir.
+     */
+    sonar(archivo, { volumen = null, corta = false } = {}) {
+      apuntar?.("sonido", `${archivo}${corta ? " (corta el canal)" : volumen === null ? "" : ` @${volumen}`}`);
+    },
+
+    /** `setprop`: NO llega a nada — las propiedades vivas del NPC no se tocan. */
+    ponerPropiedad() {},
+
+    /** `roam`: NO llega a nada — el paseo lo decide `src/play/paseo.js`. */
+    pasear() {},
+
+    /**
+     * `setmovedest` — `SetMoveDest`, npcscript.cpp:1611-1700.
+     *
+     * El 81: deja de ser un `=> {}`. Reenvía tal cual lo que le da el
+     * `case "setmovedest"` de `guion.js:1265-1274`: `null` para
+     * `setmovedest none`, y `{punto}` o `{entidad}` más
+     * `{proximidad, huir}` para el resto. **Quien no inyecte
+     * `mandarADestino` se queda como hasta el 81** — el comando se ejecuta,
+     * no atranca la conversación, y no llega a ninguna parte.
+     */
+    irA(destino, opciones) { mandarADestino?.(destino, opciones); },
+
+    /** `setmoveanim` — `m_MoveAnim`, npcscript.cpp:1471-1477. El 81: reenvía. */
+    animacionDeAndar(n) { animarAndando?.(n); },
+
+    /**
+     * **`$cansee(<objetivo>,<rango>)`** — npcscript.cpp:1754-1850. El 81.
+     *
+     * No estaba en `GETTERS`, y es la PRIMERA LÍNEA de media docena de
+     * bloques de Edana: `{ say_job / if cider_1 equals 0 / if $cansee(player,128)`.
+     * Al ser un `if` VIEJO, un getter sin soporte no se salta una línea:
+     * **abandona el bloque entero** (el 67). O sea que la misión de la sidra
+     * no podía empezar aunque todo lo demás estuviera bien.
+     *
+     * Cuatro rarezas del motor, y las cuatro se portan:
+     *
+     * 1. **`ClosestTarget = atof(Params[1])`** (:1761). `atof`, no `Number` —
+     *    la del 79. Y **sin rango es `-1`**, que su propia condición
+     *    (`ClosestTarget < 0 || ...`, :1841) convierte en «sin límite».
+     * 2. **La distancia es 3D**, y el mod se molesta en decirlo:
+     *    «*This is always going to use Length(), not Length2D()*» (:1829).
+     *    Va de CENTRO a CENTRO, no de ojo a ojo.
+     * 3. **Se le resta el tamaño del objetivo** si es un monstruo:
+     *    `m_Width/2`, o `sqrt((w/2)² + (h/2)²)` si vuela (:1835-1837).
+     * 4. **Deja un rastro que nadie espera**: `StoreEntity(pSighted,
+     *    ENT_LASTSEEN)` (:1843). Y eso NO es decorado — el `say_job` de
+     *    Sylphiel sigue con `setmovedest ent_lastseen 9999`, o sea que se
+     *    gira hacia quien acaba de ver con este getter.
+     *
+     * Y una quinta que **el nombre de la variable dice al revés**, así que
+     * va escrita aquí antes de que envejezca:
+     *
+     *     if (ClosestTarget < 0 || (flDistanceToTarget < ClosestTarget))
+     *     {   StoreEntity(pSighted, ENT_LASTSEEN);
+     *         ClosestTarget = flDistanceToTarget;   // se APRIETA
+     *         fFoundTarget = true;   }
+     *                                      npcscript.cpp:1838-1846
+     *
+     * `ClosestTarget` **no es un umbral fijo: se aprieta en cada vuelta**.
+     * O sea que `$cansee(player,128)` no es «¿hay alguien a menos de 128?»
+     * sino «recorre a los visibles y quédate con el más cercano», y cada
+     * uno que pasa le baja el listón al siguiente. Por lo tanto
+     * **`ent_lastseen` acaba siendo el visible MÁS CERCANO y no el último
+     * visto**, a pesar de cómo se llama. Con un jugador da igual; con dos
+     * en la taberna, Sylphiel se gira hacia el más cercano de los dos, y
+     * eso se mide con dos navegadores. Aquí sólo hay un candidato posible
+     * —el jugador—, así que el bucle no se recorre: **el apriete está
+     * documentado y no portado**, y se dice en vez de fingirlo.
+     *
+     * Lo que se inyecta es SÓLO el rayo (`lineaDeVision`, el `FMVisible` de
+     * :1824), porque el rayo vive en la física y aquí no hay física. La
+     * aritmética se queda aquí, con sus citas al lado: llevarla al rayo
+     * sería una segunda copia del `atof`, de la resta y del `ENT_LASTSEEN`,
+     * y dos copias son dos mundos (el 63).
+     *
+     * **Sin `lineaDeVision` no se finge que se ve**: se apunta y da «0». Lo
+     * que NO se porta y va dicho: la lista de enemigos (`m_hEnemyList`), que
+     * es lo que hace que `$cansee(enemy,...)` y `$cansee(ally,...)` tengan
+     * sentido; aquí sólo hay un objetivo posible, el jugador.
+     */
+    ve(nombre, rangoCrudo) {
+      const quien = String(nombre ?? "").toLowerCase();
+      // `atof` del motor, y la ausencia es -1: sin límite de distancia.
+      const rango = rangoCrudo === undefined || rangoCrudo === null || String(rangoCrudo).trim() === ""
+        ? -1 : numDe(rangoCrudo);
+      if (quien !== "player" && !esElJugador(quien)) {
+        apuntar?.("getter", `$cansee(${quien},…) — sólo el jugador`);
+        return "0";
+      }
+      const p = personaje();
+      /**
+       * ── LAS DOS SALIDAS QUE AQUÍ ERAN UNA, Y LA CALLADA COSTÓ CARA ────
+       *
+       * Esto era `if (!p || (p.vida ?? 0) <= 0) return "0";`, sin apuntar
+       * nada, y mezclaba dos cosas que no son la misma:
+       *
+       *   - **el objetivo está muerto**, que es la regla del motor
+       *     («if (pSighted->pev->deadflag != DEAD_NO) continue;», :1792) y
+       *     por lo tanto NO se apunta: es el juego funcionando;
+       *   - **no hay nadie atado a este guion**, que no es una regla sino
+       *     un hueco nuestro: el `jugador` lo rellena `pedirOpciones` al
+       *     abrir el menú, y quien pregunte por otro camino encuentra
+       *     `null`.
+       *
+       * Como las dos devolvían «0» en silencio, un `$cansee` que no se
+       * podía contestar se leía exactamente igual que uno contestado que
+       * no. Costó un diagnóstico entero **apuntando al archivo de otra
+       * sesión**, y lo cazó la sesión de al lado instrumentando su rayo
+       * para descubrir que su rayo no se llegaba a llamar. Es el cajón del
+       * 63 —«el guion pide algo que no tenemos»— con la agravante de que
+       * el apunte cuesta una línea.
+       */
+      if (!p) { apuntar?.("getter", "$cansee sin jugador atado al guion"); return "0"; }
+      if ((p.vida ?? 0) <= 0) return "0";                 // :1792, la regla
+      if (!lineaDeVision) { apuntar?.("getter", "$cansee sin rayo"); return "0"; }
+      if (!lineaDeVision(jugador?.ref ?? "player")) return "0";
+      // Sin rango declarado el motor no mide: ve y punto.
+      if (rango < 0) { entorno.ultimoVisto = jugador?.ref ?? "player"; return "1"; }
+      const a = vector(jugador?.origen), b = vector(npc?.origen);
+      // Una distancia que no se puede calcular NO pasa el umbral. El 79: un
+      // `NaN` colándose por un `<` fue dieciocho NPC saludando desde el otro
+      // extremo del mapa. Se pregunta con `Number.isFinite`.
+      if (!a || !b) { apuntar?.("getter", "$cansee sin sitios"); return "0"; }
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) * (unidadesPorMetro || 39.37);
+      if (!Number.isFinite(d)) { apuntar?.("getter", "$cansee con distancia no numérica"); return "0"; }
+      // El objetivo es el jugador, que no es un `CMSMonster`: no hay resta de
+      // tamaño. Con un NPC de objetivo habría que restar `m_Width/2` (:1835).
+      if (!(d < rango)) return "0";
+      // `StoreEntity(pSighted, ENT_LASTSEEN)` — :1843.
+      entorno.ultimoVisto = jugador?.ref ?? "player";
+      return "1";
+    },
+
+    // ── EL 44: LAS TIENDAS ─────────────────────────────────────────────────
+    //
+    // Éstas SÍ llegan: la tienda se crea, se llena con sus precios de verdad y
+    // se puede leer. Lo que no hay es el panel que la enseña, así que
+    // `ofrecerTienda` deja el resultado a mano —`ultimaOferta`— y avisa por la
+    // consola. `src/play/tienda.js` tiene las reglas y sus citas.
+    crearTienda(nombre) { tiendas.crear(nombre); },
+
+    anadirALaTienda(nombre, objeto, opciones) {
+      const t = tiendas.buscar(nombre);
+      if (!t) return;                        // `if (NewStore)` — :787
+      // EL CATÁLOGO ES UN `Map`, no `{ porId }` (60).
+      //
+      // Esta línea decía `catalogo?.porId?.get(objeto)`, y quien la llama le
+      // pasa **el `Map`**: `catalogo: catalogoDeObjetos?.porId ?? null`
+      // (`src/main.js`). Así que `catalogo.porId` era `undefined`, la ficha
+      // salía `null` siempre y **ninguna tienda del juego tenía un solo
+      // objeto** — en los dos mapas, desde el 44.
+      //
+      // Y no daba ningún error: caía en el `apuntar` de abajo, que es el
+      // cajón de «el guion pide algo que no tenemos», y ahí se confundía con
+      // los comandos que de verdad faltan. El 44 midió que el modelo funciona
+      // y funcionaba; lo que nadie midió es que alguien lo llenara.
+      //
+      // Es la fila del 59 en el apartado 4 otra vez: la prueba construye el
+      // argumento con la forma correcta y el llamador se equivoca. Por eso la
+      // de ahora (`test/juego_comercio60.test.mjs`) pasa un `Map` de verdad.
+      //
+      // El resto del archivo ya lo trataba como `Map` —`nombreVisibleDe`
+      // hace `catalogo?.get?.(clave)`—, o sea que la línea rara era ésta.
+      const ficha = catalogo?.get?.(objeto) ?? null;
+      // «non-existant item»: el motor se queja y NO añade nada (:820). Aquí se
+      // apunta donde se apunta todo lo que el guion pide y no tenemos.
+      if (!ficha) { apuntar?.("objeto de tienda", objeto); return; }
+      t.anadir(ficha, opciones);
+    },
+
+    quitarDeLaTienda(nombre, { todo = false, objeto = null, apagar = false } = {}) {
+      const t = tiendas.buscar(nombre);
+      if (!t) return;
+      if (apagar) { t.activa = false; return; }
+      if (todo) { t.vaciar(); return; }
+      if (objeto) t.quitar(objeto);
+    },
+
+    ofrecerTienda(nombre, { flags, retrollamada } = {}) {
+      const p = personaje();
+      const r = tiendas.ofrecer(nombre, {
+        flags: flagsDe(flags),
+        retrollamada,
+        objetosDelJugador: p?.objetos?.length ?? 0,
+        // `if (!HasConditions(MONSTER_TRADING))`, npcscript.cpp:875. Sin esto
+        // el parámetro estaba portado y nadie lo ponía nunca a `true`: la
+        // regla existía y no se ejecutaba.
+        comerciando: trato?.ocupado?.() ?? false,
+      });
+      entorno.ultimaOferta = r;
+      if (r.aviso) suceso?.("nopuedes", r.aviso);
+      else if (r.que === "abre") {
+        // El trato se marca ANTES de abrir el panel, como en el mod: `Offer`
+        // pone las condiciones y luego manda los mensajes (store.cpp:77-88).
+        trato?.abrir?.(retrollamada);
+        // EL 60: Y AHORA SE ABRE. Hasta aquí esto imprimía «The vendor offers
+        // N wares» por la consola, con este motivo escrito: «el panel de la
+        // tienda no está portado; enseñar QUÉ habría dentro es mejor que
+        // callarse». Ya está portado (`src/vgui/tienda.js`), así que se abre.
+        //
+        // `abrirTienda` se inyecta como todo lo que toca la pantalla: este
+        // archivo no conoce el DOM. Si nadie la ha puesto —una prueba de
+        // Node, el servidor— se sigue diciendo por la consola, que es mejor
+        // que perder el aviso.
+        const abierta = abrirTienda?.({
+          tienda: r.tienda, flags: r.flags,
+          vendedor: npc?.nombre ?? "The vendor",
+        });
+        if (!abierta) {
+          suceso?.("bueno", `${npc?.nombre ?? "The vendor"} offers ${r.tienda.objetos.length} wares`);
+        }
+      }
+      // La retrollamada la manda el motor con su sufijo ya puesto (:886-893).
+      if (r.evento) llamarEvento?.(r.evento);
+    },
+
+    // ── EL 45: `$get_by_name` Y `deleteent` ────────────────────────────────
+    //
+    // Éstos llegan **a las áreas de aparición y a nada más**, y eso es a
+    // propósito: es lo único con `targetname` que este puerto simula, y es
+    // exactamente lo que el alcalde señala. Sin `entidades` puesto, el getter
+    // devuelve «0» igual que en un mapa donde ese nombre no existe, que es lo
+    // que hace el motor y no una excusa.
+
+    /** `$get_by_name(<nombre>)` — script.cpp:1441. `netname` y luego `targetname`. */
+    porNombre: (nombre) => entidades?.porNombre(nombre) ?? null,
+
+    /**
+     * `deleteent`/`deleteme` — scriptcmds.cpp:2872.
+     *
+     * `deleteme` es el NPC borrándose a sí mismo y aquí no se hace: un NPC que
+     * desaparece de en medio de su propia conversación necesita que el menú
+     * abierto se cierre, y eso es del `GuionDeNpc`, no de aquí. Se apunta.
+     */
+    borrarEntidad(ref, { modo = "delayed", segundos = null } = {}) {
+      if (ref === null) { apuntar?.("comando", "deleteme"); return; }
+      // «Don't allow a crash by deleting players» — :2879.
+      if (esElJugador(ref)) return;
+      const ent = entidades?.recuperar(ref) ?? null;
+      // Un asa que no vale —caducada, o un nombre suelto que no es un asa— es
+      // `RetrieveEntity` devolviendo NULL: el motor no hace nada y no avisa.
+      if (!ent) return;
+      // `fade` es `SUB_FadeOut`: no borra. Aquí no hay a qué desvanecer todavía.
+      if (modo === "fade") { apuntar?.("comando", `deleteent ... fade${segundos === null ? "" : " <seg>"}`); return; }
+      // `delayed` es `DelayedRemove()` sobre una entidad con guion, y las
+      // nuestras no tienen. `remove` es `UTIL_Remove` y sí llega.
+      if (modo !== "remove") { apuntar?.("comando", "deleteent <ent>"); return; }
+      entidades.borrar(ref);
+      borrarDelMundo?.(ent.nombre, ent);
+    },
+
+    // ── EL 46: EL ANDAMIAJE DE MENÚ ────────────────────────────────────────
+    //
+    // Éstos llegan de verdad, y era la condición para hacerlos: el menú del
+    // vendedor y el del armero se construyen con `array.*` + `$get_arrayfind`
+    // y se quitan opciones con `menuitem.remove`, así que sin esto el menú que
+    // se ve es otro menú.
+
+    /**
+     * Las listas de OTRA entidad. Hoy **ninguna**: un guion que pase un asa
+     * delante de `array.add` se encuentra con que no hay nadie más con listas,
+     * y el motor en ese caso usa las suyas — que es lo mismo que devolver
+     * `null` aquí. Ver `scriptcmds.cpp:1973`.
+     */
+    listasDe: () => null,
+
+    /** Lo pone el propio `GuionDeNpc`, igual que `registrarOpcion`. */
+    quitarOpcion: () => {},
+
+    /**
+     * `menu.open <jugador>`: el NPC abre su menú sin que le pulses. Aquí sólo
+     * se anota que lo pidió — el panel lo abre la interfaz cuando la pulsas y
+     * no hay camino de vuelta desde el guion hasta ella, que sería lo mismo
+     * que el panel de la tienda del 44.
+     */
+    abrirMenu(aQuien) {
+      if (!esElJugador(aQuien)) return;
+      // Y la guarda del motor, con su silencio incluido: con la mochila llena
+      // **no se abre y no se dice por qué** (npcscript.cpp:1026-1033, el aviso
+      // está comentado en el original).
+      if ((personaje()?.objetos?.length ?? 0) >= 50) return;
+      entorno.menuPedido = true;
+    },
+
+    /**
+     * `catchspeech <evento> <palabras...>`: qué dispara qué al hablarle por el
+     * chat. Se guardan en `entorno.frases` desde el 43.
+     *
+     * ── CORRECCIÓN DEL 79 ────────────────────────────────────────────────
+     *
+     * Aquí ponía «**este puerto no tiene chat de texto**, así que nada las
+     * dispara todavía». La primera mitad dejó de ser verdad en el **61**, con
+     * los tres canales del chat, y nadie volvió a leer esta línea; la segunda
+     * siguió siendo verdad **treinta y seis experimentos** por eso mismo. Es
+     * exactamente el caso del 64, donde `helptip` y su ventana se esperaban el
+     * uno al otro con un comentario diciendo que la ventana no existía.
+     *
+     * Ahora las dispara `GuionDeNpc.oir`, y el camino entero —quién oye, a qué
+     * distancia y en qué orden— está en `src/play/oir.js`.
+     */
+    escuchar(evento, palabras) { entorno.frases.push({ evento, palabras }); },
+
+    /** Las frases que el NPC escucha. `m_Phrases`, npcscript.cpp:702. */
+    frases: [],
+
+    /**
+     * Los seis mensajes de colores. `ScriptCmd_Message`, scriptcmds.cpp:4243.
+     * Van a la consola de sucesos con el tipo que más se le parece; el juego
+     * los pinta con el color que dice su nombre y aquí hay tres tipos, no
+     * seis, así que se agrupan y se dice cómo.
+     */
+    mensajeAlJugador(aQuien, texto, cual) {
+      if (!esElJugador(aQuien)) return;
+      // `consolemsg` va a la consola del jugador, que aquí no existe; el resto
+      // al HUD de sucesos. Verde es «has ganado algo» (`bueno`), rojo y gris
+      // son «no puedes», y los demás normales.
+      const tipo = cual === "gplayermessage" ? "bueno"
+        : (cual === "rplayermessage" || cual === "dplayermessage") ? "nopuedes"
+          : "normal";
+      suceso?.(tipo, texto);
+    },
+
+    /**
+     * `helptip <player|all> <tipname> <title> <text...>`: el aviso de una sola
+     * vez.
+     *
+     * EL 64: **ya llega**. Hasta aquí decía «NO llega — la ventana de consejos
+     * no está portada», y la ventana SÍ estaba portada desde el 60: es la pila
+     * de ayuda de `src/juego/mensajes.js`, arriba a la derecha y con el título
+     * verde. Lo único que faltaba era esta línea. Quien no inyecte `consejo`
+     * se queda como antes, apuntándolo como no soportado.
+     */
+    consejo(params) {
+      if (!mandarConsejo) { apuntar?.("consejo", String(params?.[1] ?? "(sin clave)")); return; }
+      // `all` va a todos y un nombre va a uno: scriptcmds.cpp:3612-3627.
+      if (!esElJugador(params?.[0]) && String(params?.[0]) !== "all") return;
+      mandarConsejo(params);
+    },
   };
+  return entorno;
 }
 
 /**
@@ -227,8 +798,50 @@ export class GuionDeNpc {
    * @param ficha  la entrada de `build/gatecity/guiones.json` para este script.
    * @param npc    `{ nombre, origen }`, para lo que el NPC dice y dónde está.
    */
-  constructor({ ficha, npc = null, catalogo = null, suceso = null, animar = null, programar = null, azar = null }) {
+  constructor({ ficha, npc = null, catalogo = null, suceso = null, animar = null, programar = null, azar = null,
+    // El 60: `infomsg` va a la ventana de arriba a la izquierda y no a la
+    // consola, y `npcstore.offer` abre un panel. Ver `entornoDe`.
+    ventanaDeAviso = null, abrirTienda = null,
+    // El 44: la lista de tiendas se comparte entre TODOS los NPC de la
+    // partida, porque en el motor es estática y una tienda se busca por
+    // nombre. Si cada NPC tuviera la suya, dos vendedores que usaran el mismo
+    // `STORE_NAME` dejarían de pisarse — y en el juego SÍ se pisan.
+    tiendas = undefined,
+    // El 62: el trato con ESTE vendedor. Va aquí porque `entornoDe` no se
+    // construye desde fuera: quien monta un NPC monta un `GuionDeNpc`, y lo
+    // que esta clase no reenvíe se queda en su valor por omisión sin que nadie
+    // lo note. Pasó: `trato` estaba escrito, probado y citado en `entornoDe`, y
+    // esta línea no existía, así que `comerciando` era `false` SIEMPRE y
+    // `trato.abrir` no se llamaba NUNCA. Ver el apartado 4 de CLAUDE.md.
+    trato = null,
+    // El 45: el registro de nombres del mapa y cómo se quita algo de él. Es
+    // compartido por todos los NPC, como las tiendas y por el mismo motivo.
+    entidades = null, borrarDelMundo = null,
+    // El 79: `(texto, {desde}) => ...`, lo que pasa cuando habla EL JUGADOR.
+    // Es de quien monta los NPC, porque hay que recorrer a los de alrededor y
+    // esta clase no sabe dónde está nadie. Sin él, una opción `say` se apunta
+    // como no soportada en vez de hacer como que habla.
+    hablaElJugador = null,
+    // El 81: el cableado entre NPC (`callexternal` a un vecino) y los dos
+    // ganchos de `setmovedest`. Van reenviados DESDE AQUÍ a propósito: es
+    // exactamente la línea que faltó con `trato` en el 62 y en el 63, y sin
+    // ella el gancho vive a `null` en todas las partidas del juego con sus
+    // pruebas en verde. Ver el apartado 4 de CLAUDE.md.
+    guionDeOtro = null, todosLosGuiones = null,
+    mandarADestino = null, animarAndando = null,
+    // El 81: el rayo del `$cansee`. Ver `ve` en `entornoDe`.
+    lineaDeVision = null, unidadesPorMetro = 39.37,
+    // El 81. De dónde sale el sitio del jugador cuando NADIE ha abierto el
+    // menú: hablando por el chat, `oir` no trae posición, y sin ella
+    // `$cansee` no puede medir y dice que no. Es el agujero que destapó la
+    // sonda del 81 con la misión bien.
+    sitioDelJugador = null,
+    // El 81/82: los cuatro de `game_postspawn`, tal como los hornea el 82:
+    // `{titulo, dmgmulti, hpmulti, params}`, los cuatro en cadena. Sin esto
+    // el evento no se llama, que es como estaba.
+    nacer = null }) {
     this.npc = npc;
+    this.hablaElJugador = hablaElJugador;
     this.catalogo = catalogo;
     this.opciones = [];
     this.jugador = null;
@@ -237,22 +850,108 @@ export class GuionDeNpc {
     // llamada y otra: se le da un hueco que este objeto rellena.
     const dueño = this;
     this.entorno = entornoDe({
-      npc, catalogo, suceso, animar, programar, azar,
+      npc, catalogo, suceso, animar, programar, azar, tiendas, entidades, borrarDelMundo,
+      ventanaDeAviso, abrirTienda, trato,
+      guionDeOtro, todosLosGuiones, mandarADestino, animarAndando, lineaDeVision, unidadesPorMetro,
+      // Las retrollamadas de la tienda (`<cb>_success` y compañía) son eventos
+      // del propio guion, así que vuelven por aquí.
+      llamarEvento: (nombre) => dueño.guion?.llamar(nombre, []),
+      apuntar: (tipo, nombre) => dueño.guion?.anotarNoSoportado(tipo, nombre),
       jugador: {
         get ref() { return dueño.jugador?.ref ?? "player"; },
         get personaje() { return dueño.jugador?.personaje ?? null; },
-        get origen() { return dueño.jugador?.origen ?? "0"; },
+        get origen() { return dueño.jugador?.origen ?? sitioDelJugador?.() ?? "0"; },
       },
     });
     this.entorno.registrarOpcion = (op) => dueño.anotar(op);
+    // `menuitem.remove` — npcscript.cpp:1003. Por ID y **todas** las que
+    // coincidan, que es lo que dice el comentario del motor.
+    this.entorno.quitarOpcion = (id) => dueño.quitar(id);
     this.guion = new Guion({
       eventos: ficha?.eventos ?? [],
       preload: ficha?.preload ?? [],
       entorno: this.entorno,
       nombre: npc?.script ?? "",
     });
-    /** `game_spawn` pone los `setvard` de partida del NPC. */
+    // ── EL BLOQUE SIN NOMBRE SE EJECUTA ENTERO, Y ANTES (60) ─────────────
+    //
+    // Un `{ ... }` sin nombre de evento no es sólo una lista de constantes:
+    // el motor lo registra como un evento **programado para ya**.
+    //
+    //     if (Name.len()) Event.Name = Name;
+    //     else            Event.fNextExecutionTime = 0;
+    //                                             script.cpp:5198-5202
+    //
+    // O sea que corre en el primer `Think`, con el intérprete entero detrás.
+    // Aquí sólo se leían sus `const` y `setvar` (el `preload`), y eso deja
+    // fuera el modismo con el que las plantillas ponen sus valores por
+    // omisión:
+    //
+    //     if( STORE_BUYMENU equals 'STORE_BUYMENU' ) setvard STORE_BUYMENU 1
+    //                              monsters/base_npc_vendor.script:27
+    //
+    // «una variable que resuelve a su propio nombre no existe» — el mismo
+    // `isnot 'X'` del guion del jugador que ya estaba portado en el 47. Sin
+    // ejecutarlo, `STORE_BUYMENU` se quedaba vacío y **todos los vendedores
+    // ofrecían «2. Sell» y ningún «1. Buy»**, que es como se encontró.
+    //
+    // Va ANTES de `game_spawn` porque el motor lo programa al cargar y
+    // `game_spawn` llega con la entidad, y porque los valores por omisión
+    // tienen que estar puestos antes de que nadie los lea.
+    this.guion.llamar("", []);
+    /**
+     * Los DOS eventos de nacer, en el orden del motor:
+     *
+     *     CallScriptEvent("spawn");      //old
+     *     CallScriptEvent("game_spawn"); //not called by players
+     *                                            global.cpp:435-437
+     *
+     * El 81: `spawn` —el viejo— faltaba. No se notaba porque hasta el 81
+     * **ningún bloque con `eventname` tenía nombre**, así que corría igual
+     * como bloque anónimo; en cuanto la forma larga empezó a funcionar, los
+     * dos guiones de Edana que lo usan (`urdauf`, `sumdale`) se quedaron sin
+     * nacer. Un arreglo puede dejar al descubierto lo que tapaba.
+     *
+     * `npc_spawn` NO se llama desde aquí y es correcto: lo llama el guion,
+     * con `callevent npc_spawn` dentro del `game_spawn` de `base_npc`
+     * (monsters/base_npc.script:24).
+     */
+    this.guion.llamar("spawn", []);
     this.guion.llamar("game_spawn", []);
+    /**
+     * **`game_postspawn`, y sus cuatro parámetros en ORDEN** — el 81, con el
+     * horneado del 82.
+     *
+     *     Parameters.add(m_title);                      // :285 -> PARAM1
+     *     Parameters.add(FloatToString(m_DMGMulti));    // :286 -> PARAM2
+     *     Parameters.add(FloatToString(m_HPMulti));     // :287 -> PARAM3
+     *     Parameters.add(m_addparams);                  // :288 -> PARAM4
+     *     CallScriptEvent("game_postspawn", &Parameters);  // :290
+     *                                      msmonsterserver.cpp:284-290
+     *
+     * Y el guion lo confirma por su cuenta: «PARAM1 = (name|default),
+     * PARAM2 = DmgMulti, PARAM3 = HPMulti, PARAM4 = pass_params»
+     * (monsters/base_self_adjust.script:12). O sea que **`params` es el
+     * ÚLTIMO**, y es el canal que el 78 dejó apuntado como «sin portar»:
+     * resulta que no estaba sin portar, es que no se podía cargar.
+     *
+     * Los valores de reposo son del motor y son cadenas CONCRETAS —título
+     * vacío es `"default"` y params vacío es `"none"` (:273-280)—, no `null`
+     * ni `""`. Importa: el guion pregunta `if ( PARAM4 isnot 'none' )`
+     * (:45), y con `""` esa condición es cierta y entrarían al reparto las
+     * 6 880 criaturas del juego con una lista vacía. Por eso, sin horneado,
+     * aquí se manda `none` y no se omite la llamada.
+     *
+     * Los multiplicadores llegan con dos decimales porque el motor los pasa
+     * por `UTIL_VarArgs("%.2f", a)` (sharedutil.h:49): el guion lee `"1.00"`
+     * y no `"1"`, y «limpiarlo» rompería cualquier `equals`.
+     */
+    this.guion.llamar("game_postspawn", [
+      String(nacer?.titulo ?? "default"),
+      String(nacer?.dmgmulti ?? "1.00"),
+      String(nacer?.hpmulti ?? "1.00"),
+      String(nacer?.params ?? "none"),
+    ]);
   }
 
   /** `menuitem.register` — npcscript.cpp:940, con su orden por prioridad. */
@@ -268,6 +967,20 @@ export class GuionDeNpc {
   }
 
   /**
+   * `menuitem.remove <id>` — npcscript.cpp:1003-1013.
+   *
+   * Por **ID**, no por título, y **todas** las que coincidan: el bucle del
+   * motor es `Menuoptions.erase(i--)` y lo comenta —«Erase _all_ with this
+   * name»—. Quitar sólo la primera dejaría medio menú puesto, que es
+   * exactamente lo que hace `base_storage` al cambiar de pantalla.
+   */
+  quitar(id) {
+    const antes = this.opciones.length;
+    this.opciones = this.opciones.filter((o) => String(o.id) !== String(id));
+    return antes - this.opciones.length;
+  }
+
+  /**
    * Lo que el servidor contesta a `getmenuoptions`: se ejecuta el evento y se
    * devuelve lo que haya quedado registrado. msmonsterserver.cpp:2884-2911.
    */
@@ -277,14 +990,38 @@ export class GuionDeNpc {
     // y a `NULL` después (:2893): fuera del evento, `menuitem.register` no hace
     // nada. Aquí eso es vaciar la lista antes de cada pregunta.
     this.opciones = [];
+    this.entorno.menuPedido = false;
     this.guion.llamar("game_menu_getoptions", [ref]);
     return this.opciones;
+  }
+
+  /**
+   * `CallScriptEvent(<nombre>)` a secas, para el `ms_npcscript` — el 67.
+   *
+   *     pMonster->CallScriptEvent(STRING(m_sEventName));   npcact.cpp:203
+   *
+   * **SIN PARÁMETROS, y no es un olvido:** el motor no le pasa ninguno, ni el
+   * jugador que disparó la escena. Los eventos que hay detrás de esto en Edana
+   * —`bookfound`, `cider2`, `evidence_found`, `trig_boarsdead`— están escritos
+   * para eso y usan las variables del propio NPC o las globales del juego; el
+   * que pida un jugador se encontrará su `PARAM1` sin poner, igual que en el
+   * original. Pasarle el jugador «para que funcione» sería inventarse otro
+   * Master Sword.
+   *
+   * Va aparte de `pedirOpciones` y de `elegir` porque no toca la lista de
+   * opciones ni el contexto del jugador: el mapa está dando una orden, no hay
+   * nadie hablando.
+   */
+  llamar(evento, params = []) {
+    return this.guion.llamar(String(evento), params.map(String));
   }
 
   /** `CMSMonster::UseMenuOption(pPlayer, Option)`. */
   elegir(indice, { personaje, ref = "player" } = {}) {
     this.jugador = { ...(this.jugador ?? {}), personaje, ref };
     const guion = this.guion;
+    const dueñoDelMenu = this;
+    const hablaElJugador = this.hablaElJugador;
     return usarOpcion({
       opciones: this.opciones,
       indice,
@@ -293,12 +1030,97 @@ export class GuionDeNpc {
       nombreVisible: (clave, cuantos) => nombreVisibleDe(this.catalogo, clave, cuantos),
       npc: {
         llamar: (evento, params) => guion.llamar(evento, params),
-        // `pPlayer->Speak(...)`: en `MOT_SAY` habla EL JUGADOR. :2937.
-        hablarJugador: (texto) => this.entorno.hablar(texto),
+        /**
+         * `pPlayer->Speak(MenuOption.Data, SPEECH_LOCAL)` — :2937.
+         *
+         * ── LO QUE ESTO HACÍA MAL, Y SON DOS COSAS (79) ─────────────────
+         *
+         * Llamaba a `this.entorno.hablar`, que es el `saytext` **del NPC**.
+         * Así que elegir «Say Hello» en el menú de Edrin imprimía
+         *
+         *     Edrin, Captain of the Guard says,  "Hello"
+         *
+         * —las palabras del jugador bajo el nombre del capitán— y, lo que es
+         * peor, **no las oía nadie**: una opción `say` sin retrollamada, que
+         * es lo que son casi todas, no hacía absolutamente nada.
+         *
+         * Habla el jugador, y hablar es llegar a los oídos de alrededor. Esta
+         * clase no sabe dónde está nadie, así que el gancho se inyecta: quien
+         * monta los NPC es quien puede recorrerlos. Sin inyectarlo se apunta
+         * como no soportado en vez de quedarse callado — un `=> {}` de relleno
+         * en un gancho es donde el 66 encontró viviendo una regla muerta.
+         */
+        hablarJugador: (texto) => {
+          if (hablaElJugador) return hablaElJugador(texto, { desde: dueñoDelMenu });
+          dueñoDelMenu.guion?.anotarNoSoportado?.("say", "sin nadie que oiga");
+          return null;
+        },
         // `SendEventMsg(HUDEVENT_UNABLE, ...)`: el gris del «no puedes».
         avisar: (tipo, texto) => this.suceso?.(tipo, texto),
       },
     });
+  }
+
+  /**
+   * **ESTE NPC OYE HABLAR A UN JUGADOR** — experimento 79.
+   *
+   * Las dos puertas de `CMSMonster::Speak`, en su orden y con su cita:
+   *
+   *     //MiB DEC2007a
+   *     if (SpeechType == SPEECH_LOCAL && IsPlayer() && pEnt->IsMSMonster())
+   *     {   StoreEntity(this, ENT_LASTSPOKE);
+   *         Params.add(strutil::stripBadChars(pszSentence));
+   *         Params.add(EntToString(this));
+   *         ((CMSMonster*)pEnt)->CallScriptEvent("game_heardtext", &Params); }
+   *
+   *     //This has to be called after the text msgs are sent out
+   *     if (SpeechType == SPEECH_LOCAL && IsPlayer() && pEnt->IsMSMonster())
+   *         ((CMSMonster*)pEnt)->HearPhrase(this, pszSentence);
+   *                                       msmonsterserver.cpp:1729-1744
+   *
+   * `game_heardtext` le llega a **todos** los de alrededor, tengan frases o
+   * no; `HearPhrase` sólo dispara en el que tenga una que encaje. Son dos
+   * mecanismos y no uno: un guion puede escuchar todo lo que se dice sin
+   * declarar una sola palabra — lo usa `base_chat_array` para sus
+   * conversaciones.
+   *
+   * Quién está en rango y si está vivo lo decide quien llama: aquí no hay
+   * geometría. Ver `alcanceDeVoz` en `src/play/oir.js`.
+   *
+   * @param texto  lo que ha dicho el jugador.
+   * @param quien  su referencia de entidad, para `ent_lastspoke` y `PARAM2`.
+   * @returns      `{heardtext, evento, palabra, ratio}` — qué ha pasado, para
+   *               que una sonda pueda distinguir «no me oyó» de «me oyó y no
+   *               tenía nada que decir».
+   */
+  oir(texto, { quien = "player", personaje = null, ref = null } = {}) {
+    // EL ORDEN IMPORTA: `stripBadChars` limpia el original, así que las dos
+    // puertas ven el texto YA limpio. Ver `limpiarTexto` en `oir.js`.
+    const dicho = limpiarTexto(String(texto ?? ""));
+    const bitacora = { heardtext: false, evento: null, palabra: null, ratio: 0 };
+    if (!dicho) return bitacora;
+
+    // `StoreEntity(this, ENT_LASTSPOKE)`: quién fue el último que le habló.
+    // Aquí no hay nada que guardar en un registro aparte, porque `esElJugador`
+    // resuelve `ent_lastspoke` contra el jugador en curso desde el 45
+    // (`npcguion.js`, la lista de referencias) — y el jugador en curso es
+    // justo el que acaba de hablar. Lo que sí hay que hacer es apuntarlo, que
+    // es lo que le dice al guion de quién son los `$get(...)` de ahora.
+    this.jugador = { ...(this.jugador ?? {}), personaje, ref: ref ?? quien };
+
+    // PRIMERO el `game_heardtext`, con sus dos parámetros y en su orden.
+    this.guion.llamar("game_heardtext", [dicho, quien]);
+    bitacora.heardtext = true;
+
+    // Y DESPUÉS la frase, que es lo que el mod deja dicho con un comentario.
+    const r = oirFrase(this.entorno.frases, dicho);
+    if (!r) return bitacora;
+    Object.assign(bitacora, { evento: r.evento, palabra: r.palabra, ratio: r.ratio });
+    // `CallScriptEvent(BestPhrase->ScriptEvent)` — y **sin parámetros**, que
+    // es por lo que `sumdale.script` comprueba `if ( PARAM1 equals 'PARAM1' )`
+    // para saber si le han hablado o si le ha llamado otro guion.
+    this.guion.llamar(r.evento, []);
+    return bitacora;
   }
 
   /** Lo que el guion se ha encontrado y no sabe hacer. Para la sonda. */

@@ -359,6 +359,63 @@ export function puedeCorrer({
 }
 
 /**
+ * LO QUE EL JUEGO TE DICE AL EMPEZAR Y AL DEJAR DE TROTAR — el 63.
+ *
+ * `DoSprint` no sólo decide: **habla**, y por la consola de sucesos. Son cinco
+ * frases y cada una tiene su motivo, que es lo que las hace útiles: enterarte
+ * de que has dejado de correr porque te has quedado sin aguante no es lo mismo
+ * que enterarte de que has chocado.
+ *
+ *     SendEventMsg("You break into a jog.");                        :343
+ *     SendEventMsg("You slow down and begin walking casually.");    :386
+ *     SendEventMsg(HUDEVENT_UNABLE, "You are too exhausted to run.");          :348
+ *     SendEventMsg(HUDEVENT_UNABLE, "You are too exhausted to continue running."); :357
+ *     SendEventMsg(HUDEVENT_UNABLE, "You lose your running speed."); :373
+ *                                                        clplayer.cpp
+ *
+ * El motivo de parar se deduce **con las mismas condiciones que `puedeCorrer`
+ * y en el mismo orden que el mod**, para que las dos no puedan discrepar: si
+ * una dice «ya no corres» y la otra «porque te has cansado» cuando en realidad
+ * chocaste, el aviso miente. Por eso esto vive al lado y toma los mismos
+ * argumentos.
+ *
+ * `ms_sprint_verbose` («0» calla todo, «1» sólo los `UNABLE», «2» también el
+ * trote) existe en la rama nueva del mod (clplayer.cpp:234-266) y **no** en la
+ * vieja, que dice las cinco siempre (:343-387). Se porta el valor con el que
+ * se ven en el juego, que es el de la captura: las cinco.
+ *
+ * @returns {{tipo:"normal"|"nopuedes", texto:string}|null}
+ */
+export const SPRINT_VERBOSE = "2";
+
+export function avisoDeCarrera({
+  corriendoAntes = false, corriendoAhora = false, pulsaCorrer = false,
+  adelante = 0, aguante = 0, agachado = false, atacando = false,
+  rapidez = 0, rapidezAnterior = 0, verbose = SPRINT_VERBOSE,
+} = {}) {
+  if (verbose === "0") return null;
+  const trote = verbose === "2";
+  // ARRANCAR.
+  if (!corriendoAntes) {
+    if (corriendoAhora) return trote ? { tipo: "normal", texto: "You break into a jog." } : null;
+    // Se pidió correr hacia delante y no arrancó: sólo hay un motivo posible
+    // que el mod cuente, y es el aguante (`Stamina <= 1`).
+    if (pulsaCorrer && adelante > 0 && !agachado && !atacando && aguante <= 1) {
+      return { tipo: "nopuedes", texto: "You are too exhausted to run." };
+    }
+    return null;
+  }
+  // PARAR, y en el orden del mod: primero el aguante, luego el frenazo, y
+  // soltar adelante el último — porque soltar es lo normal y lo demás no.
+  if (corriendoAhora) return null;
+  if (aguante <= 0) return { tipo: "nopuedes", texto: "You are too exhausted to continue running." };
+  if (agachado || atacando || rapidez < rapidezAnterior - 50) {
+    return { tipo: "nopuedes", texto: "You lose your running speed." };
+  }
+  return trote ? { tipo: "normal", texto: "You slow down and begin walking casually." } : null;
+}
+
+/**
  * Un paso completo del modelo de velocidad, en unidades y segundos.
  *
  * Devuelve **dos cosas, y hacen falta las dos**:

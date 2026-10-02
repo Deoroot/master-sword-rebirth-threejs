@@ -71,6 +71,8 @@
 // Para que no vuelva a pasar, un ajuste encendido tiene que decir DÓNDE se
 // aplica, en `aplica`, y hay una prueba que exige una de las dos cosas: o
 // `porQueNo`, o `aplica`. Un ajuste no puede estar callado.
+import { MAPAS_PORTADOS } from "./mapa.js";
+
 
 /** Las dos pestañas de la ventana, en el orden de la captura. */
 export const PESTANAS = ["Server", "Game"];
@@ -103,6 +105,14 @@ export const AJUSTES = [
     // se dice aquí para que nadie lo lea como una elección que no es: lo que
     // se comprueba es que **«Start» abre el mapa que resuelve la fila**, no
     // que haya dos destinos. El día que entre un segundo mapa, esto ya está.
+    //
+    // CORRECCIÓN DEL 50: ese día llegó, y el «ya está» era cierto — no hubo
+    // que tocar ni esta fila ni `mapaElegido()`. Lo que sí cambió de golpe es
+    // que **`< Random Map >` sortea de verdad**: con dos portados, entrar sin
+    // tocar la fila lleva a Gate City o a Edana a cara o cruz. Eso es lo que
+    // hace el original, así que se queda; lo que no puede quedarse es una
+    // sonda que exija un nombre concreto después de no elegir ninguno, y
+    // `sonda:arranque36` elegía. Ahora elige a mano antes de «Start».
     aplica: "src/main.js, el «Start» de alEmpezar: mapaElegido(valores.mapa)",
   },
 
@@ -124,7 +134,27 @@ export const AJUSTES = [
     pestana: "Server", clave: "pantallaCompleta", tipo: "casilla",
     etiqueta: "Play in full screen (web port only — lets the game keep Ctrl+W)",
     pordefecto: true, nuestra: true,
-    aplica: "src/main.js, el «Start» de alEmpezar: atraparTeclado(document.documentElement)",
+    // EL 73: **no sale en la cáscara de escritorio**, y es la propia etiqueta la
+    // que lo dice desde que se escribió — «web port only».
+    //
+    // Esta fila nunca fue una preferencia: era un APAÑO contra un límite del
+    // navegador, que sólo concede el teclado dentro de un gesto y en pantalla
+    // completa. El 72 quitó el límite con `Menu.setApplicationMenu(null)`, así
+    // que en escritorio el juego ya tiene Ctrl+W y F1–F12 sin pedir nada, y
+    // ofrecer la casilla sería ofrecer la cura de una enfermedad que no hay.
+    //
+    // No se borra porque el port **también corre en un navegador** —ahí es donde
+    // corren las sondas— y allí sigue siendo lo único que hace que agacharse y
+    // avanzar no cierre la pestaña. Ver `doc/NAVEGADOR_35.md` §2.
+    soloEnNavegador: true,
+    // EL LÍMITE DEL 50, dicho aquí y no sólo en el código: si «Start» cambia
+    // de mapa, la página se recarga —es el `CL_Disconnect()` + `Host_Map()`
+    // del motor— y la recarga se lleva por delante la pantalla completa, que
+    // el navegador sólo concede dentro del clic. Se avisa por consola y se
+    // entra sin ella. Entrar al mapa que ya está cargado no recarga y sí la
+    // consigue.
+    aplica: "src/main.js, el «Start» de alEmpezar: atraparTeclado(document.documentElement)" +
+      " — salvo si «Start» cambia de mapa, que recarga y pierde el gesto",
   },
 
   // ── Game ────────────────────────────────────────────────────────────────
@@ -146,8 +176,8 @@ export const AJUSTES = [
     // partida es de quien la sirve: `Partida.nombre` es lo que sale en la
     // columna «Servers» de la pestaña Lan (`src/vgui2/servidores.js:45`), y esa
     // partida la levanta `npm run servidor`, no este diálogo.
-    porQueNo: "the game «Start» opens is local to this tab; the name belongs to " +
-      "whoever serves a game, and that is `npm run servidor`, another process.",
+    porQueNo: "the game «Start» opens is local to this process; the name belongs " +
+      "to whoever serves a game, and that is `npm run servidor`, another one.",
   },
   {
     pestana: "Game", clave: "maxJugadores", cvar: "maxplayers", tipo: "numero",
@@ -198,7 +228,7 @@ export const AJUSTES = [
   {
     pestana: "Game", clave: "salirAlReiniciar", tipo: "casilla",
     etiqueta: "Quit server on reset", pordefecto: false,
-    porQueNo: "a browser tab cannot close itself, same as «Quit» in the main menu.",
+    porQueNo: "there is no server process to quit: «Start» opens a local game, not a server.",
   },
   {
     pestana: "Game", clave: "guardarPersonajes", tipo: "desplegable",
@@ -224,8 +254,19 @@ export const AJUSTES = [
   },
 ];
 
-export function deLaPestana(nombre) {
-  return AJUSTES.filter((a) => a.pestana === nombre);
+/**
+ * Los de una pestaña, en orden.
+ *
+ * `enEscritorio` esconde los que llevan `soloEnNavegador`. Esconder una fila es
+ * justo lo que esta ventana NO hace con los apagados —se ven y dicen por qué—,
+ * y la diferencia es real: un apagado es trabajo que falta, y esto es un apaño
+ * que **ya no tiene problema que resolver**. Enseñarlo apagado con el motivo
+ * «esto es de la versión web» sería contarle al jugador de escritorio una
+ * historia que no es la suya.
+ */
+export function deLaPestana(nombre, { enEscritorio = false } = {}) {
+  return AJUSTES.filter((a) =>
+    a.pestana === nombre && !(enEscritorio && a.soloEnNavegador));
 }
 
 export function porDefecto() {
@@ -244,17 +285,16 @@ export function cuenta() {
 }
 
 /**
- * LOS MAPAS QUE DE VERDAD SE PUEDEN ABRIR.
+ * LO QUE ENSEÑA LA FILA «Map» DE «Create Server».
  *
- * Uno. El original lista todos los `.bsp` del juego —en la captura se ven
- * `aleyesu`, `aluhandra2`, `ara`, `b_castle`…— y aquí sólo está portado Gate
- * City. La lista se queda corta y lo dice, en vez de enseñar ciento y pico
- * nombres que no abrirían.
+ * `< Random Map >` se queda delante porque es la primera entrada del original
+ * y porque con un solo mapa sigue siendo verdad: al azar entre uno.
  *
- * `< Random Map >` se queda porque es la primera entrada del original y porque
- * con un solo mapa sigue siendo verdad: al azar entre uno.
+ * El 47: **la lista de mapas ya no está aquí**. Está en `src/play/mapa.js`,
+ * con el nombre por omisión y el validador, para que añadir Edana sea una
+ * línea en un archivo y no tres en tres.
  */
-export const MAPAS = Object.freeze(["< Random Map >", "gatecity"]);
+export const MAPAS = Object.freeze(["< Random Map >", ...MAPAS_PORTADOS]);
 
 /** Qué mapa toca. Con `< Random Map >`, uno de los de verdad. */
 export function mapaElegido(valor, mapas = MAPAS) {

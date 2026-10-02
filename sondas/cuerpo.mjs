@@ -21,7 +21,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5196;
@@ -39,8 +40,72 @@ const pag = await nav.newPage({ viewport: { width: 1200, height: 900 } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
 pag.on("console", (m) => { if (m.type() === "error") errores.push(`consola: ${m.text().slice(0, 160)}`); });
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// EL CORTE DEL `vite-hmr`, el mismo que `jugador64` y `misiones33`. Con varias
+// sesiones guardando, Vite recarga la pagina a media pasada: sin el corte esta
+// sonda se quedo una vez esperando en `entrarPorElMenu` hasta agotar el plazo.
+// Apaga SOLO el socket de recarga: cualquier otro `WebSocket` sigue siendo el
+// de verdad, asi que una recarga por otro motivo se seguiria viendo.
+//
+// Y LO QUE EL CORTE **NO** ARREGLA, dicho aqui para que nadie lo busque dos
+// veces: el clic a la fila de «Spell Casting» de mas abajo sigue agotando el
+// plazo con Playwright diciendo que `<div class="mx-detalle">` intercepta el
+// puntero. **No hay ningun solape**, y esta medido: la fila ocupa x 379-695 y
+// el detalle x 713-1029, `elementsFromPoint` en el centro de la fila devuelve
+// `SPAN` -> `BUTTON.mx-hab-fila`, y la caja del detalle no se mueve ni se
+// rehace en 20 muestras a lo largo de 2 s. La causa es **el puntero preso**:
+//
+//   jugando                        preso=CANVAS  panel=null
+//   con el inventario de VGUI      preso=null    panel=inventory
+//   tras `probe.interfaz.hoja()`   preso=CANVAS  panel=null
+//
+// O sea que el arreglo del 35 funciona —abrir el inventario SI suelta el
+// puntero—, y lo que vuelve a pedirlo es **cerrarlo**: `probe.interfaz.hoja()`
+// cierra el panel de VGUI, eso llama a `cursorDelRaton(false)` (src/main.js:420)
+// y acto seguido se monta un panel del DOM, que no es de VGUI y que por tanto
+// no le dice a nadie que lo suelte. Con el puntero preso, un clic sintetico no
+// cae donde Playwright apunta y el navegador nombra lo que haya en el punto del
+// cerrojo.
+//
+// Y ESTO ES UN ESTADO AL QUE EL JUGADOR NO LLEGA. Medido con la tecla pulsada
+// en una partida de verdad, porque entre tres sesiones este camino se leyo dos
+// veces mal antes de medirlo:
+//
+//   [jugando, antes de la P]   panel=null   hojaDelDom=0  preso=CANVAS
+//   [tras pulsar la P]         panel=stats  hojaDelDom=0  preso=CANVAS
+//   [tras pulsarla otra vez]   panel=null   hojaDelDom=0  preso=CANVAS
+//
+// La P (`teclas.js:100`, `bind "p" "playerinfo"`) abre el panel «stats» de
+// VGUI y **cero** hojas del DOM. El puntero sigue preso ahi, y es correcto:
+// «stats» tiene `m_NoMouse`.
+//
+// La rama de `interfaz.js:851` NO es el suplente: la guarda es
+// `!panelDeHoja`, o sea **la funcion y no su resultado**, y `main.js:643` pasa
+// esa flecha siempre, asi que `!panelDeHoja` es falso en todas las partidas.
+// Con «stats» ausente la P tampoco cae aqui: quien la atiende es
+// `main.js:3322` con un `vgui?.alternar`, que sin vgui no hace nada. El unico
+// llamador de `interfaz.hoja` en el arbol es `src/dev/sonda.js`.
+//
+// Por eso NO se parchea con un `exitPointerLock`: pondria verde una pantalla a
+// la que el jugador no llega. Lo que hay que decidir —y no se decide aqui, que
+// esta sonda no es de nadie— es si se apunta a lo que el jugador SI abre, el
+// panel «stats» que ya cubre `sonda:hoja32` con 21/21, o si se retira este
+// trozo. Y de paso queda apuntado un hueco real que esto roza: a
+// `montarInterfaz` no le llega ningun `cursor` (interfaz.js:188-194 y
+// main.js:639-645), asi que las pantallas del DOM no tienen con que soltar el
+// puntero; esta detras de un camino apagado, asi que cablearlo hoy seria una
+// regla que no se puede medir.
+await pag.addInitScript(() => {
+  const Real = window.WebSocket;
+  window.WebSocket = function (url, protos) {
+    const esHmr = protos === "vite-hmr" || (Array.isArray(protos) && protos.includes("vite-hmr"));
+    if (!esHmr) return new Real(url, protos);
+    return { close() {}, send() {}, addEventListener() {}, removeEventListener() {}, readyState: 3 };
+  };
+});
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 const foto = async (n) => { await pag.waitForTimeout(400); await pag.screenshot({ path: `build/gatecity/vistas/cuerpo-${n}.png` }); };
 

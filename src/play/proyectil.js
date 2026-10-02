@@ -343,6 +343,8 @@ export class Flecha {
     dano = 0, tipoDano = "pierce", expira = EXPIRA, ficha = null,
   } = {}) {
     this.pos = [...desde];
+    /** De dónde salió, para poder medir la caída sin el desnivel de la mano. */
+    this.salida = [...desde];
     this.vel = [hacia[0] * velocidad, hacia[1] * velocidad, hacia[2] * velocidad];
     /**
      * Con qué salió, guardado aparte.

@@ -20,7 +20,8 @@
 // Game tiene once filas y una barra de desplazamiento propia, que en la captura
 // se ve a la derecha del recuadro.
 
-import { Frame, PropertySheet, Button, CheckButton, ComboBox, TextEntry,
+import { cascara } from "./codice.js";
+import { Button, CheckButton, ComboBox, TextEntry,
          etiqueta, MEDIDAS } from "./widgets.js";
 import { PESTANAS, deLaPestana, porDefecto, MAPAS, mapaElegido, cuenta } from "../play/crearpartida.js";
 
@@ -35,19 +36,24 @@ export class VentanaCrearServidor {
    * @param mapas     los mapas que de verdad se pueden abrir.
    */
   constructor(tema, { valores = porDefecto(), mapas = MAPAS, alEmpezar = null,
-                      alCerrar = null, x = 60, y = 40 } = {}) {
+                      alCerrar = null, x = 60, y = 40, enEscritorio = false } = {}) {
     this.tema = tema;
+    // Esconde las filas `soloEnNavegador`. Hoy es una: la pantalla completa.
+    this.enEscritorio = Boolean(enEscritorio);
     this.valores = { ...valores };
     this.mapas = [...mapas];
     this.alEmpezar = alEmpezar;
     this.controles = new Map();
 
-    this.marco = new Frame(tema, {
+    const { Marco, Hojas, conCaja } = cascara();
+    this.conCaja = conCaja;
+
+    this.marco = new Marco(tema, {
       titulo: "Create Server", ancho: VENTANA.ancho, alto: VENTANA.alto, x, y,
       alCerrar,
     });
 
-    this.hojas = new PropertySheet(tema);
+    this.hojas = new Hojas(tema);
     for (const p of PESTANAS) this.hojas.anadir(p, () => this.#pagina(p));
 
     // «Start» y «Cancel», abajo a la derecha. En la captura no hay «Apply»: esta
@@ -100,7 +106,7 @@ export class VentanaCrearServidor {
       display: "flex", flexDirection: "column", gap: "8px",
       maxHeight: "100%", overflowY: nombre === "Game" ? "auto" : "visible",
     });
-    for (const a of deLaPestana(nombre)) hoja.appendChild(this.#control(a));
+    for (const a of deLaPestana(nombre, { enEscritorio: this.enEscritorio })) hoja.appendChild(this.#control(a));
     return hoja;
   }
 

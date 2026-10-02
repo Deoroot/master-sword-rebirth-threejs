@@ -43,6 +43,11 @@ import * as THREE from "three";
 
 import { varianteEnT } from "../bsp/gamma.js";
 
+import { MAPA_POR_DEFECTO, baseDe } from "../play/mapa.js";
+// EL 76: la regla de «¿se dibuja?» y el alfa, del mismo módulo que usa el
+// extractor. Si el visor se la escribiera aparte, habría dos respuestas.
+import { seDibuja, alfa, aplicar as aplicarAspecto } from "../play/aspecto.js";
+const BASE_POR_DEFECTO = baseDe(MAPA_POR_DEFECTO);
 /** El factor que convierte el `lightMap` de Three.js en una multiplicación. */
 export const RECIPROCO_PI = Math.PI;
 
@@ -167,7 +172,7 @@ export const ESPACIO = THREE.NoColorSpace;
  *
  * No cuesta un shader ni un material: es una propiedad de la textura.
  */
-export async function cargarTexturas(manifiesto, { base = "build/gatecity", anisotropia = 1 } = {}) {
+export async function cargarTexturas(manifiesto, { base = BASE_POR_DEFECTO, anisotropia = 1 } = {}) {
   const cargador = new THREE.TextureLoader();
   const mapa = new Map();
   const faltan = [];
@@ -220,7 +225,7 @@ export async function cargarTexturas(manifiesto, { base = "build/gatecity", anis
  * andamio, y `repeat` vive en la textura, no en el material. Compartirla pondría
  * la última escala leída en todas.
  */
-export async function cargarDetalle(manifiesto, { base = "build/gatecity", anisotropia = 1 } = {}) {
+export async function cargarDetalle(manifiesto, { base = BASE_POR_DEFECTO, anisotropia = 1 } = {}) {
   const cargador = new THREE.TextureLoader();
   const mapa = new Map();
   const claves = new Map();
@@ -282,7 +287,7 @@ export async function cargarDetalle(manifiesto, { base = "build/gatecity", aniso
  * La UV también sale de ahí: `s' = (s+1)/2` y `t' = 1 − (t+1)/2`, con `flipY` a
  * falso porque el PNG se escribió con la fila 0 arriba.
  */
-export async function cargarCielo(manifiesto, { base = "build/gatecity" } = {}) {
+export async function cargarCielo(manifiesto, { base = BASE_POR_DEFECTO } = {}) {
   const caras = manifiesto.cielo?.caras;
   if (!caras) return null;
   const cargador = new THREE.TextureLoader();
@@ -406,7 +411,7 @@ function ajustarAtlas(tex) {
  * Un `.bsp` sin `cubos` en el manifiesto —o cualquier otro mapa— sigue cargando
  * un atlas y ya está.
  */
-export async function cargarMapaDeLuz(manifiesto, { base = "build/gatecity" } = {}) {
+export async function cargarMapaDeLuz(manifiesto, { base = BASE_POR_DEFECTO } = {}) {
   const cargador = new THREE.TextureLoader();
   const lista = manifiesto.luz.cubos ?? [
     { clave: "quieta", estilos: [], variantes: [manifiesto.luz.archivo] },
@@ -512,7 +517,7 @@ export const FASES = 4;
  * `depthWrite` a falso por lo mismo: un cartel aditivo que escribe profundidad
  * recorta lo que tiene detrás y deja un rectángulo de vacío alrededor del fuego.
  */
-export async function cargarCarteles(manifiesto, { base = "build/gatecity" } = {}) {
+export async function cargarCarteles(manifiesto, { base = BASE_POR_DEFECTO } = {}) {
   const lista = manifiesto.carteles ?? [];
   if (!lista.length) return { grupo: new THREE.Group(), animar: () => {}, n: 0 };
 
@@ -621,7 +626,7 @@ export function geometriaBsp(mesh, grupos = mesh.groups, compartidos = null) {
  * cifra. Es el mismo truco que `setKit()` en Corinth: lo que mide es cuántos
  * píxeles CAMBIAN al apagarlo.
  */
-export function escenaGateCity(level, texturas, luz, { overbright = OVERBRIGHT, detalle = null, cielo: cajaDeCielo = null } = {}) {
+export function escenaDelMapa(level, texturas, luz, { overbright = OVERBRIGHT, detalle = null, cielo: cajaDeCielo = null } = {}) {
   const escena = new THREE.Scene();
   const caja = level.caja;
   const lejos = Math.hypot(caja.max[0] - caja.min[0], caja.max[2] - caja.min[2]);
@@ -783,7 +788,11 @@ export function escenaGateCity(level, texturas, luz, { overbright = OVERBRIGHT, 
   const geometria = geometriaBsp(level.mesh, opacos);
   const matOpacos = opacos.map(material);
   const mundo = new THREE.Mesh(geometria, matOpacos);
-  mundo.name = "gatecity";
+  // El nombre es el PAPEL, no el mapa. Se llamaban «gatecity»,
+  // «gatecity-translucido» y «gatecity-detalle», y con un segundo mapa
+  // cargado la malla de Edana se llamaba «gatecity». Quien la busca quiere
+  // la malla del mundo, no la de un mapa concreto (59).
+  mundo.name = "mundo";
   escena.add(mundo);
 
   let velo = null;
@@ -792,7 +801,7 @@ export function escenaGateCity(level, texturas, luz, { overbright = OVERBRIGHT, 
     const geo = geometriaBsp(level.mesh, translucidos, geometria.userData.compartidos);
     matVelo = translucidos.map(material);
     velo = new THREE.Mesh(geo, matVelo);
-    velo.name = "gatecity-translucido";
+    velo.name = "mundo-translucido";
     // Por si acaso, además del orden de pasada: un aditivo que se dibuja antes que
     // su pared no se ve, y eso no da error.
     velo.renderOrder = 2;
@@ -850,7 +859,7 @@ export function escenaGateCity(level, texturas, luz, { overbright = OVERBRIGHT, 
       ...(g.clase === "calada" ? { alphaTest: 0.5, side: THREE.DoubleSide } : {}),
     }));
     detalleMalla = new THREE.Mesh(geo, matDetalle);
-    detalleMalla.name = "gatecity-detalle";
+    detalleMalla.name = "mundo-detalle";
     detalleMalla.renderOrder = 1;
     escena.add(detalleMalla);
   }
@@ -946,7 +955,7 @@ export function escenaGateCity(level, texturas, luz, { overbright = OVERBRIGHT, 
  * transparente. `alphaTest` y no `transparent`: con transparencia de verdad hay
  * que ordenar por profundidad y las hojas se dibujan delante del tronco.
  */
-export async function cargarAdornos(nivel, luz, { base = "build/gatecity", anisotropia = 1 } = {}) {
+export async function cargarAdornos(nivel, luz, { base = BASE_POR_DEFECTO, anisotropia = 1 } = {}) {
   // Los adornos miran al atlas QUIETO: su luz es un solo luxel del suelo
   // (`R_LightPoint`) reservado ahí. En el motor ese luxel también parpadea; aquí
   // todavía no, y queda escrito en vez de disimulado.
@@ -1010,7 +1019,11 @@ export async function cargarAdornos(nivel, luz, { base = "build/gatecity", aniso
   g.setAttribute("uv1", new THREE.BufferAttribute(ad.uvs1, 2));
   ad.grupos.forEach((gr, i) => g.addGroup(gr.start, gr.count, i));
 
-  const materiales = ad.grupos.map((gr) => {
+  // El material de un grupo de adorno. Se saca a una función porque desde el
+  // **76** lo piden dos mallas distintas: la fundida y la de cada adorno con
+  // nombre, que necesita material PROPIO para poder cambiarle el alfa sin
+  // cambiárselo a los otros cuarenta y cinco.
+  const materialDe = (gr) => {
     const map = porArchivo.get(gr.archivo) ?? null;
     if (gr.aditivo) {
       return new THREE.MeshBasicMaterial({
@@ -1032,7 +1045,9 @@ export async function cargarAdornos(nivel, luz, { base = "build/gatecity", aniso
       m.side = THREE.DoubleSide; // una hoja se ve por los dos lados
     }
     return m;
-  });
+  };
+
+  const materiales = ad.grupos.map(materialDe);
 
   const malla = new THREE.Mesh(g, materiales);
   malla.name = "adornos";
@@ -1040,11 +1055,160 @@ export async function cargarAdornos(nivel, luz, { base = "build/gatecity", aniso
   const grupo = new THREE.Group();
   grupo.name = "adornos";
   grupo.add(malla);
+
+  // ── LOS ADORNOS CON NOMBRE (el 76) ────────────────────────────────────────
+  //
+  // Una malla por colocación, con sus materiales propios, porque un
+  // `env_render` le puede cambiar el aspecto a uno solo. Nueve en Edana, cero
+  // en Gate City. Van en el mismo `Group`, así que quien ya lo añadía a la
+  // escena no cambia.
+  const nombrados = [];
+  if (ad.nombrados?.length && ad.nomPositions) {
+    // Los ATRIBUTOS se comparten entre las nueve geometrías —el mismo objeto,
+    // o sea el mismo buffer en la tarjeta— y cada malla dibuja sólo sus grupos.
+    // Y no vale `geometria.clone()`: `BufferAttribute.copy` hace
+    // `new source.array.constructor(source.array)`, o sea que clonar nueve
+    // veces serían nueve copias del buffer entero.
+    const attr = {
+      position: new THREE.BufferAttribute(ad.nomPositions, 3),
+      normal: new THREE.BufferAttribute(ad.nomNormals, 3),
+      uv: new THREE.BufferAttribute(ad.nomUvs, 2),
+      uv1: new THREE.BufferAttribute(ad.nomUvs1, 2),
+    };
+    for (const s of ad.nombrados) {
+      const geo = new THREE.BufferGeometry();
+      for (const [n, a] of Object.entries(attr)) geo.setAttribute(n, a);
+      s.grupos.forEach((gr, k) => geo.addGroup(gr.start, gr.count, k));
+      const mats = s.grupos.map(materialDe);
+      // Y VAN TAMBIÉN A `materiales`, la lista de todos.
+      //
+      // No es un apaño: es que esa lista la recorren cinco sitios de
+      // `src/dev/sonda.js` —el mapa de luz, las texturas, la plena luz— y una
+      // perilla que deja fuera nueve adornos sin decirlo es justo el fallo que
+      // CLAUDE.md §5 prohíbe. La malla fundida indexa 0..n-1 por su
+      // `materialIndex`, así que añadir al final no le cambia nada.
+      materiales.push(...mats);
+      const m = new THREE.Mesh(geo, mats);
+      m.name = `adorno:${s.nombre}`;
+      m.frustumCulled = false;
+      // El estado DE NACIMIENTO, que es el que el mapeador escribió. Si esto no
+      // se aplica, los cuatro platos de sopa de la taberna de Edana están en la
+      // mesa desde el primer fotograma con las mesas vacías.
+      const estado = { modo: s.render?.modo ?? 0, cantidad: s.render?.cantidad ?? 255, fx: s.render?.fx ?? 0 };
+      const p = { nombre: s.nombre, modelo: s.modelo, escena: s.escena, malla: m, materiales: mats, estado, cambios: 0 };
+      nombrados.push(p);
+      grupo.add(m);
+      pintar(p);
+    }
+  }
+
+  /**
+   * El estado de dibujo, puesto en la malla.
+   *
+   * `seDibuja` decide si entra en la lista (gl_rmain.c:252) y `alfa` con qué
+   * mezcla. El `depthWrite` a `true` con transparencia NO es un descuido: es lo
+   * que hace `GL_StudioSetRenderMode` en su `default` —el `case` por el que cae
+   * el modo 4— con `pglDepthMask( GL_TRUE )` (ref/gl/gl_studio.c:3011-3017).
+   */
+  /** El centro de los vértices que una malla dibuja de verdad (sus grupos). */
+  function centroDe(m) {
+    const a = m.geometry?.attributes?.position;
+    if (!a) return null;
+    let x = 0, y = 0, z = 0, n = 0;
+    for (const g of m.geometry.groups) {
+      for (let i = g.start; i < g.start + g.count; i++) {
+        x += a.getX(i); y += a.getY(i); z += a.getZ(i); n++;
+      }
+    }
+    return n ? [x / n, y / n, z / n] : null;
+  }
+
+  function pintar(p) {
+    const visible = seDibuja(p.estado);
+    p.malla.visible = visible;
+    if (!visible) return;
+    const a = alfa(p.estado);
+    for (const m of p.materiales) {
+      if (m.blending === THREE.AdditiveBlending) continue;  // el aditivo ya es el suyo
+      m.transparent = a < 1;
+      m.opacity = a;
+      m.depthWrite = true;
+      m.needsUpdate = true;
+    }
+  }
+
   return {
     grupo, malla, materiales,
     n: ad.colocados,
     ficheros: ad.ficheros,
     triangulos: ad.triangulos,
     texturas: porArchivo.size,
+    nombrados,
+
+    /**
+     * `CRenderFxManager::Use`, triggers.cpp:535-557: **a TODAS las que se
+     * llamen así**, no a la primera. Edana tiene cuatro adornos llamados
+     * `apple1` y ningún `env_render` que los busque, así que el día que algo
+     * los busque tienen que apagarse los cuatro.
+     *
+     * Devuelve a cuántos ha llegado. Cero no es un error: es que este mapa no
+     * tiene ningún adorno con ese nombre, y eso lo cuenta quien llama.
+     */
+    aplicarRender(nombre, como = {}) {
+      if (!nombre) return 0;
+      let n = 0;
+      for (const p of nombrados) {
+        if (p.nombre !== nombre) continue;
+        p.estado = aplicarAspecto(p.estado, como);
+        p.cambios++;
+        pintar(p);
+        n++;
+      }
+      return n;
+    },
+
+    /**
+     * Lo que hay y cómo está, para una sonda.
+     *
+     * Trae `enEscena` y `primerVertice` además del `visible`, y no es relleno:
+     * es la lección del 71 —«el NODO está donde dice el bus»— aplicada aquí.
+     * `visible: false` es nuestra contabilidad y se puede poner a mano; que la
+     * malla esté colgada de la escena y que sus vértices estén donde dice el
+     * manifiesto es otra pregunta, y la primera medida de esta pieza salió cero
+     * píxeles justamente por no haberla hecho.
+     */
+    censo() {
+      return nombrados.map((p) => {
+        const g = p.malla.geometry;
+        const a = g.attributes.position;
+        const g0 = g.groups[0];
+        return {
+          nombre: p.nombre, modelo: p.modelo, escena: p.escena,
+          visible: p.malla.visible, estado: { ...p.estado },
+          alfa: p.malla.visible ? alfa(p.estado) : 0,
+          cambios: p.cambios,
+          enEscena: Boolean(p.malla.parent),
+          grupos: g.groups.length,
+          vertices: g.groups.reduce((t, x) => t + x.count, 0),
+          // El primer vértice de su primer grupo, en ejes de escena. Tiene que
+          // caer cerca de `escena`: un `start` desplazado dibuja los triángulos
+          // de otro adorno y eso no da error.
+          primerVertice: a && g0 ? [a.getX(g0.start), a.getY(g0.start), a.getZ(g0.start)] : null,
+          // EL CENTRO DE SUS VÉRTICES, que NO es `escena`.
+          //
+          // `escena` es el `origin` de la entidad del `.bsp`, y un `.mdl` no
+          // tiene por qué estar centrado en su origen: el plato de sopa está
+          // **0,8 m por encima** del suyo. Una sonda que apunte a `escena`
+          // fotografía un palmo de mesa por debajo del plato y cuenta cero
+          // píxeles de cambio — que es lo que midió esta pieza dos veces.
+          centro: centroDe(p.malla),
+          // Y SI SUS MATERIALES ESTÁN EN LA LISTA DE TODOS, que es la que
+          // recorren las cinco perillas de `src/dev/sonda.js` (mapa de luz,
+          // texturas, plena luz). Si no, esas perillas se dejan nueve adornos
+          // fuera y no lo dice nadie — CLAUDE.md §5, el ajuste que se calla.
+          enLaLista: p.materiales.every((m) => materiales.includes(m)),
+        };
+      });
+    },
   };
 }

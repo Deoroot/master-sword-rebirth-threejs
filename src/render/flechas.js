@@ -20,6 +20,8 @@ import * as THREE from "three";
 import { cargarModelo } from "./bichos.js";
 import { ESPACIO } from "./bsp_escena.js";
 
+import { BASE_COMUN } from "../play/recursos.js";
+const BASE_POR_DEFECTO = BASE_COMUN;
 /** El «adelante» de un `.mdl` de GoldSrc tras el cambio de ejes de este proyecto. */
 const ADELANTE = new THREE.Vector3(1, 0, 0);
 
@@ -29,7 +31,7 @@ const ADELANTE = new THREE.Vector3(1, 0, 0);
  * `clave` es la carpeta que escribió `tools/armas.mjs` (`weapons_bows_arrows`).
  */
 export async function cargarFlechas(clave, {
-  base = "build/gatecity/armas", U = 39.37, cuantas = 12, secuencia = "idle1",
+  base = `${BASE_POR_DEFECTO}/armas`, U = 39.37, cuantas = 12, secuencia = "idle1",
 } = {}) {
   const M = await cargarModelo(clave, { base });
   if (!M) return null;

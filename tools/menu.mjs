@@ -1,3 +1,4 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
 // EL MENÚ PRINCIPAL DE MASTER SWORD: el fondo, el título y lo que dice cada opción.
 //
 //   npm run menu
@@ -37,14 +38,14 @@
 // `build/`, que está en `.gitignore`, y **no se mueve un byte a `public/`.**
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, appendFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { decodificarTga } from "../src/bsp/tga.js";
 import { escribirPng } from "./png.mjs";
 
 const ASSETS = process.argv[2] ?? "../MSC/assets/msr";
-const SALIDA = resolve("build/gatecity/menu");
-const SND = resolve("build/gatecity/snd/ui");
+const SALIDA = salidaComun("menu");
+prepararComunes();
+const SND = salidaComun("snd/ui");
 
 if (!existsSync(`${ASSETS}/resource/gamemenu.res`)) {
   console.error(`No encuentro ${ASSETS}/resource/gamemenu.res. Pásame la carpeta del juego.`);
@@ -317,7 +318,7 @@ const ficha = {
 writeFileSync(`${SALIDA}/../menu.json`, JSON.stringify(ficha, null, 1));
 
 // ── LA PROCEDENCIA ─────────────────────────────────────────────────────────
-const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+const PROC = salidaComun("PROCEDENCIA.md");
 const MARCA = "## El menú";
 if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
   appendFileSync(PROC, `
@@ -344,7 +345,7 @@ un byte a \`public/\`.**
 
 console.log(`\n  ${entradas.length} opciones, fondo de ${anchoFondo}×${altoFondo} en ${tgas.length} piezas, ` +
   `${Object.keys(sonidos).length} sonidos, ${teclas.length} teclas, ${(bytes / 1024).toFixed(0)} KB`);
-console.log(`\n  escrito en      build/gatecity/menu.json\n`);
+console.log(`\n  escrito en      build/msr/menu.json\n`);
 if (malos.length) {
   console.error(`  ${malos.length} controles en rojo:\n${malos.map((m) => `    ${m}`).join("\n")}`);
   process.exit(1);

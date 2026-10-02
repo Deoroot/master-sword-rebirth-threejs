@@ -25,6 +25,18 @@ Nueve `func_door_rotating`, y los cuatro números son de cada entidad del `.bsp`
 tocarlas, sin `SF_DOOR_ROTATE_Z` giran sobre el eje vertical, y sin
 `SF_DOOR_ROTATE_BACKWARDS` hacia delante. Las nueve.
 
+> ### CORRECCIÓN DEL 70
+>
+> «Sin `SF_DOOR_USE_ONLY` se abren al tocarlas» **no es cierto en general**, y
+> aquí salía bien por el mapa y no por la regla. `CBaseDoor::DoorTouch` sale en
+> la primera línea si la puerta tiene `targetname` —*«If door is somebody's
+> target, then touching does nothing»*, doors.cpp:531-538—, traiga o no traiga
+> la bandera. Las nueve de Gate City no tienen nombre, así que para ellas la
+> frase vale; **las dos hojas de `door2` de Edana sí lo tienen** y desde el 48
+> se abrían solas al acercarse, dejando en adorno los dos
+> `trigger_changetarget` que las gobiernan. Ver
+> [PUERTAS_70.md](PUERTAS_70.md) §3.
+
 Lo que costó sacarlas del trimesh del mundo:
 
 - **la malla se emite en coordenadas de la BISAGRA**, y no hay ninguna resta.

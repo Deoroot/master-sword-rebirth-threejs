@@ -18,6 +18,8 @@ import { Partida } from "./partida.js";
 import { abrir, MENSAJE, RED } from "./protocolo.js";
 import { World, Player, perfilMsr, initPhysics } from "../play/player.js";
 
+import { MAPA_POR_DEFECTO, baseDe } from "../play/mapa.js";
+const BASE_POR_DEFECTO = baseDe(MAPA_POR_DEFECTO);
 /**
  * El mundo del servidor: la malla de colisión y una fábrica de cuerpos.
  *
@@ -32,6 +34,9 @@ export function mundoDeNivel(level, { perfil = null } = {}) {
     world,
     perfil: p,
     triangulos: level.colision.triangleCount,
+    // La valla de los bichos, tal cual viene del nivel: la `Fauna` la envuelve.
+    // No entra en `world` — el jugador la atraviesa (`world.cpp:1196`).
+    monsterclip: level.monsterclip ?? [],
     crearCuerpo(pies) { return new Player(world, pies, { perfil: p }); },
     soltarCuerpo(cuerpo) {
       // Sin esto, cada jugador que entra y sale deja su cápsula en el mundo
@@ -43,7 +48,7 @@ export function mundoDeNivel(level, { perfil = null } = {}) {
 }
 
 /** Carga el nivel en Node, leyendo `build/` del disco. */
-export async function nivelDeDisco(cargar, { base = "build/gatecity" } = {}) {
+export async function nivelDeDisco(cargar, { base = BASE_POR_DEFECTO } = {}) {
   const { readFile } = await import("node:fs/promises");
   const fetchDeDisco = async (ruta) => {
     const b = await readFile(ruta);

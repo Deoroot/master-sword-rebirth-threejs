@@ -35,6 +35,7 @@ import {
   componer, porMatriz,
 } from "../src/bsp/mdl.js";
 import { luzEnSuelo } from "../src/bsp/luz.js";
+import { sueloBajo } from "../src/bsp/arbol.js";
 import { tablasDeGamma, AJUSTES, valorDeEstilo, ESTILO_NORMAL } from "../src/bsp/gamma.js";
 import { NUCLEO, CAIDA } from "../src/bsp/halo.js";
 import { png } from "../tools/png.mjs";
@@ -621,6 +622,82 @@ describe("gatecity.bsp, contra las cifras que lleva dentro", { skip: HAY ? false
       assert.equal(modelos[Number(e.model.slice(1))].caras, 0, e.classname);
     }
     assert.equal(n, 139);
+  });
+
+  test("el suelo del árbol del MUNDO no es el suelo de quien choca", () => {
+    // Los `func_*` con brushes viven cada uno en su propio modelo (`"*242"`) y NO
+    // están en el árbol del mundo, así que `sueloBajo` los atravesaba. Las cuatro
+    // bolsas rompibles de las crías van de z −791 a −771 y el censo colocaba
+    // dentro de ellas lo que hubiera encima: veinte unidades de roca, y el paso
+    // de un bicho son 18.
+    const ents = leerEntidades(bsp);
+    const SOLIDAS = new Set(["func_wall", "func_breakable"]);
+    const extras = ents
+      .filter((e) => SOLIDAS.has(e.classname ?? "") && /^\*\d+$/.test(e.model ?? ""))
+      .map((e) => ({
+        modelo: Number(e.model.slice(1)),
+        origin: String(e.origin ?? "0 0 0").trim().split(/\s+/).map(Number),
+      }));
+    assert.equal(extras.length, 85, "func_wall + func_breakable con brushes");
+
+    // Encima de la bolsa de `spawn_babies1`. Sin las extras, el árbol del mundo
+    // dice que el suelo está 20 unidades más abajo, o sea dentro de la bolsa.
+    const encimaDeLaBolsa = [-1279, -1123, -696];
+    assert.equal(sueloBajo(bsp, encimaDeLaBolsa), -791);
+    assert.equal(sueloBajo(bsp, encimaDeLaBolsa, { extras }), -771);
+
+    // EL CONTROL, que es lo que distingue «cuenta las extras» de «sube todo 20»:
+    // en las otras 65 entidades de bicho el número tiene que ser el MISMO. Si
+    // esto no se comprueba, un `solidoPara` que devolviera siempre `true`
+    // pasaría la mitad de arriba y rompería el mapa entero sin decir nada.
+    const ES_BICHO = /^(msmonster_|ms_npc$|msworlditem_)/;
+    let iguales = 0, distintos = 0;
+    for (const e of ents) {
+      if (!ES_BICHO.test(e.classname ?? "") || !e.origin) continue;
+      const o = String(e.origin).trim().split(/\s+/).map(Number);
+      if (sueloBajo(bsp, o) === sueloBajo(bsp, o, { extras })) iguales++;
+      else distintos++;
+    }
+    assert.equal(distintos, 4, "sólo cambian las cuatro bolsas");
+    assert.equal(iguales, 65);
+  });
+
+  test("38 de los 69 bichos son PLANTILLAS y el motor las borra al arrancar", () => {
+    // `CMSMonster::Spawn`: `if (m_iszMonsterSpawnArea.len()) { SetBits(pev->effects,
+    // EF_NODRAW); return; }` (msmonsterserver.cpp:228-232) — no acaba de nacer. Y
+    // `CMSMonster::Activate` termina con `if (!m_fSpawnOnTrigger) SUB_Remove();`
+    // (msmonsterserver.cpp:129), o sea **se borra**. Lo que queda en su sitio no
+    // es un monstruo: es la ficha que usará su `msarea_monsterspawn`.
+    //
+    // Se fija el número porque el censo los coloca a los 69 y eso no da ningún
+    // error: da 38 monstruos de pie donde el juego no tiene ninguno.
+    const ents = leerEntidades(bsp);
+    const ES_BICHO = /^(msmonster_|ms_npc$|msworlditem_)/;
+    const bichos = ents.filter((e) => ES_BICHO.test(e.classname ?? ""));
+    assert.equal(bichos.length, 69);
+    const plantillas = bichos.filter((e) => e.spawnarea);
+    assert.equal(plantillas.length, 38);
+    assert.equal(bichos.length - plantillas.length, 31, "los que de verdad están de pie");
+
+    // Y cada plantilla apunta a un área que EXISTE, que es lo que el motor
+    // comprueba y avisa por consola cuando no («msarea_monsterspawn named %s NOT
+    // FOUND», :126). En Gate City son 16 áreas y ninguna falta.
+    const areas = new Set(ents
+      .filter((e) => /^(msarea_monsterspawn|ms_monsterspawn)$/.test(e.classname ?? ""))
+      .map((e) => e.targetname));
+    assert.equal(areas.size, 16);
+    for (const p of plantillas) {
+      assert.ok(areas.has(p.spawnarea), `${p.classname} apunta a ${p.spawnarea}, que no existe`);
+    }
+
+    // Los hostiles son TODOS plantillas: en Gate City no hay un solo monstruo de
+    // pie al empezar. Los 31 que quedan son los aldeanos y los tenderos.
+    const deZona = new Set(plantillas.map((e) => e.scriptfile ?? e.defscriptfile));
+    assert.ok(deZona.has("monsters/goblin") && deZona.has("monsters/dwarf_zombie_random"));
+    const quedan = bichos.filter((e) => !e.spawnarea)
+      .map((e) => e.scriptfile ?? e.defscriptfile ?? "");
+    assert.ok(quedan.every((s) => /^(NPCs\/|gatecity\/)/.test(s)),
+      `hay un monstruo de pie: ${quedan.find((s) => !/^(NPCs\/|gatecity\/)/.test(s))}`);
   });
 
   test("el mapa declara un cielo que NO está dentro: skyname nature1", () => {

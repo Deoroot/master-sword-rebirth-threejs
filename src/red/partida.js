@@ -36,6 +36,14 @@ import { vitalesDe, velocidadDelPaso } from "./andar.js";
 // eso es lo que hace que sea un techo y no un número inventado.
 import { fraccionDePotencia, TOPE_PROPIEDAD, CRITICO, expDeLaMuerte } from "../play/golpe.js";
 import { entrenar } from "../juego/personaje.js";
+import { hablar, MAX_LETRAS, RANGO_LOCAL, HABLA } from "../play/chat.js";
+import { InteraccionesNpc } from "../juego/interacciones.js";
+// El 81: `setmovedest` y el rayo de `$cansee` también en el camino del SERVIDOR.
+// `ganchoDeMovedest` y `loVe` son los mismos que usa `src/main.js`; lo único que
+// cambia entre los dos mundos es la física que se les inyecta.
+import { ganchoDeMovedest, loVe } from "../play/movedest.js";
+import { ojoDe } from "../play/manada.js";
+import { comprar as comprarEnTienda, vender as venderEnTienda, MAX_OBJETOS } from "../play/tienda.js";
 import { atributosDe, derivadas } from "../juego/stats.js";
 import {
   PARTIDA, vidaTotal, jugadoresActivos, autoajustar, experienciaDelBicho,
@@ -135,6 +143,12 @@ export class Partida {
   constructor({
     mundo, almacen, aparicion = null, catalogo = null, fauna = null,
     nombre = "partida", ahora = () => Date.now() / 1000, red = RED,
+    // El 62: los guiones de los NPC, para correrlos AQUÍ. Opcional: una
+    // partida sin ellos es la del suelo liso de las pruebas, y sigue valiendo.
+    guiones = null, menus = null,
+    // El 63: el oro con el que entra cada personaje, si el operador lo dice.
+    // `null` es «el suyo», que es lo normal.
+    oroInicial = null,
   } = {}) {
     if (!mundo) throw new Error("una partida necesita un mundo que simular");
     if (!almacen) throw new Error("una partida necesita dónde guardar los personajes");
@@ -145,6 +159,7 @@ export class Partida {
     this._porId = catalogo?.porId
       ?? (catalogo?.objetos ? new Map(catalogo.objetos.map((o) => [o.id, o])) : null);
     this.nombre = nombre;
+    this.oroInicial = oroInicial === null ? null : Math.max(0, Math.trunc(Number(oroInicial) || 0));
     this.red = red;
     this._ahora = ahora;
 
@@ -183,6 +198,150 @@ export class Partida {
      */
     this._fotosDeBichos = new Map();
     this._bichoSeq = 0;
+
+    /**
+     * ── LOS GUIONES, EN EL SERVIDOR — experimento 62 ────────────────────────
+     *
+     * Hasta aquí cada navegador corría su copia del guion de cada NPC. Con un
+     * jugador es lo mismo; con dos son **dos vendedores distintos con el mismo
+     * nombre**, cada uno con sus variables, su estante y su oro, y los dos
+     * pueden venderte la última daga.
+     *
+     * En el mod esto nunca fue del cliente: `game_menu_getoptions` corre en el
+     * servidor y el cliente sólo dibuja lo que le llega; elegir es
+     * `menuselect` de vuelta (menu.cpp:143, multiplay_gamerules.cpp:1576).
+     *
+     * `InteraccionesNpc` no toca el DOM ni Three desde que se extrajo, así que
+     * se monta aquí tal cual. Lo que cambia es que **no tiene una sesión**:
+     * la sesión va por parámetro en cada llamada, porque hay hasta treinta y
+     * dos y el guion es uno por NPC.
+     */
+    this.interacciones = null;
+    if (guiones && this.fauna) {
+      this.interacciones = new InteraccionesNpc({
+        sesion: null,
+        guiones, menus,
+        catalogo: this._porId,
+        npcPorId: (id) => this.fauna?.manada?.de?.(id) ?? null,
+        // A quién va cada recado: `this.hablandoCon` es la sesión del que
+        // habló, y de la sesión se saca su cliente. `MSG_ONE`, no `MSG_ALL`.
+        suceso: (tipo, texto) => this._aQuienHabla()?.mandar(MENSAJE.TEXTO, {
+          // Un `suceso` del guion es de la consola de SUCESOS, no del chat;
+          // viaja por el mismo mensaje con el canal marcado para que el
+          // cliente sepa en qué caja va.
+          tipo: -1, texto, suceso: tipo,
+        }),
+        ventanaDeAviso: (titulo, texto) => this._aQuienHabla()?.mandar(MENSAJE.TEXTO, {
+          tipo: -2, texto, titulo,
+        }),
+        abrirTienda: (o) => this._ofrecerTienda(o),
+        comoEstaElCliente: (vendedor, cliente) => this._comoEstaElCliente(vendedor, cliente),
+        // El 79. Quién habla cambia en cada llamada, así que `_decir` pone los
+        // pies antes de repartir; esto es el valor por omisión para el camino
+        // del menú, donde el que habla es `hablandoCon`.
+        losNpc: () => this.fauna?.manada?.instancias ?? [],
+        dondeEstaElJugador: () => {
+          const c = this._aQuienHabla();
+          return c?.cuerpo ? [...c.cuerpo.feet] : null;
+        },
+        unidadesPorMetro: this.mundo?.perfil?.unidadesPorMetro ?? 39.37,
+        // ── EL 81: LOS DOS GANCHOS QUE ESTE CONSTRUCTOR NO TENÍA ───────────
+        //
+        // `src/main.js` los inyecta desde el 81 y **esta clase se monta DOS
+        // veces**: aquí y allí. Sin estas dos líneas, con servidor el gancho
+        // `irA` seguía siendo el `=> {}` del experimento 43 —ningún NPC se gira
+        // al hablarle ni anda por su guion— y `$cansee` contestaba «no» a todo,
+        // con lo que cualquier bloque que empiece por `if $cansee(...)` se
+        // abandona ENTERO, porque es un `if` VIEJO (el 67).
+        //
+        // Es la costura del 63 con las dos mitades verdes: la regla escrita,
+        // citada y medida; el camino de un jugador la ejecuta y éste no la
+        // recibía. Y no lo vio ninguna prueba ni ninguna sonda porque **las
+        // sondas de combate y de guiones miden UN navegador**: el caso sólo
+        // existe con dos. *Un gancho inyectado en un sitio no está inyectado:
+        // hay que buscar quién más construye esa clase, porque dos
+        // constructores de la misma clase son dos juegos.*
+        mandarADestino: (instancia, avisar, apuntar) => ganchoDeMovedest({
+          manada: this.fauna?.manada ?? null,
+          instancia,
+          // El cuerpo del que habla lo sabe ESTA clase, no la fauna: ver el
+          // comentario de `entidadDeGuion`. Se pide en cada llamada porque
+          // cambia entre un recado y el siguiente.
+          buscar: (n) => this.fauna?.arnes?.entidadDeGuion?.(
+            n, instancia, this._aQuienHabla()?.cuerpo ?? null) ?? null,
+          libre: this.fauna?.arnes?.libreConBichos?.(instancia) ?? (() => true),
+          avisar, apuntar,
+        }),
+        // El rayo de este mundo. La REGLA es `loVe` y está en un solo sitio; lo
+        // que cambia es la física. Ver `trazarParaVer` en `src/red/fauna.js`.
+        lineaDeVision: (ref, instancia) => {
+          const a = this.fauna?.arnes;
+          if (!a || !instancia) return false;
+          const q = a.entidadDeGuion?.(ref, instancia, this._aQuienHabla()?.cuerpo ?? null) ?? null;
+          if (!q) return false;
+          const U = this.mundo?.perfil?.unidadesPorMetro ?? 39.37;
+          const n = instancia.donde;
+          return loVe({
+            miOjo: [n[0], n[1] + ojoDe(instancia) / U, n[2]],
+            suOjo: [q.ojo[0] / U, q.ojo[1] / U, q.ojo[2] / U],
+            suColisionador: q.colisionador,
+            trazar: a.trazarParaVer?.(instancia),
+          });
+        },
+      });
+    }
+  }
+
+  /** El cliente de la sesión con la que el guion está hablando ahora. */
+  _aQuienHabla() {
+    const s = this.interacciones?.hablandoCon ?? null;
+    if (!s) return null;
+    for (const c of this.clientes.values()) if (c.sesion === s) return c;
+    return null;
+  }
+
+  /**
+   * `CStore::Offer`: el estante se manda **a uno**, y en el formato del mod —
+   * flags, nombre del vendedor y una fila por objeto (store.cpp:82-111).
+   */
+  _ofrecerTienda({ tienda, flags, vendedor, instancia } = {}, aQuien = null) {
+    // Quien pide el estante puede ser el guion —y entonces es «el que habla»—
+    // o un `trade` que acaba de restar, y entonces es quien lo mandó. No se
+    // deduce: se dice, porque `hablandoCon` es de la última llamada al guion y
+    // un `trade` llega después.
+    const c = aQuien ?? this._aQuienHabla();
+    if (!c || !tienda) return false;
+    c.mandar(MENSAJE.TIENDA, {
+      vendedor: String(vendedor ?? ""),
+      // El id de la entidad: es lo que el cliente devuelve al comprar, para
+      // que el servidor sepa de qué estante habla sin fiarse del nombre.
+      quien: instancia?.id ?? null,
+      flags: Number(flags) || 0,
+      tienda: tienda.nombre,
+      lineas: (tienda.objetos ?? []).map((l) => ({
+        id: l.id, cantidad: l.cantidad, precio: l.precio,
+        ratio: l.ratio, lote: l.lote, apagado: l.apagado ?? false,
+      })),
+    });
+    return true;
+  }
+
+  /**
+   * Lo que la correa necesita saber, en unidades de GoldSrc.
+   *
+   * `(pEnemy->Center() - Center()).Length() <= 128` es **3D**, al contrario que
+   * la del chat — msmonsterserver.cpp:1843.
+   */
+  _comoEstaElCliente(vendedor, sesion) {
+    let cliente = null;
+    for (const c of this.clientes.values()) if (c.sesion === sesion) { cliente = c; break; }
+    const npc = this.fauna?.manada?.de?.(vendedor) ?? null;
+    if (!cliente?.cuerpo || !npc) return null;
+    const upm = this.mundo?.perfil?.unidadesPorMetro ?? 39.37;
+    const a = cliente.cuerpo.feet, b = npc.donde ?? null;
+    if (!b) return null;
+    const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) * upm;
+    return { distancia: d, vivo: cliente.vivo, mirando: true };
   }
 
   // ── entrar y salir ────────────────────────────────────────────────────────
@@ -270,6 +429,10 @@ export class Partida {
         case MENSAJE.BORRAR: return this._borrar(c, m);
         case MENSAJE.ORDENES: return this._ordenes(c, m);
         case MENSAJE.PEGAR: return this._pegar(c, m);
+        case MENSAJE.DECIR: return this._decir(c, m);
+        case MENSAJE.PEDIRMENU: return this._pedirMenu(c, m);
+        case MENSAJE.ELIGEMENU: return this._eligeMenu(c, m);
+        case MENSAJE.TRADE: return this._trade(c, m);
         case MENSAJE.PONG: return this._pong(c, m);
         case MENSAJE.ADIOS: return this.desconectar(id, { porque: "adiós" });
         default: return null;
@@ -339,6 +502,12 @@ export class Partida {
     if (c.cuerpo) return null;                       // ya está dentro
     await c.sesion.arrancar();
     const p = await c.sesion.entrar(String(m.id));
+    // EL ORO DEL OPERADOR, como `--nacer`: una perilla del que levanta el
+    // servidor, no del jugador. Existe por el mismo motivo que aquélla — con
+    // red **el personaje vive aquí**, así que darle oro en el navegador es una
+    // mentira que el servidor no comparte: la sonda ponía 5000 en su `probe` y
+    // el servidor contestaba «You can't afford Sharp Knife», que era verdad.
+    if (this.oroInicial !== null) { p.oro = this.oroInicial; c.sesion.tocado?.(); }
     const donde = c.sesion.donde;
     const pies = this._sitioLibre(donde?.escena ?? this.aparicion?.nacimiento?.escena ?? [0, 0, 0]);
     c.cuerpo = this.mundo.crearCuerpo(pies);
@@ -499,6 +668,214 @@ export class Partida {
   }
 
   /**
+   * **HABLAR** — experimento 61. `CMSMonster::Speak`, msmonsterserver.cpp:1588.
+   *
+   * Del cliente vienen dos cosas: el canal y lo que ha escrito. Todo lo demás
+   * lo pone el servidor, y por el motivo de siempre — **el nombre**. Si la
+   * frase montada viajara, cualquiera podría decir «[global] Ana: me voy» con
+   * el nombre de Ana. Aquí el nombre sale de la sesión que este socket tiene
+   * abierta y de ninguna otra parte.
+   *
+   * Quién la oye lo decide `hablar()`, que es la regla y está probada aparte.
+   * Lo que se hace aquí es lo que la regla no puede hacer sin la partida
+   * delante: sacar la lista de quién está, dónde está y cómo se llama.
+   *
+   * El «party» llega hoy sólo al que habla, y es correcto: `SameTeam` empieza
+   * con `if (!pObject1->TeamID()[0] || !pObject2->TeamID()[0]) return FALSE;`
+   * (team.cpp:167), y sin grupos montados el `TeamID` de todos está vacío. Es
+   * lo mismo que hace el juego con un servidor donde nadie ha hecho grupo.
+   */
+  _decir(c, m) {
+    const tipo = Math.trunc(Number(m?.tipo));
+    // El tope de letras es el del cajetín del mod, y se corta aquí además de
+    // allí: el cajetín es del cliente y un cliente no es de fiar.
+    const texto = String(m?.texto ?? "").slice(0, MAX_LETRAS);
+
+    const oyentes = [];
+    for (const otro of this.clientes.values()) {
+      if (!otro.cuerpo) continue;
+      const p = otro.cuerpo.feet;
+      oyentes.push({ id: otro.id, pies: [p[0], p[1], p[2]], equipo: otro.equipo ?? null });
+    }
+    const pies = c.cuerpo ? [...c.cuerpo.feet] : [0, 0, 0];
+
+    // LAS 300 SON UNIDADES DE GOLDSRC Y ESTOS PIES SON METROS.
+    //
+    // `SPEECH_LOCAL_RANGE` vale 300 y está escrito en las unidades del motor
+    // (msmonster.h:79); los cuerpos de aquí los mueve Rapier y están en
+    // metros. Comparar los dos números sin convertir da un rango de 300
+    // METROS, o sea 11 811 unidades: **el «local» se oía desde el otro
+    // extremo del mapa** y los tres canales pasaban a ser el mismo con
+    // distinto color. Lo cazó la sonda midiendo a 846 unidades.
+    //
+    // La constante se queda en unidades, que es donde se puede citar, y la
+    // conversión se hace aquí, que es donde está la escala del mundo.
+    const unidadesPorMetro = this.mundo?.perfil?.unidadesPorMetro ?? 39.37;
+    const dicho = hablar({
+      nombre: c.sesion?.personaje?.nombre ?? c.nombre,
+      texto, tipo, esJugador: true,
+      oyentes, quienHabla: c.id, pies, equipo: c.equipo ?? null,
+      rango: RANGO_LOCAL / unidadesPorMetro,
+    });
+    if (!dicho) return null;
+
+    for (const id of dicho.para) {
+      this.clientes.get(id)?.mandar(MENSAJE.TEXTO, { tipo: dicho.tipo, texto: dicho.texto });
+    }
+    // ── Y LOS NPC TAMBIÉN OYEN — experimento 79 ──────────────────────────
+    //
+    //     if (SpeechType == SPEECH_LOCAL && IsPlayer() && pEnt->IsMSMonster())
+    //         ((CMSMonster*)pEnt)->HearPhrase(this, pszSentence);
+    //                                       msmonsterserver.cpp:1743-1744
+    //
+    // Es el MISMO bucle del motor: `Speak` recorre jugadores y monstruos a la
+    // vez, y lo que cambia es qué le hace a cada uno. Aquí estaban portados
+    // los jugadores desde el 61 y los monstruos no, así que `catchspeech`
+    // llevaba treinta y seis experimentos registrado y mudo.
+    //
+    // Sólo el canal LOCAL: un grito global no lo oye un NPC, porque la guarda
+    // del mod es `SpeechType == SPEECH_LOCAL` y no «está en rango».
+    let oidoPorNpc = null;
+    if (tipo === HABLA.LOCAL && this.interacciones) {
+      // Los pies son los del que habla AHORA, no los de `hablandoCon`: por el
+      // chat se habla sin haber abierto el menú de nadie.
+      const antes = this.interacciones.dondeEstaElJugador;
+      this.interacciones.dondeEstaElJugador = () => pies;
+      try {
+        oidoPorNpc = this.interacciones.hablaElJugador(texto, { sesion: c.sesion, yaDicho: true });
+      } finally { this.interacciones.dondeEstaElJugador = antes; }
+    }
+
+    // `g_engfuncs.pfnServerPrint(FinalSentence)` — msmonsterserver.cpp:1747.
+    // El servidor lo escribe en su consola, y eso es parte del port: un
+    // administrador lee lo que se dice en su partida.
+    process.stdout?.write?.(dicho.texto);
+    return { para: dicho.para.length, npc: oidoPorNpc };
+  }
+
+  /**
+   * **LA F**: dame el menú de este NPC. El 62.
+   *
+   * Corre `game_menu_getoptions` del guion de esa entidad —el de verdad, el
+   * único que hay— con ESTE jugador como parámetro, y devuelve lo mismo que le
+   * llegaría al cliente en el mod: el nombre que se enseña y las opciones.
+   */
+  async _pedirMenu(c, m) {
+    if (!this.interacciones) return null;
+    const id = m?.id === null || m?.id === undefined ? null : Math.trunc(Number(m.id));
+    const r = await this.interacciones.pedir(id, c.sesion);
+    c.mandar(MENSAJE.OPCIONES, { para: id, nombre: r?.nombre ?? "", opciones: r?.opciones ?? [] });
+    return r;
+  }
+
+  /** `menuselect N`. `indice` a `null` es cancelar. multiplay_gamerules.cpp:1576. */
+  _eligeMenu(c, m) {
+    if (!this.interacciones) return null;
+    const id = m?.id === null || m?.id === undefined ? null : Math.trunc(Number(m.id));
+    const indice = m?.indice === null || m?.indice === undefined ? null : Math.trunc(Number(m.indice));
+    this.interacciones.elegido(id, indice, c.sesion);
+    return { hecho: true };
+  }
+
+  /**
+   * **COMPRAR O VENDER**, y aquí es donde deja de poder haber dos estantes.
+   *
+   *     else if (FStrEq(pcmd, "trade"))        client.cpp:739
+   *
+   * Del cliente viene qué fila quiere y nada más: el precio, las existencias y
+   * el oro los tiene el servidor, y el estante es el de `Tiendas`, que es uno.
+   * Dos jugadores ya no pueden comprar la misma última daga, porque sólo hay
+   * una resta y la hace este método.
+   *
+   * Y no se atiende a quien no esté en el trato: si el vendedor está
+   * comerciando con otro —o con nadie— este `trade` no vale, que es lo que
+   * hace `TradeItem` con `if (!HasConditions(MONSTER_TRADING) || m_hEnemy == NULL ...)
+   * return NULL` (msmonsterserver.cpp:1862-1866).
+   */
+  _trade(c, m) {
+    const I = this.interacciones;
+    if (!I || !c.sesion?.personaje) return null;
+    const quien = m?.quien === null || m?.quien === undefined ? null : Math.trunc(Number(m.quien));
+    if (quien === null || !Number.isFinite(quien)) return null;
+    // El trato tiene que ser SUYO. Sin esto, cualquiera podría mandar `trade`
+    // contra el estante que otro tiene abierto.
+    if (I.comercio.clienteDe(quien) !== c.sesion) {
+      c.mandar(MENSAJE.TEXTO, { tipo: -1, suceso: "nopuedes", texto: "The vendor is busy." });
+      return null;
+    }
+    const tienda = I.tiendas.buscar(String(m?.tienda ?? ""));
+    if (!tienda) return null;
+    const id = String(m?.id ?? "");
+    const ficha = this._porId?.get(id) ?? null;
+    const p = c.sesion.personaje;
+
+    // EL MISMO CUERPO QUE LA VERSIÓN LOCAL DE `src/main.js`, a propósito: la
+    // regla es la de `src/play/tienda.js` y lo que cambia es quién la aplica.
+    // Si aquí se escribiera otra aritmética, jugar solo y jugar acompañado
+    // darían precios distintos, que es peor que no tener red.
+    if (m?.que === "sell") {
+      const pieza = (p.objetos ?? []).find((o) => (o.uid ?? o.id) === id) ?? null;
+      const clave = pieza?.id ?? id;
+      const r = venderEnTienda(tienda, clave, {
+        nombre: this._porId?.get(clave)?.nombre ?? clave,
+      });
+      if (r.aviso) c.mandar(MENSAJE.TEXTO, { tipo: -1, suceso: "normal", texto: r.aviso });
+      if (r.que !== "vende" || !pieza) return r;
+      p.oro = (p.oro ?? 0) + r.precio;
+      p.objetos = (p.objetos ?? []).filter((o) => o !== pieza);
+      const linea = tienda.linea(clave);
+      if (linea) linea.cantidad += r.suma;
+      c.sesion.tocado?.();
+      this._suFicha(c);
+      this._ofrecerTienda({ tienda, flags: m?.flags ?? 0, vendedor: m?.vendedor ?? "", instancia: { id: quien } }, c);
+      return r;
+    }
+
+    const r = comprarEnTienda(tienda, id, {
+      oro: p.oro ?? 0,
+      cabe: (p.objetos?.length ?? 0) < MAX_OBJETOS,
+      nombre: ficha?.nombre ?? id,
+    });
+    if (r.aviso) c.mandar(MENSAJE.TEXTO, { tipo: -1, suceso: r.que === "compra" ? "normal" : "nopuedes", texto: r.aviso });
+    if (r.que !== "compra") return r;
+    // La resta es UNA y está aquí: el estante es el de la partida.
+    p.oro = (p.oro ?? 0) - r.precio;
+    // UN objeto con cantidad `max(lote, 1)`, no `lote` objetos.
+    //
+    // `pItem->iQuantity = psiStoreItem->iBundleAmt` (:1895) le pone al objeto
+    // su cantidad; no crea uno por unidad. Y `iBundleAmt` **vale 0 por
+    // omisión** (npcscript.cpp:772-774), que es lo que trae casi toda línea de
+    // tienda: un bucle `k < entregadas` no da ni una vuelta. Pasaba: el
+    // servidor restaba el oro, decía «You receive Sharp Knife.» y la mochila
+    // se quedaba igual. Es el mismo `V_max(..., 1)` que ya usa `descuenta`.
+    p.objetos = [...(p.objetos ?? []), { id, n: Math.max(r.entregadas ?? 0, 1) }];
+    const linea = tienda.linea(id);
+    if (linea) linea.cantidad -= r.descuenta;
+    c.sesion.tocado?.();
+    this._suFicha(c);
+    // El estante vuelve a salir, que es lo que hace el mod: `Offer` se manda
+    // otra vez entero, no se parchea una fila.
+    this._ofrecerTienda({ tienda, flags: m?.flags ?? 0, vendedor: m?.vendedor ?? "", instancia: { id: quien } }, c);
+    return r;
+  }
+
+  /**
+   * `NETMSG_SETSTAT` del oro y `NETMSG_ITEM` de la mochila, juntos y `MSG_ONE`.
+   *
+   * El personaje vive aqui; el navegador tiene una COPIA que le llego en
+   * `APARECES` y que hasta el 63 no se actualizaba nunca. Sin esto la compra
+   * funcionaba y no se veia: el servidor restaba el oro y metia el cuchillo, y
+   * la pantalla seguia con lo de antes. Ver `MENSAJE.FICHA` en el protocolo,
+   * con sus dos citas.
+   */
+  _suFicha(c) {
+    const p = c?.sesion?.personaje;
+    if (!p) return false;
+    c.mandar(MENSAJE.FICHA, { oro: p.oro ?? 0, objetos: p.objetos ?? [] });
+    return true;
+  }
+
+  /**
    * **LA EXPERIENCIA, repartida por el servidor** — y por primera vez entre
    * varios de verdad.
    *
@@ -528,15 +905,21 @@ export class Partida {
     }).exp;
     const xp = expDeLaMuerte({ nivel, vidaMaxima: i.vidaMaxima ?? 0, porCubo: i.recibido });
     let total = 0, entregado = 0, subidas = 0;
+    // QUÉ ha subido, y no sólo cuántas: el cartel de «Swordsmanship Proficiency
+    // +1» necesita el nombre, y con servidor el navegador no lo puede deducir
+    // —la hoja la lleva el servidor—. Es lo que en el motor viaja como los
+    // `Params` de `game_learnskill` (playerstats.cpp:169-172).
+    const dondes = [];
     for (const [cubo, cantidad] of Object.entries(xp)) {
       if (!(cantidad > 0)) continue;
       total += cantidad;
       const r = entrenar(p, cubo, cantidad);
       entregado += r.entregado ?? 0;
       subidas += r.subidas;
+      if (r.subidas > 0 && r.donde) dondes.push(r.donde);
     }
     if (total > 0) c.sesion.tocado();
-    return { total, entregado, subidas };
+    return { total, entregado, subidas, dondes };
   }
 
   /**
@@ -660,6 +1043,17 @@ export class Partida {
       const nuevos = this.fauna.manada.recogerSucesos();
       if (nuevos.length) this._repartirSucesos(nuevos);
     }
+    // LOS GUIONES, en el mismo paso. El 62.
+    //
+    // Aquí corre el reloj de los guiones —`wait`, `playanim`— y **la correa
+    // del comercio**: `CMSMonster::Trade()` está en el `Think` del vendedor
+    // (msmonsterserver.cpp:1835), así que el trato se acaba cuando el cliente
+    // se va a más de 128 unidades y no cuando cierra el panel.
+    //
+    // Sin esta línea el vendedor se quedaría **ocupado para siempre** con el
+    // primero que le hablara, y el segundo jugador no podría comprar nunca:
+    // la exclusividad sin la correa es peor que no tener exclusividad.
+    this.interacciones?.paso(this.paso);
     // Una vez por segundo, como el motor.
     if (this.t - this._ultimoChequeo >= 1) {
       this._ultimoChequeo = this.t;

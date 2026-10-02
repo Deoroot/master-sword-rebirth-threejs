@@ -30,7 +30,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5216;
@@ -74,11 +75,30 @@ try {
   const ANCHO = 1200, ALTO = 800;
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+  // EL CORTE DEL `vite-hmr`, el mismo que `sondas/jugador64.mjs`. Con varias
+  // sesiones guardando a la vez, Vite recarga la página a media pasada y la
+  // sonda se cae por donde le toque: una vez fue un `waitForFunction` agotado
+  // que remató con «0 de 0 en verde» —la forma del 65, un marcador que sólo
+  // cuenta lo que llegó a correr— y la siguiente un `window.probe` undefined
+  // leyendo `.sesion`. Dos síntomas de la misma causa, ninguno del juego.
+  //
+  // Esto apaga SÓLO el socket de recarga en caliente: cualquier otro
+  // `WebSocket` —el del multijugador— sigue siendo el de verdad. Si la página
+  // se recargara por otro motivo, se seguiría viendo igual.
+  await pag.addInitScript(() => {
+    const Real = window.WebSocket;
+    window.WebSocket = function (url, protos) {
+      const esHmr = protos === "vite-hmr" || (Array.isArray(protos) && protos.includes("vite-hmr"));
+      if (!esHmr) return new Real(url, protos);
+      return { close() {}, send() {}, addEventListener() {}, removeEventListener() {}, readyState: 3 };
+    };
+  });
+  // SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  await entrarPorElMenu(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
   await pag.waitForFunction(() => window.probe.vgui.abierto() === null, null, { timeout: 60000 });
   await pag.evaluate(() => window.probe.vivo.congelarPaseo(true));

@@ -33,8 +33,13 @@ const RAIZ = join(fileURLToPath(import.meta.url), "..", "..");
 /** Lo que puede estar versionado, y nada más. Cada línea es una decisión. */
 const EXTENSIONES = new Set([
   ".js", ".mjs",      // el juego, las herramientas, las sondas y las pruebas
+  // La cáscara de escritorio (`escritorio/`). Es JavaScript NUESTRO, igual que
+  // los de arriba; lo que cambia es el sistema de módulos, no de quién es. Son
+  // `.cjs` porque `package.json` dice `"type": "module"` y el proceso principal
+  // de Electron y su precarga en caja de arena se cargan como CommonJS.
+  ".cjs",
   ".md",              // los documentos, que son la mitad del trabajo
-  ".html",            // el cascarón y los cuatro maquetados de doc/mockups
+  ".html",            // el cascarón y los maquetados de doc/mockups
   ".json",            // package.json y package-lock.json
 ]);
 
@@ -42,7 +47,11 @@ const EXTENSIONES = new Set([
 const SIN_EXTENSION = new Set([".gitignore", "LICENSE", ".gitattributes"]);
 
 /** Lo que no se recorre: no está versionado y pesa 190 MB. */
-const FUERA = new Set(["build", "node_modules", "dist", ".git"]);
+// `empaquetado/` es la salida de electron-builder: el `.exe`, su runtime de
+// Chromium y los `.dll` de Electron. Nada de eso es nuestro ni del juego, y
+// ninguno pasaría la regla de las extensiones — igual que `dist` y
+// `node_modules`, va en `.gitignore` y no se recorre.
+const FUERA = new Set(["build", "node_modules", "dist", "empaquetado", ".git"]);
 
 /**
  * Las marcas de un asset del juego. La lista no es «formatos binarios»: es
@@ -118,6 +127,7 @@ test("en el repositorio no hay un solo asset del juego", async (t) => {
     for (const bueno of [
       "src/play/manada.js", "sondas/ia28.mjs", "doc/IA_28.md",
       "index.html", "package.json", ".gitignore",
+      "escritorio/main.cjs", "escritorio/precarga.cjs",
     ]) {
       assert.ok(permitido(bueno) && !DEL_JUEGO.test(bueno), `falso positivo: ${bueno}`);
     }

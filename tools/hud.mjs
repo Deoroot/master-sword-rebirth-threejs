@@ -1,3 +1,4 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
 // EL HUD DE MASTER SWORD: las cuatro barras y el emblema.
 //
 //   npm run hud
@@ -38,11 +39,10 @@
 // mirarla. En vertical son 320×1720 y se revisa a ojo en dos segundos.
 //
 // Misma regla de siempre: **el lector es nuestro, el contenido no se copia.** Lo
-// extraído vive en `build/gatecity/hud/`, que está en `.gitignore`, y **no se
+// extraído vive en `build/msr/hud/`, que está en `.gitignore`, y **no se
 // mueve un byte a `public/`**.
 
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { leerSpr } from "../src/bsp/sprite.js";
 import { decodificarTga } from "../src/bsp/tga.js";
@@ -50,7 +50,8 @@ import { escribirPng } from "./png.mjs";
 import { COLORES_DE_SUCESO, CVARS, LIENZO } from "../src/play/hud.js";
 
 const ASSETS = process.argv[2] ?? "../MSC/assets/msr";
-const SALIDA = resolve("build/gatecity/hud");
+const SALIDA = salidaComun("hud");
+prepararComunes();
 
 if (!existsSync(`${ASSETS}/sprites/hud`)) {
   console.error(`No encuentro ${ASSETS}/sprites/hud. Pásame la carpeta del juego.`);
@@ -268,7 +269,7 @@ writeFileSync(`${SALIDA}/../hud.json`, JSON.stringify({
 }, null, 1));
 
 // ── LA PROCEDENCIA ─────────────────────────────────────────────────────────
-const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+const PROC = salidaComun("PROCEDENCIA.md");
 const MARCA = "## El HUD";
 if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
   appendFileSync(PROC, `
@@ -288,7 +289,7 @@ un byte a \`public/\`.**
 }
 
 console.log(`\n  4 barras de ${barras.vida.cuadros} cuadros y 1 emblema, ${(bytes / 1024).toFixed(0)} KB`);
-console.log(`\n  escrito en      build/gatecity/hud.json\n`);
+console.log(`\n  escrito en      build/msr/hud.json\n`);
 if (malos.length) {
   console.error(`  ${malos.length} controles en rojo:\n${malos.map((m) => `    ${m}`).join("\n")}`);
   process.exit(1);

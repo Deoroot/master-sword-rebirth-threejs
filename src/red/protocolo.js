@@ -182,6 +182,42 @@ export const MENSAJE = Object.freeze({
    * Con la vida en el navegador, matar un goblin era editar un número.
    */
   PEGAR: "pegar",
+  /**
+   * HABLAR. Del 61, y es el `say_text` del mod tal cual.
+   *
+   *     ServerCmd(UTIL_VarArgs("say_text %i %s", m_Type, m_TextPanel->m_Message.c_str()));
+   *                                              vgui_startsaytext.h:55
+   *
+   * Lo que manda el cliente son **dos cosas y ninguna más**: qué tecla ha
+   * pulsado (`y`, `u` o `j`) y qué ha escrito. No manda la frase montada, ni
+   * su nombre, ni a quién va: eso lo decide el servidor en `Speak`, y tiene
+   * que ser así — si el cliente mandara la frase, cualquiera podría escribir
+   * «[global] Ana: me voy» con el nombre de otro.
+   */
+  DECIR: "decir",
+  /**
+   * PEDIRLE EL MENÚ A UN NPC — el 62.
+   *
+   * Es la F. En el mod el menú lo construye el SERVIDOR corriendo
+   * `game_menu_getoptions` del guion, y el cliente sólo lo dibuja; elegir una
+   * opción vuelve como `menuselect`:
+   *
+   *     ClientCmd(UTIL_VarArgs("menuselect %d
+", idx));   menu.cpp:143
+   *     if (FStrEq(pcmd, "menuselect"))       multiplay_gamerules.cpp:1576
+   *
+   * Hasta el 62 el guion corría en el navegador de cada uno, así que dos
+   * jugadores tenían dos copias del mismo NPC con sus variables por separado.
+   */
+  PEDIRMENU: "pedirmenu",
+  /** `menuselect N`. `indice` a `null` es cancelar (`game_menu_cancel`). */
+  ELIGEMENU: "eligemenu",
+  /**
+   * COMPRAR O VENDER. `ServerCmd("trade ...")` — client.cpp:739.
+   *
+   * El cliente dice qué fila quiere, no cuánto cuesta ni cuánto oro le queda.
+   */
+  TRADE: "trade",
   // del servidor al cliente
   BIENVENIDA: "bienvenida",
   LISTA: "lista",
@@ -190,6 +226,53 @@ export const MENSAJE = Object.freeze({
   PING: "ping",
   FUERA: "fuera",
   FALLO: "fallo",
+  /**
+   * LO QUE ALGUIEN HA DICHO, ya montado y ya filtrado.
+   *
+   * Es el `NETMSG_HUDMSG` de tipo 4 del mod (`vgui_hud.cpp:470-486`): un byte
+   * de canal y la cadena entera. Que llegue significa que el servidor ya ha
+   * decidido que **tú** lo oyes; el cliente no vuelve a mirar distancias.
+   */
+  TEXTO: "texto",
+  /** El menú que pidió: `{ para, nombre, opciones }`. */
+  OPCIONES: "opciones",
+  /**
+   * EL ESTANTE, para uno solo.
+   *
+   *     MESSAGE_BEGIN(MSG_ONE, g_netmsg[NETMSG_VGUIMENU], NULL, pPlayer->pev);
+   *     WRITE_BYTE(MENU_STORE); WRITE_BYTE(iBuyFlags);
+   *     WRITE_STRING_LIMIT(pVendor->DisplayName(), ...);
+   *     WRITE_BYTE(Items.size());
+   *     ...y un mensaje por objeto: nombre, cantidad, coste, ratio, lote
+   *                                              store.cpp:82-111
+   *
+   * `MSG_ONE`: el estante va **al cliente que está comerciando** y a nadie
+   * más, porque el vendedor atiende a uno a la vez.
+   */
+  TIENDA: "tienda",
+  /**
+   * LO QUE HA CAMBIADO DE TU PERSONAJE — el 63.
+   *
+   * Hasta el 63 el cliente recibía su personaje **una vez**, en `APARECES`, y
+   * nunca más. Con el guion y la tienda en el servidor eso dejó de bastar: la
+   * compra ocurría —el servidor decía «You receive Sharp Knife.»— y el
+   * navegador seguía enseñando el oro y la mochila de hace un rato. No era un
+   * fallo de la compra: era que **nadie se lo contaba**.
+   *
+   * El mod tiene los dos avisos y los manda `MSG_ONE`:
+   *
+   *     if (m_OldGold != m_Gold) {                       // sólo si cambió
+   *         MESSAGE_BEGIN(MSG_ONE, g_netmsg[NETMSG_SETSTAT], NULL, pev);
+   *         WRITE_BYTE(3); WRITE_BYTE(1); WRITE_LONG(m_Gold);
+   *     }                                       player.cpp:3861-3870
+   *     MESSAGE_BEGIN(MSG_ONE, g_netmsg[NETMSG_ITEM], NULL, pPlayer->pev);
+   *                                             scriptcmds.cpp:2156, player.cpp:3790
+   *
+   * Aquí van juntos en uno solo porque este puerto no manda el inventario
+   * ranura a ranura: manda los campos que han cambiado, y el cliente los
+   * funde en el personaje que ya tiene.
+   */
+  FICHA: "ficha",
 });
 
 // ── Los relojes, calculados como los calcula el motor ───────────────────────

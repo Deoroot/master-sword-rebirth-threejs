@@ -16,7 +16,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5201;
@@ -33,15 +34,16 @@ const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 const foto = async (n) => { await pag.waitForTimeout(300); await pag.screenshot({ path: `build/gatecity/vistas/golpe-${n}.png` }); };
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 // Un personaje con la ESPADA OXIDADA, que es la primera de las siete de
 // `reg.newchar.weaponlist`.
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
@@ -235,6 +237,14 @@ if (!cerca?.objetivo) {
     `${matar.despues.vida.toFixed(0)} de vida, muerto=${matar.despues.muerto}`);
   control("a base de mandobles, el bicho MUERE", matar.despues.muerto === true,
     `${matar.r.muertes} muertes en ${matar.r.golpes} mandobles`);
+  // Y LA CUENTA LO DICE, que no es lo mismo. Esto estaba sólo en el TEXTO del
+  // control de arriba —«1 muertes en 4 mandobles»— y un número que vive en el
+  // mensaje no lo comprueba nadie: se quitó a propósito el `cuentas.muertes++`
+  // del mandoble y `sonda:golpe` siguió dando 25 de 25, porque el bicho seguía
+  // muriéndose igual. El único control que la miraba era un TECHO
+  // (`muertosTotales <= 1`), y cero también cumple un techo.
+  control("y la cuenta de muertes se entera, no sólo el bicho",
+    matar.r.muertes >= 1, `${matar.r.muertes} contada(s) para ${matar.despues.muerto ? "1" : "0"} muerto(s)`);
   control("y pone su animación de muerte",
     Boolean(matar.despues.animacion) && matar.despues.animacion === String(matar.despues.muerteQueDice ?? "").toLowerCase(),
     `'${matar.despues.animacion}' y su script dice '${matar.despues.muerteQueDice}'`);

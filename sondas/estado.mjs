@@ -23,7 +23,7 @@ const out = await page.evaluate(() => {
   let mundo = null, velo = null;
   const raiz = p.camera;
   let s = raiz; while (s.parent) s = s.parent;
-  s.traverse((o) => { if (o.name === "gatecity") mundo = o; if (o.name === "gatecity-translucido") velo = o; });
+  s.traverse((o) => { if (o.name === "mundo") mundo = o; if (o.name === "mundo-translucido") velo = o; });
   const info = (m) => ({
     tipo: m.type, nombre: m.name,
     map: m.map ? { w: m.map.image?.width, h: m.map.image?.height, min: m.map.minFilter, mag: m.map.magFilter, mips: m.map.mipmaps?.length ?? 0, cs: m.map.colorSpace, ch: m.map.channel } : null,

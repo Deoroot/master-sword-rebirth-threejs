@@ -1,3 +1,4 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
 // EL CUERPO DEL PERSONAJE: el modelo que sale en la pantalla de elección, en la
 // de creación y en el inventario.
 //
@@ -69,7 +70,6 @@
 // usa.
 
 import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { leerMdl, TAM, texturasDe, mallaDe, porMatriz } from "../src/bsp/mdl.js";
 import {
@@ -81,7 +81,8 @@ import { extraerBicho, verticesCrudos } from "./bicho.mjs";
 
 const MODELOS = "../MSC/assets/msr/models";
 const MODELO = "human/reference";              // MODEL_HUMAN_REF
-const SALIDA = resolve("build/gatecity/cuerpos");
+const SALIDA = salidaComun("cuerpos");
+prepararComunes();
 
 /**
  * Las seis animaciones de la pantalla, y **son datos y no código**: el cliente
@@ -106,6 +107,31 @@ export const ANIMACIONES = {
   subiendo: "run",
   inactivo: "sitdown",
 };
+
+/**
+ * LAS DE LAS EMOCIONES — el 85, y es el 78 otra vez con otra ropa.
+ *
+ * La lista blanca de arriba sale de `global.script`, que es donde la PANTALLA DE
+ * PERSONAJE dice qué animaciones quiere. Y el muñeco del HUD —`ms_lildude`, el
+ * de abajo a la izquierda— usa el mismo horneado y le pide otras: las que pone
+ * `playanim` cuando eliges una opción de tu propio menú, y ésas están en cuatro
+ * archivos distintos (`player/emote_*.script`).
+ *
+ *     playanim hold sitdown         emote_sit&stand.script:54
+ *     playanim once nod_yes         emote_yes.script:25
+ *     playanim once nod_no          emote_no.script:25
+ *     playanim hold attention       emote_idle.script:25
+ *
+ * Tres de las cuatro ya estaban por casualidad: `sitdown` y `attention` porque
+ * la pantalla las pide también, y `nod_yes` porque **es la secuencia 0** y el
+ * extractor emite siempre la primera. La que faltaba era `nod_no`, y no habría
+ * dado ningún error: el visor cae a la primera secuencia que tenga, así que
+ * «Emote: Nod No» habría hecho que el muñeco dijera **sí**.
+ *
+ * *El 78, literal: una lista blanca sólo mira donde sabe mirar, y el nombre puede
+ * venir de otro archivo.*
+ */
+export const ANIMACIONES_DE_EMOCION = ["sitdown", "nod_yes", "nod_no", "attention"];
 
 /**
  * Los dos cuerpos, CALCULADOS de las bases del archivo y no escritos.
@@ -210,6 +236,19 @@ if (faltan.length) {
 }
 console.log(`    animaciones   las 6 de global.script: ${Object.values(ANIMACIONES).join(", ")}`);
 
+// CONTROL 1b (85): y las cuatro de las emociones, que vienen de OTROS cuatro
+// archivos. Va aparte del control de arriba a propósito: si se metieran en el
+// mismo `ANIMACIONES`, el día que alguien toque `global.script` no se sabría
+// cuál de las dos listas se ha quedado corta.
+{
+  const sinEllas = ANIMACIONES_DE_EMOCION.filter((n) => !tiene(n));
+  if (sinEllas.length) {
+    console.error(`  FALLO: ${MODELO}.mdl no trae las emociones ${sinEllas.join(", ")}`);
+    process.exit(1);
+  }
+  console.log(`    emociones     las 4 de player/emote_*.script: ${ANIMACIONES_DE_EMOCION.join(", ")}`);
+}
+
 // Y su CONTROL DE CONTROL: el modelo que yo había apuntado en el plan falla
 // aquí. Sin esto, «las seis están» es una comprobación que no sabe decir no.
 {
@@ -287,7 +326,10 @@ if (rig.peor > RIGIDO) {
 // --- y ahora sí, a disco ---------------------------------------------------
 
 mkdirSync(SALIDA, { recursive: true });
-const quiero = Object.values(ANIMACIONES);
+// Las seis de la pantalla MÁS las cuatro de las emociones (85). Sin duplicar, y
+// con `nod_no`, que es la que faltaba y no daba error: ver
+// `ANIMACIONES_DE_EMOCION`.
+const quiero = [...new Set([...Object.values(ANIMACIONES), ...ANIMACIONES_DE_EMOCION])];
 const RAZON = "las cajas de secuencia de reference.mdl no describen su propia malla; " +
   "manda el oráculo de la rigidez (src/bsp/mdlanim.js)";
 const generos = {};
@@ -295,7 +337,7 @@ let dueñoDeLasPistas = null;
 for (const [genero, digito] of [["male", 1], ["female", 2]]) {
   console.log(`\n  ${genero}`);
   const r = extraerBicho(`${MODELO}.mdl`, {
-    cuerpo: cuerpoDe(m, digito), base: MODELOS, salida: SALIDA, quiero,
+    cuerpo: cuerpoDe(m, digito), base: MODELOS, salida: SALIDA, raizSalida: salidaComun(), quiero,
     sinOraculoDeCaja: RAZON,
     // El primero las trae; el segundo las toma prestadas.
     pistasDe: dueñoDeLasPistas,
@@ -352,7 +394,7 @@ for (const [genero, digito] of [["male", 1], ["female", 2]]) {
   );
 }
 
-writeFileSync(`${resolve("build/gatecity")}/cuerpos.json`, JSON.stringify({
+writeFileSync(`${salidaComun()}/cuerpos.json`, JSON.stringify({
   procedencia: `derivado local de models/${MODELO}.mdl de Master Sword Rebirth. No redistribuible.`,
   modelo: `models/${MODELO}.mdl`,
   unidadesPorMetro: U,
@@ -373,4 +415,4 @@ writeFileSync(`${resolve("build/gatecity")}/cuerpos.json`, JSON.stringify({
   encuadre: { distancia: 5, alto: 0.4, escala: 0.025, separacion: 2, giro: 180, fov: 90, fraccionDelAlto: 0.24 },
   generos,
 }, null, 1));
-console.log(`\n  escrito en      build/gatecity/cuerpos.json y build/gatecity/cuerpos/\n`);
+console.log(`\n  escrito en      build/msr/cuerpos.json y build/msr/cuerpos/\n`);

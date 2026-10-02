@@ -205,10 +205,11 @@ describe("la barra de carga", () => {
   // La errata de precedencia de C, que ya estaba portada en el 24: aquí se
   // comprueba que sigue portada y se deja escrito lo que se quería.
   test("las dos barras salen a 304 ∓ 30 y el separador no se usa nunca", () => {
-    const [derecha, izquierda] = cargaEn(640, 480);
-    assert.equal(derecha.x, 304 - 30);
-    assert.equal(izquierda.x, 304 + 30);
-    assert.equal(izquierda.x - (derecha.x + derecha.w), 30,
+    // Los nombres eran al revés hasta el 40: el índice 0 es `LEFT_HAND`.
+    const [izquierda, derecha] = cargaEn(640, 480);
+    assert.equal(izquierda.x, 304 - 30);
+    assert.equal(derecha.x, 304 + 30);
+    assert.equal(derecha.x - (izquierda.x + izquierda.w), 30,
       "con el separador puesto el hueco sería de 2 px, no de 30");
   });
 });

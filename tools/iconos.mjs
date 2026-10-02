@@ -1,3 +1,5 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
+import { BASE_COMUN } from "../src/play/recursos.js";
 // LOS ICONOS DE LOS OBJETOS: 244 cuadros de 128×128 en un solo `.spr`.
 //
 //   npm run iconos
@@ -65,14 +67,14 @@
 // Misma regla de siempre: **el lector es nuestro, el contenido no se copia.**
 
 import { writeFileSync, existsSync, readFileSync, appendFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 
 import { leerSpr } from "../src/bsp/sprite.js";
 import { escribirPng } from "./png.mjs";
 
 const ASSETS = process.argv[2] ?? "../MSC/assets/msr";
 const SCRIPTS = process.argv[3] ?? "../MSC/MSCScripts/scripts";
-const SALIDA = resolve("build/gatecity/iconos");
+const SALIDA = salidaComun("iconos");
 
 /**
  * Los 77 nombres de `SpriteArray`, en su orden, que ES el número de cuadro.
@@ -133,6 +135,7 @@ function buscarScript(dir, nombre) {
 
 // ── LO QUE SE EJECUTA ───────────────────────────────────────────────────────
 if (process.argv[1]?.endsWith("iconos.mjs")) {
+  prepararComunes();
   const spr = `${ASSETS}/sprites/items/640_allitems.spr`;
   if (!existsSync(spr)) {
     console.error(`No encuentro ${spr}. Pásame la carpeta del juego.`);
@@ -242,7 +245,7 @@ if (process.argv[1]?.endsWith("iconos.mjs")) {
   for (const c of controles) console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(64)} ${c.detalle}`);
   console.log(`\n  ${controles.filter((c) => c.bien).length} de ${controles.length} controles`);
 
-  writeFileSync(resolve("build/gatecity/iconos.json"), JSON.stringify({
+  writeFileSync(salidaComun("iconos.json"), JSON.stringify({
     procedencia: {
       assets: ASSETS, scripts: SCRIPTS,
       cuando: new Date().toISOString().slice(0, 10),
@@ -254,7 +257,7 @@ if (process.argv[1]?.endsWith("iconos.mjs")) {
         "global.script:26  reg.newchar.weaponlist, las siete armas de partida",
       ],
     },
-    base: "build/gatecity/",
+    base: `${BASE_COMUN}/`,
     cuadros: cuadros.length,
     /** Por arma de partida: el icono si lo tiene, y `null` si su script dice `hand`. */
     armas: Object.fromEntries(ARMAS.map((a) => [a, escritos[a] ?? null])),
@@ -269,7 +272,7 @@ if (process.argv[1]?.endsWith("iconos.mjs")) {
   }, null, 1));
   console.log(`  ${Object.keys(escritos).length} iconos, ${(bytes / 1024).toFixed(0)} KB, en ${SALIDA}`);
 
-  const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+  const PROC = salidaComun("PROCEDENCIA.md");
   const MARCA = "## Los iconos de los objetos";
   if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
     appendFileSync(PROC, `

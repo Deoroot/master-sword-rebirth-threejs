@@ -123,12 +123,12 @@ FontSize = 9`, { conFallos: false });
     assert.equal(pilaDe("lo que sea").includes("Sitka"), true, "lo desconocido cae en la pila del juego");
   });
 
-  if (existsSync("build/gatecity/vgui.json")) {
+  if (existsSync("build/msr/vgui.json")) {
     await t.test("y contra el fichero de verdad: los tamaños NO van en orden", () => {
       // El hallazgo de los datos del propio juego: el archivo de 1440 pone 21
       // donde el de 1920 pone 16, o sea que a 1440 el texto del cuerpo se ve MÁS
       // GRANDE que a 1920. No es un error de lectura y no se arregla.
-      const f = JSON.parse(readFileSync("build/gatecity/vgui.json", "utf8"));
+      const f = JSON.parse(readFileSync("build/msr/vgui.json", "utf8"));
       const c = [640, 960, 1440, 1920].map((r) => f.esquemas[r]["Briefing Text"].tamano);
       assert.deepEqual(c, [14, 14, 21, 16]);
       assert.ok(c[2] > c[3], "el de 1440 es el mayor de los cuatro");
@@ -686,5 +686,86 @@ test("crear personaje: las tres etapas y los dos fallos de medida", async (t) =>
     assert.equal(M.ranuraAncho, 110);
     assert.equal(M.ranuraAlto, 130);
     assert.equal(M.campoAlto, 20, "el campo de nombre tampoco escala");
+  });
+});
+
+// ── CHARACTER INFO: la fila del panel de la derecha ────────────────────────
+//
+// `vgui_stats.cpp` pinta las habilidades en DOS sitios con DOS formatos, y el
+// porcentaje vive sólo en el de la derecha (`:344`); la lista de la izquierda es
+// «nombre: número» y nada más (`:277`). Eso no lo puede comprobar una prueba de
+// Node —es pantalla— y va en `sondas/vgui29.mjs`. Lo que sí se comprueba aquí es
+// la cadena, que es aritmética y formato.
+test("la fila de propiedad del panel de habilidad", async (t) => {
+  const { filaDePropiedad } = await import("../src/vgui/estadisticas.js");
+  const { expNecesaria } = await import("../src/juego/stats.js");
+
+  await t.test("trae el nombre con mayúscula, el porcentaje y lo que falta", () => {
+    // Elegido para que el porcentaje no sea redondo: la mitad justa de lo que
+    // pide pasar de 2 a 3.
+    const falta = expNecesaria(2);
+    const f = filaDePropiedad({ clave: "proficiency", valor: 2, exp: falta / 2 }, 3);
+    assert.equal(f, `Proficiency: 2 (50.00%) [${Math.ceil(falta / 2)} left]`);
+  });
+
+  await t.test("el nombre sale de `SkillTypeList` y no de la clave interna", () => {
+    // El fallo que tenía: `${p.clave}` daba «proficiency» en minúscula.
+    assert.match(filaDePropiedad({ clave: "power", valor: 1, exp: 0 }, 3), /^Power: /);
+    assert.match(filaDePropiedad({ clave: "balance", valor: 1, exp: 0 }, 3), /^Balance: /);
+  });
+
+  await t.test("con más de tres propiedades los nombres son las escuelas", () => {
+    // `if (iSubStats <= STATPROP_TOTAL) Name = SkillTypeList[i]; else SpellTypeList[i];`
+    // — vgui_stats.cpp:331-335. Un mago tiene cinco.
+    assert.match(filaDePropiedad({ clave: "fire", valor: 1, exp: 0 }, 5), /^Fire: /);
+    assert.match(filaDePropiedad({ clave: "affliction", valor: 1, exp: 0 }, 5), /^Affliction: /);
+  });
+
+  await t.test("dos decimales siempre, que es el `%.2f` del motor", () => {
+    const falta = expNecesaria(3);
+    assert.match(filaDePropiedad({ clave: "power", valor: 3, exp: falta }, 3), /\(100\.00%\)/);
+    assert.match(filaDePropiedad({ clave: "power", valor: 3, exp: 0 }, 3), /\(0\.00%\)/);
+  });
+
+  await t.test("los tres topes del motor", () => {
+    const falta = expNecesaria(4);
+    // `if (Percent > 100.0) Percent = 100.0;`
+    assert.match(filaDePropiedad({ clave: "power", valor: 4, exp: falta * 9 }, 3), /\(100\.00%\)/);
+    // `if (Percent < 0.0) Percent = 0.0;`
+    assert.match(filaDePropiedad({ clave: "power", valor: 4, exp: -50 }, 3), /\(0\.00%\)/);
+  });
+
+  await t.test("una propiedad a cero no da «NaN%», y ésa es la guarda que importa", () => {
+    // `expNecesaria(0)` vale 0 —«el primer punto es gratis»—, así que esto es una
+    // división por cero. En C da `inf` y lo recogen los topes; en JavaScript da
+    // `NaN`, y `NaN` no es mayor que 100 ni menor que 0, así que ningún tope lo
+    // atrapa: lo atrapa `if (SubStat.Value == 0) Percent = 0.0`, que por eso NO
+    // es cosmética. Un personaje recién creado tiene dos propiedades a cero en
+    // cada arma, o sea que esto se ve en la primera partida de cualquiera.
+    const f = filaDePropiedad({ clave: "proficiency", valor: 0, exp: 0 }, 3);
+    assert.equal(f, "Proficiency: 0 (0.00%) [0 left]");
+    assert.doesNotMatch(f, /NaN/);
+  });
+
+  await t.test("el valor se trunca, no se redondea: `(int)SubStat.Value`", () => {
+    assert.match(filaDePropiedad({ clave: "power", valor: 2.9, exp: 0 }, 3), /^Power: 2 /);
+  });
+
+  await t.test("lo que falta se redondea hacia ARRIBA: `(int)ceil(ExpToLevel)`", () => {
+    // Con un punto de experiencia de menos que el necesario, «0 left» sería
+    // mentira: todavía falta. `ceil` es lo que lo impide.
+    const falta = expNecesaria(5);
+    const f = filaDePropiedad({ clave: "power", valor: 5, exp: falta - 0.4 }, 3);
+    assert.match(f, /\[1 left\]/);
+  });
+
+  await t.test("usa `GetExpNeeded(valor)` y NO `valor + 1`", () => {
+    // La trampa que `src/juego/stats.js:300` ya tiene documentada para la subida,
+    // y que `src/juego/interfaz.js` hace al revés a propósito porque responde a
+    // otra pregunta. Si esto usara `valor + 1` el porcentaje saldría ~1,248 veces
+    // más pequeño y seguiría pareciendo razonable: por eso se fija aquí.
+    const f = filaDePropiedad({ clave: "power", valor: 10, exp: expNecesaria(10) }, 3);
+    assert.match(f, /\(100\.00%\)/, "con la exp justa del valor ACTUAL es el 100 %");
+    assert.notEqual(expNecesaria(10), expNecesaria(11), "control: las dos curvas difieren");
   });
 });

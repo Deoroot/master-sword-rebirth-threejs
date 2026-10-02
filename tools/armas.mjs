@@ -1,3 +1,4 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
 // LAS ARMAS DE PARTIDA, con su modelo y su ficha de ataque.
 //
 //   npm run armas
@@ -16,11 +17,10 @@
 // del submodelo tiene que casar con el del arma.
 //
 // Misma regla del 02 que todo lo demás: **el lector es nuestro, el contenido no
-// se copia.** Lo extraído vive en `build/gatecity/armas/`, que está en
+// se copia.** Lo extraído vive en `build/msr/armas/`, que está en
 // `.gitignore`, y no se mueve un byte a `public/`.
 
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { leerMdl, TAM } from "../src/bsp/mdl.js";
 import { leerFichaObjeto } from "../src/bsp/script.js";
@@ -28,7 +28,8 @@ import { extraerBicho, nombreArchivo } from "./bicho.mjs";
 
 const SCRIPTS = process.argv[2] ?? "../MSC/MSCScripts/scripts";
 const MODELOS = "../MSC/assets/msr/models";
-const SALIDA = resolve("build/gatecity/armas");
+const SALIDA = salidaComun("armas");
+prepararComunes();
 
 if (!existsSync(`${SCRIPTS}/items`)) {
   console.error(`No encuentro ${SCRIPTS}/items. Pásame la carpeta scripts/ de MSR.`);
@@ -113,7 +114,7 @@ for (const ruta of PEDIDAS) {
         f.animaciones.tensar, f.animaciones.disparar,
       ].filter((v) => v !== null && v !== undefined);
       const r = extraerBicho(rel, {
-        cuerpo: f.enMano.submodelo, base: MODELOS, salida: SALIDA,
+        cuerpo: f.enMano.submodelo, base: MODELOS, salida: SALIDA, raizSalida: salidaComun(),
         quiero: quiero.length ? quiero : null, callar: true,
       });
       arma.enMano.clave = r?.clave ?? null;
@@ -132,7 +133,7 @@ for (const ruta of PEDIDAS) {
     } else {
       const { submodelos } = submodelosDe(ruta3d, f.enElMundo.cuerpo);
       const r = extraerBicho(rel, {
-        cuerpo: f.enElMundo.cuerpo, base: MODELOS, salida: SALIDA,
+        cuerpo: f.enElMundo.cuerpo, base: MODELOS, salida: SALIDA, raizSalida: salidaComun(),
         // Del modelo del mundo sólo hace falta estar quieto en la mano.
         quiero: [`${f.enElMundo.animaciones}_idle`], callar: true,
       });
@@ -190,7 +191,7 @@ for (const ruta of FLECHAS) {
     // `idle1`; `idle2` es la de tenerla en la mano. Se emiten las dos, que entre
     // las dos no llegan a 30 KB.
     const r = extraerBicho(rel, {
-      cuerpo: p.submodelo ?? 0, base: MODELOS, salida: SALIDA,
+      cuerpo: p.submodelo ?? 0, base: MODELOS, salida: SALIDA, raizSalida: salidaComun(),
       quiero: ["idle1", "idle2"], callar: true,
     });
     flecha.clave = r?.clave ?? null;
@@ -335,7 +336,7 @@ writeFileSync(`${SALIDA}/../armas.json`, JSON.stringify({
 }, null, 1));
 
 // ── LA PROCEDENCIA, que es parte del trabajo y no papeleo ─────────────────
-const PROC = resolve("build/gatecity/PROCEDENCIA.md");
+const PROC = salidaComun("PROCEDENCIA.md");
 const MARCA = "## Las ARMAS";
 if (existsSync(PROC) && !readFileSync(PROC, "utf8").includes(MARCA)) {
   appendFileSync(PROC, `
@@ -359,7 +360,7 @@ un byte a \`public/\`.**
 console.log(`\n  ${armas.length} armas y ${flechas.length} flechas, ` +
   `${(bytes / 1024 / 1024).toFixed(2)} MB de malla y animación`);
 if (avisos.length) console.log(`\n  AVISOS\n${avisos.map((a) => `    ${a}`).join("\n")}`);
-console.log(`\n  escrito en      build/gatecity/armas.json\n`);
+console.log(`\n  escrito en      build/msr/armas.json\n`);
 if (malos.length) {
   console.error(`  ${malos.length} controles en rojo:\n${malos.map((m) => `    ${m}`).join("\n")}`);
   process.exit(1);

@@ -46,6 +46,32 @@ const sinComentarios = (l) => {
   return (i >= 0 ? l.slice(0, i) : l).trim();
 };
 
+/** Las etiquetas de ámbito, iguales que en la cabecera de un bloque. */
+const AMBITOS = { "[client]": "cliente", "[server]": "servidor", "[shared]": "compartido" };
+
+/**
+ * Lo que va detrás de un `#include`: el ámbito, si lo trae, y la RUTA.
+ *
+ * La regla está citada entera arriba, en `partirScript`. Aquí sólo el reparto,
+ * y un detalle del motor que importa: el corchete se mira con `contains`, así
+ * que `[server]` y `[casual]` pueden venir **pegados** —`[server][casual]`— y
+ * los dos cuentan. `[casual]` no elige ámbito: sólo dice que si el fichero no
+ * está no es un error, que aquí es lo que pasa siempre.
+ */
+export function includeDe(cola) {
+  let resto = String(cola ?? "").trim();
+  let ambito = null;
+  if (resto.startsWith("[")) {
+    const corchetes = resto.match(/^(\[[^\]]*\])+/)?.[0]?.toLowerCase() ?? "";
+    for (const [etiqueta, nombre] of Object.entries(AMBITOS)) {
+      if (corchetes.includes(etiqueta)) { ambito = nombre; break; }
+    }
+    resto = resto.slice(corchetes.length).trim();
+  }
+  // El tercer token es `allowduplicate` y no se porta — ver `partirScript`.
+  return { ruta: resto.split(/\s+/)[0] || null, ambito: ambito ?? "compartido" };
+}
+
 /**
  * Parte un script en bloques, y devuelve además las líneas de fuera.
  *
@@ -67,6 +93,61 @@ const sinComentarios = (l) => {
  *
  * Las dos reglas son OPUESTAS y las dos hacen falta a la vez. Leerlas al revés
  * no da error: da una espada oxidada que hace el daño de la base.
+ *
+ * ── EL 82: UN `#include` PUEDE TRAER ÁMBITO DELANTE ────────────────────────
+ *
+ * Y entonces **el nombre del fichero es el token SIGUIENTE**:
+ *
+ *     msstring FileName = Line.thru_char(SKIP_STR);
+ *     eventscope_e Scope = EVENTSCOPE_SHARED;
+ *     if (FileName.c_str()[0] == '[') {
+ *       if (FileName.contains("[server]"))      Scope = EVENTSCOPE_SERVER;
+ *       else if (FileName.contains("[client]")) Scope = EVENTSCOPE_CLIENT;
+ *       if (FileName.contains("[casual]"))      Casual = true;
+ *       Line = Line.substr(FileName.len()).skip(SKIP_STR);
+ *       FileName = Line.thru_char(SKIP_STR);          // <- el de verdad
+ *     }
+ *     if ((Scope == EVENTSCOPE_SHARED) ||
+ *         MSGlobals::IsServer == (Scope == EVENTSCOPE_SERVER)) ...Spawn(FileName...)
+ *                                                  script.cpp:5229-5246
+ *
+ * Esto leía `/^#include\s+(\S+)/`, o sea que de
+ *
+ *     #include [server] monsters/externals
+ *     #include [server] monsters/base_self_adjust     NPCs/base_npc.script:7-8
+ *
+ * se quedaba con **`[server]`**, buscaba `scripts/[server].script`, no lo
+ * encontraba y **se callaba** —`recoger` devuelve `false` y nadie lo lee—, con
+ * el fichero de verdad detrás. Son 135 `#include` con corchete en 90 ficheros
+ * (109 `[server]`, 10 `[casual]`, 10 `[shared]`, 6 `[client]`), y como el que
+ * los pone es `base_npc`, que incluye casi todo el que respira, el agujero no
+ * es de 135 sitios sino de todo lo que cuelga de ellos: **1 074 de los 2 884
+ * scripts** perdían ficheros —hasta 10 ficheros y 387 eventos en un lobo— y con
+ * ellos **6 308 de las 6 877 criaturas de los 93 mapas, en 90 mapas**. Las
+ * cuentas las imprime `npm run guiones`.
+ *
+ * Lo que se caía entero era `monsters/externals.script`, 1 861 líneas, que es
+ * donde viven los `set_*` del canal `params` —la tarea del 82— y
+ * `base_self_adjust.script`, que es **quien los reparte**. O sea que el canal
+ * no estaba «sin portar»: estaba sin poder cargarse.
+ *
+ * **Y esta vez no lo enseñaba el segundo mapa: Gate City pierde 61 de 69.**
+ * Lleva así desde que hay lector. Nadie lo vio porque un evento que no está
+ * cargado no se distingue de un evento que no existe: `llamar()` no encuentra
+ * nada y sigue, igual que el motor con un comando desconocido.
+ *
+ * Qué ámbito entra, que es la decisión ya tomada en este puerto: **esto es el
+ * servidor** (`game.serverside` → «1», `guion.js:643`). Así que entran
+ * `[server]`, `[shared]` y los que no traen corchete, y **no** entra
+ * `[client]`. `[casual]` no es un ámbito sino «si no está, no es un error», que
+ * aquí ya es el comportamiento de todos.
+ *
+ * Lo que NO se porta, dicho aquí y no descubierto luego: el tercer token,
+ * `allowduplicate` (`m.AllowDupInclude`, script.cpp:5250), que deja incluir dos
+ * veces el mismo fichero. Lo usan **33** `#include` y aquí `vistos` los corta
+ * siempre. No se porta porque lo que hace es volver a ejecutar un bloque, y eso
+ * sólo se nota con el intérprete corriendo; se dice el número para que el día
+ * que haga falta esté contado y no sorprenda.
  */
 export function partirScript(texto) {
   const bloques = [];
@@ -78,8 +159,18 @@ export function partirScript(texto) {
     const l = sinComentarios(bruto);
     if (!l) continue;
     if (!actual) {
-      const inc = l.match(/^#include\s+(\S+)/i);
-      if (inc) { incluye.push(inc[1]); piezas.push({ tipo: "include", ruta: inc[1] }); continue; }
+      const inc = l.match(/^#include\s+(.*)$/i);
+      if (inc) {
+        const { ruta, ambito } = includeDe(inc[1]);
+        // Un `[client]` no entra aquí, pero se apunta en `piezas` con su
+        // ámbito: quien lea las piezas tiene que poder ver que estaba y que se
+        // descartó a propósito. El hueco silencioso es lo que costó el 82.
+        if (ruta) {
+          piezas.push({ tipo: "include", ruta, ambito });
+          if (ambito !== "cliente") incluye.push(ruta);
+        }
+        continue;
+      }
     }
     // Una llave puede venir pegada al principio de la línea con contenido
     // detrás: `{ goblin_remove` es un bloque cuyo nombre es el evento.
@@ -158,9 +249,25 @@ function cabeceraDe(bloque) {
     nombre = t.toLowerCase();
   }
   if (!vale) { nombre = null; anula = false; ambito = null; }
-  // `eventname` gana: es la forma larga y puede estar en cualquier línea.
+  /**
+   * `eventname` gana: es la forma larga y puede estar en cualquier línea.
+   *
+   * ── EL FALLO DEL 81 ────────────────────────────────────────────────────
+   * Esto comparaba contra la línea **sin recortar**, y un guion de Master
+   * Sword escribe `eventname` sangrado DENTRO de las llaves. Resultado:
+   * **570 de 570 declaraciones en 202 ficheros**, el total del juego, no
+   * nombraban nada — la forma larga no funcionó ni una vez en 81
+   * experimentos. Dos líneas más arriba la forma corta sí recorta
+   * (`bloque[0]?.trim()`), y por eso los 25 guiones de Gate City, que la
+   * usan, salieron bien y nadie miró: el caso único del 50 otra vez.
+   *
+   * Y no era un hueco callado, era peor: **un bloque sin nombre se ejecuta
+   * entero al nacer** (el 60). Así que Sylphiel corría su `say_reward3` en
+   * el primer fotograma y te regalaba el oro de una misión que no habías
+   * empezado.
+   */
   for (const l of bloque) {
-    const m = l.match(/^eventname\s+(\S+)/i);
+    const m = l.trim().match(/^eventname\s+(\S+)/i);
     if (m) { nombre = m[1].toLowerCase(); break; }
   }
   return { nombre, anula, ambito };
@@ -242,6 +349,34 @@ function recoger(raiz, rutaScript, vistos, profundidad, indice, vars, orden) {
  * un caso distinto de un error: quiere decir que el mod pide un script que esta
  * copia no trae, y eso hay que decirlo y no adivinarlo.
  */
+/**
+ * QUÉ GUION LLEVA UNA ENTIDAD, y no es el que parece — el 67.
+ *
+ * Una entidad de bicho puede traer las dos claves, y **gana `scriptfile`**:
+ *
+ *     else if (FStrEq(pkvd->szKeyName, "scriptfile") ||
+ *         (FStrEq(pkvd->szKeyName, "defscriptfile") && !m_ScriptName))
+ *                                            msmonsterserver.cpp:415-416
+ *
+ * `scriptfile` escribe `m_ScriptName` **siempre**; `defscriptfile` sólo si está
+ * vacío. Así que el orden de las claves dentro de la entidad da igual: si
+ * `defscriptfile` va primero lo pisa el `scriptfile` de después, y si va segundo
+ * se encuentra el sitio ocupado y no hace nada. `defscriptfile` es, literalmente,
+ * el valor **por omisión** que el editor deja puesto.
+ *
+ * Esto estaba al revés —`defscriptfile ?? scriptfile`—, y no daba ningún error
+ * porque el valor de reposo es un bicho válido: **3 373 criaturas en 81 mapas**
+ * salían con el guion de su clase en vez del suyo. En Edana son 10, y seis son
+ * vecinos: el sumo sacerdote, el maestro y tres sacerdotes salían como
+ * `NPCs/default_human`, el viejo también, el cofre del alcalde era un cofre
+ * cualquiera y los dos jabalíes especiales —`edana/boarhard` y el jefe de 60 de
+ * vida— eran dos jabalíes de 20. En Gate City son 4 y son ratas que deberían
+ * ser arañas pequeñas: otra vez el mapa que había, con cuatro, no lo enseñaba.
+ */
+export function guionDeEntidad(e) {
+  return e?.scriptfile || e?.defscriptfile || null;
+}
+
 export function leerFichaNpc(raiz, rutaScript) {
   const indice = new Map();
   const vars = new Map();
@@ -398,6 +533,65 @@ export function sonidosDeEvento(f, nombre) {
   return fuera;
 }
 
+/**
+ * EL DAÑO Y EL ACIERTO DE UN ATAQUE, LEÍDOS DE SU `dodamage` — el 67.
+ *
+ * Hay **dos estilos de declarar un ataque** en Master Sword, y el lector sólo
+ * conocía el nuevo:
+ *
+ *     // EL NUEVO (`base_npc_attack_new`), el del goblin:
+ *     setvar ATTACK_DAMAGE $randf(6,9)
+ *     callevent npcatk_dodamage NPCATK_TARGET direct ATTACK_DAMAGE ATTACK_HITCHANCE
+ *                                            monsters/goblin.script:69-70
+ *
+ *     // EL VIEJO (`base_npc_attack`), el del jabalí:
+ *     { gore_forward
+ *       dodamage ENTITY_ENEMY ATTACK_HITRANGE GORE_FORWARD_DAMAGE ATTACK_HITCHANCE }
+ *                                            monsters/boar.script:25-29
+ *
+ * En el viejo **no existe `ATTACK_DAMAGE`**: el daño es una constante con el
+ * nombre de la animación, y el evento que la usa se llama como la animación
+ * también. Así que `rango(v("ATTACK_DAMAGE"))` daba `null`, y un `null` no da
+ * error: da un bicho que te persigue, te embiste y no te quita vida.
+ *
+ * `dodamage <objetivo> <alcance> <daño> <acierto> [tipo]`
+ *                                            npcscript.cpp:1107-1113
+ *
+ * O sea: el daño es `params[2]` y el acierto `params[3]`, y los dos hay que
+ * resolverlos porque casi siempre son constantes.
+ *
+ * ── LO QUE COSTABA ─────────────────────────────────────────────────────────
+ *
+ * En Edana, los **6 jabalíes**: los cuatro normales, el `boarhard` y el jefe.
+ * Y en Gate City, que es donde corren TODAS las sondas de combate del proyecto,
+ * las **2 arañas, la escupidora y las 4 crías**. Las sondas estaban verdes
+ * porque miden contra goblins y zombis, que son del estilo nuevo; ningún
+ * control del proyecto se había puesto delante de una araña a ver si muerde.
+ *
+ * @param f       la ficha de `leerFichaNpc`
+ * @param nombre  el evento de ataque, que en el estilo viejo es la animación
+ */
+export function danoDeEvento(f, nombre) {
+  if (!nombre) return null;
+  const bloques = f?.eventos?.get(String(nombre).toLowerCase()) ?? [];
+  for (const b of bloques) {
+    for (const cruda of b) {
+      const l = cruda.replace(/\/\/.*$/, "").trim();
+      // Sin anclar al principio, por la misma razón que `sonidosDeEvento`: la
+      // mitad de estas líneas van detrás de un `if ( … )` en la misma línea.
+      const m = l.match(/\bdodamage\s+(.+)$/i);
+      if (!m) continue;
+      const ps = m[1].split(/\s+/).filter(Boolean);
+      if (ps.length < 4) continue;                 // `if (Params.size() >= 4)`
+      return {
+        dano: String(f.resuelve(ps[2]) ?? ps[2]).trim(),
+        aciertos: String(f.resuelve(ps[3]) ?? ps[3]).trim(),
+      };
+    }
+  }
+  return null;
+}
+
 /** El modelo y las dos animaciones que la ficha declara, ya resueltos. */
 export function modeloYAnimaciones(f) {
   if (!f) return null;
@@ -408,7 +602,8 @@ export function modeloYAnimaciones(f) {
     parado: f.ficha.setidleanim ?? null,
     andando: f.ficha.setmoveanim ?? null,
     nombre: f.ficha.name ?? null,
-    hp: f.ficha.hp ? Number(f.ficha.hp) : null,
+    // `atof` y no `Number`: `hp 700/700` son 700, no `NaN`. Ver `atof`, el 79.
+    hp: vidaDe(f.ficha.hp),
     ancho: f.ficha.width ? Number(f.ficha.width) : null,
     alto: f.ficha.height ? Number(f.ficha.height) : null,
     cuerpos: f.cuerpos ?? [],
@@ -531,10 +726,83 @@ export const IA_POR_OMISION = {
   esperaHastaElImpacto: 0.1,
 };
 
+/**
+ * `atof` DE C, QUE NO ES `Number` — experimento 79.
+ *
+ *     if (Params.size() == 1)
+ *         m_HP = pev->health = pev->max_health = m_MaxHP = atof(Params[0]);
+ *     if (Params.size() >= 2)
+ *     { m_HP = pev->health = atof(Params[0]);
+ *       pev->max_health = m_MaxHP = atof(Params[1]); }
+ *                                            npcscript.cpp:185-196
+ *
+ * El comando `hp` del mod espera DOS parámetros separados por un espacio, y
+ * **veintiún guiones del juego escriben `hp 700/700`**, que es uno solo. En el
+ * motor eso funciona *por accidente*: `atof` lee el prefijo numérico más largo
+ * y abandona en la barra, así que devuelve 700 — y como `Params.size()` vale 1,
+ * la vida actual y la máxima salen las dos a 700, que es justo lo que el
+ * guionista quería escribir.
+ *
+ * `Number("700/700")` es `NaN`, y de ahí salía un `hp: null`. **Un NPC sin vida
+ * no está en `Manada.vivos()`, que exige `vida > 0`** (`manada.js:545`), y esa
+ * lista es la que alimenta `candidatosDeGolpe()`: así que no se le podía pegar
+ * **ni hablar**, porque el menú mira con la misma regla que la espada
+ * (`main.js`, `aQuien`). Edrin, capitán de la guardia de Edana —el único NPC
+ * de los tres mapas con opciones de menú de tipo `say`— era invisible para la
+ * F y para el mandoble, y no daba un solo error.
+ *
+ * Medido sobre los 2 884 guiones: **la única clave en la que `Number` y `atof`
+ * no coinciden es `hp`**, en esos 21 ficheros, y ninguna otra de las que este
+ * lector convierte. Lo vigila `test/atof79.test.mjs`.
+ *
+ * Esto NO cambia `num`: ahí `null` significa «el guion no lo declara», que es
+ * una distinción nuestra y no del mod —el mod simplemente no ejecuta la línea—
+ * y de ella cuelgan dos docenas de `?? valorPorOmisión`. La diferencia que
+ * queda escrita es que un valor declarado y no numérico da `null` aquí y daría
+ * `0` en C; hoy no hay ninguno, y el día que lo haya lo dirá esa prueba.
+ *
+ * ── Y LO PEOR DEL CASO ────────────────────────────────────────────────────
+ *
+ * **`atof` ya estaba en este archivo**, 500 líneas más abajo, con su cita y con
+ * el aviso «No es `Number()`» escrito encima — lo usa la aritmética de los
+ * guiones de objetos desde el 66. Lo que faltaba no era entenderlo: era que el
+ * lector de FICHAS lo usara. Es el 64 otra vez (un comando y una ventana, cada
+ * uno esperando al otro) y el 66 (una pieza correcta a la que nadie llamaba).
+ * Por eso aquí no se declara otro: se usa aquél.
+ */
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+/** `hp`, con el `atof` del motor: declarado va por `atof`, ausente sigue `null`. */
+const vidaDe = (v) => (v === undefined || v === null || String(v).trim() === "" ? null : atof(v));
 /** Un texto de script viene entrecomillado: `const PARRY_TYPE "dodged!"`. */
 const texto = (v) => (v === undefined || v === null ? null : String(v).trim().replace(/^(['"])(.*)\1$/s, "$2"));
 /** `60%` y `60` son lo mismo; `$randf(6,9)` es un rango. */
+/**
+ * LOS CINCO `DROP_ITEM`, con su probabilidad (el 82).
+ *
+ * Devuelve `[{ objeto, probabilidad }]` en el orden del mod, y SÓLO los que
+ * declaran objeto: un hueco con probabilidad y sin nombre no es un objeto, y
+ * uno con nombre y sin probabilidad tampoco se tira —`$rand(1,100) <= ''` es
+ * falso en el motor—, así que los dos se descartan y se dice cuál faltaba.
+ *
+ * La probabilidad viene como «20%» o «50%»; `rango` ya se come el `%`. Se
+ * guarda el número y no un 0-1: el mod compara contra `$rand(1,100)` y
+ * traducirlo aquí haría que el número horneado no se pareciera al del archivo.
+ */
+function botinDe(v) {
+  const fuera = [];
+  for (let n = 1; n <= 5; n++) {
+    const objeto = v(`DROP_ITEM${n}`);
+    const p = rango(v(`DROP_ITEM${n}_CHANCE`));
+    if (!objeto || typeof objeto !== "string") continue;
+    const nombre = objeto.trim();
+    // Sin resolver no es un objeto: es el token que el guion dejó escrito.
+    if (!nombre || /^DROP_ITEM\d/.test(nombre)) continue;
+    if (!p || !(p.min > 0)) { fuera.push({ objeto: nombre, probabilidad: 0, porQue: "sin CHANCE" }); continue; }
+    fuera.push({ objeto: nombre, probabilidad: p.min });
+  }
+  return fuera.length ? fuera : null;
+}
+
 function rango(v) {
   if (v === undefined || v === null) return null;
   const s = String(v).trim();
@@ -542,6 +810,18 @@ function rango(v) {
   if (r) return { min: Number(r[1]), max: Number(r[2]) };
   const n = Number(s.replace(/%$/, ""));
   return Number.isFinite(n) ? { min: n, max: n } : null;
+}
+
+/**
+ * `ATTACK_DAMAGE_LOW` + `ATTACK_DAMAGE_HIGH` -> un rango (el 67).
+ *
+ * Con una sola de las dos no se devuelve nada: el par es la declaración, y
+ * quedarse con la mitad daría un daño fijo que el bicho no tiene.
+ */
+function parDeRango(bajo, alto) {
+  const a = rango(bajo); const b = rango(alto);
+  if (!a || !b) return null;
+  return { min: a.min, max: b.max };
 }
 
 /**
@@ -579,6 +859,8 @@ export function iaDe(f) {
   // comentario de cabecera del propio script (líneas 11-14): moverse hasta la
   // anchura, blandir a 3x y tocar a 4x. El goblin los pisa con 90/130/130.
   const porAncho = (k) => (ancho ? ancho * k : null);
+  // El `dodamage` del evento que se llama como la animación de golpe (el 67).
+  const delGolpe = danoDeEvento(f, v("ANIM_ATTACK"));
   return {
     // Las animaciones. `ANIM_RUN` es la de perseguir y `setmoveanim` la de
     // pasear: no son la misma, y usar la de pasear para perseguir es lo que
@@ -593,8 +875,66 @@ export function iaDe(f) {
     alcanceParaPararse: num(v("MOVE_RANGE")) ?? ancho,
     /** Y a cuál se considera «he llegado»: `m_Width * 1.1` (msmonster.h:355). */
     cercaniaDeDestino: ancho ? ancho * 1.1 : null,
-    aciertos: rango(v("ATTACK_HITCHANCE")),
-    dano: rango(v("ATTACK_DAMAGE")),
+    // EL ORDEN IMPORTA, y es éste: primero lo que el script DECLARA, y sólo si
+    // no lo declara, lo que su evento de ataque PASA a `dodamage` (el 67). El
+    // estilo nuevo pone `ATTACK_DAMAGE` y el viejo no lo tiene; al revés, un
+    // bicho del estilo nuevo con un `dodamage` heredado de la plantilla se
+    // quedaría con el daño de la plantilla, que es el fallo del 66 con otra
+    // ropa. `danoDeEvento` pide el nombre de la ANIMACIÓN de golpe porque en el
+    // estilo viejo el evento de ataque se llama igual que ella.
+    // Y `ATTACK_ACCURACY` es el tercer nombre del acierto: la araña escribe
+    // `const ATTACK_ACCURACY 60%` y su `xdodamage` lo pasa ahí.
+    aciertos: rango(v("ATTACK_HITCHANCE")) ?? rango(v("ATTACK_ACCURACY"))
+      ?? rango(delGolpe?.aciertos),
+    // TRES FUENTES, en este orden, y las tres están en el mod (el 67):
+    //
+    //   1. `ATTACK_DAMAGE`                   el estilo NUEVO: goblin, zombi
+    //   2. el `dodamage` de su animación     el estilo VIEJO: jabalí
+    //   3. `ATTACK_DAMAGE_LOW`/`_HIGH`       el par, 49 ficheros: arañas,
+    //                                        esqueletos, cadáveres
+    //
+    // El par se lee de las constantes DECLARADAS y no del `xdodamage` que lo
+    // consume, a propósito: la araña lo usa como
+    // `local ATTACK_DAMAGE $randf(ATTACK_DAMAGE_LOW,ATTACK_DAMAGE_HIGH)`
+    // (`spider_base.script:33`), y un `local` no vive en las variables del
+    // script. Buscar el `dodamage` de la araña además obligaría a recorrer
+    // TODOS sus eventos, y entonces el `dodamage ent_laststole …` del guardia
+    // del alcalde —que es el castigo por robarle, no su ataque— pasaría por
+    // daño de ataque. Leer las dos constantes es lo que el bicho declara.
+    dano: rango(v("ATTACK_DAMAGE")) ?? rango(delGolpe?.dano)
+      ?? parDeRango(v("ATTACK_DAMAGE_LOW"), v("ATTACK_DAMAGE_HIGH")),
+    /**
+     * EL BOTÍN, que NO se decide al morir (el 82).
+     *
+     * `base_monster_shared.script:228-250` lo sortea dentro de
+     * `npc_post_spawn` —un segundo después de nacer— y hace `giveitem`, o sea
+     * que **se lo da al bicho**; al morir, `DropAllItems()` tira su inventario
+     * al suelo (msmonsterserver.cpp:2614, :2628, :2638). Así que «el jabalí no
+     * suelta su pellejo» no es un fallo del camino de la muerte: es que nunca
+     * lo llevó encima. Por eso esto se lee aquí y se sortea al nacer.
+     *
+     * Son cinco huecos en el mod y el bucle es el mismo para los cinco, pero
+     * **sólo dos los usa alguien**: `DROP_ITEM1` en 61 ficheros y `DROP_ITEM2`
+     * en 7; del 3 al 5, cero. Se leen los cinco porque cuesta lo mismo, y los
+     * tres vacíos se declaran sin caso en vez de contarse como portados — la
+     * regla del 50.
+     *
+     * LAS TRES GUARDAS NO SE LEEN, y conviene decir por qué una por una.
+     * `G_NO_DROP` y `OVERRIDE_NODROP` (`:221-225`) son de la PARTIDA y no del
+     * bicho. Y `NPC_NO_DROPS` (`:228`) **lo leí primero y estaba mal**: salía
+     * `true` para los cuatro jabalíes y la rata, o sea que habría anulado
+     * exactamente lo que esta línea viene a leer.
+     *
+     * La causa es de este lector y merece saberse: `recoger` cosecha los
+     * `setvar`/`setvard`/`const` de **todos los bloques de todo lo que se
+     * incluye**, corran o no, y `NPC_NO_DROPS 1` sólo existe dentro del evento
+     * `ext_no_drops` de `monsters/externals.script:881-884` —«add param to
+     * remove drops for exploitable monsters»—, al que **no llama nadie en los
+     * 2 884 guiones**. O sea que al nacer vale siempre lo que no está puesto, y
+     * portarlo desde `vars` sería portar el valor de un bloque que no se
+     * ejecuta. Si algún día hay un camino que lo encienda, se lee de ahí.
+     */
+    botin: botinDe(v),
     // `CAN_HUNT` y `HUNT_AGRO` se leen porque están, pero **no deciden nada
     // aquí**, y eso lo escribí mal primero: son del `base_npc_attack.script`
     // VIEJO. El goblin incluye `base_monster_new` -> `base_npc_attack_new`, y
@@ -638,8 +978,8 @@ export function iaDe(f) {
       puede: num(v("CAN_FLINCH")) === 1,
       animacion: v("FLINCH_ANIM") ?? v("ANIM_FLINCH") ?? null,
       probabilidad: rango(v("FLINCH_CHANCE"))?.min ?? 0,
-      umbralDeDano: num(v("FLINCH_DAMAGE_THRESHOLD")) ?? (num(f.ficha.hp) ?? 0) * 0.1,
-      vidaParaEmpezar: num(v("FLINCH_HEALTH")) ?? num(f.ficha.hp),
+      umbralDeDano: num(v("FLINCH_DAMAGE_THRESHOLD")) ?? (vidaDe(f.ficha.hp) ?? 0) * 0.1,
+      vidaParaEmpezar: num(v("FLINCH_HEALTH")) ?? vidaDe(f.ficha.hp),
       espera: rango(v("FLINCH_DELAY"))?.min ?? 5.0,
     },
     // HUIR. `CAN_FLEE` es 1 por omisión pero `FLEE_HEALTH` es 0, así que por
@@ -692,7 +1032,7 @@ export function iaDe(f) {
     esJefe: num(v("NPC_IS_BOSS")) === 1,
     /** `NPC_EXP_REDUCT`, la rebaja propia. Se guarda como TEXTO: ver `expadj`. */
     reduccionDeExp: v("NPC_EXP_REDUCT") ?? null,
-    vida: num(f.ficha.hp),
+    vida: vidaDe(f.ficha.hp),
     ancho, alto: num(f.ficha.height),
     raza: f.ficha.race ?? null,
     pasea: num(f.ficha.roam) === 1,
@@ -759,13 +1099,24 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       // acabar el árbol.
       acc.bloque++;
       const cab = cabeceraDe(pieza.lineas);
-      acc.evento = { nombre: cab.nombre, bloque: acc.bloque, anula: cab.anula, llama: [], registros: [] };
+      // `lineas` se guarda desde el 71: el cuerpo del suelo de un objeto no es
+      // una constante, son las órdenes de su `game_fall` — ver `caidaDe`.
+      acc.evento = {
+        nombre: cab.nombre, bloque: acc.bloque, anula: cab.anula,
+        llama: [], registros: [], lineas: pieza.lineas,
+      };
       acc.eventos.push(acc.evento);
     }
     if (pieza.tipo === "include") {
-      // El ámbito `[server]`/`[client]` delante de la ruta. Sin quitarlo, el
-      // cierre de dependencias sale corto y no avisa.
-      const limpio = pieza.ruta.replace(/^\[[a-z]+\]\s*/i, "").replace(/^"|"$/g, "");
+      // EL 82. Aquí había un `.replace(/^\[[a-z]+\]\s*/i, "")` con el aviso
+      // correcto encima —«sin quitarlo, el cierre de dependencias sale corto y
+      // no avisa»— y **le llegaba `"[server]"` a secas**, porque el que partía
+      // la línea se quedaba con el corchete y tiraba la ruta. O sea que quitaba
+      // el ámbito de una cadena que era SÓLO el ámbito, y el resultado era la
+      // cadena vacía: el aviso se apuntaba en `faltan` con el nombre en blanco.
+      // El ámbito lo reparte ahora `includeDe`; ésta ya recibe la ruta buena.
+      const limpio = pieza.ruta.replace(/^"|"$/g, "");
+      if (pieza.ambito === "cliente") continue;
       if (!recogerObjeto(raiz, limpio, vistos, profundidad + 1, acc)) acc.faltan.push(limpio);
       continue;
     }
@@ -951,6 +1302,19 @@ function vectorDe(v) {
 const MANOS = { left: 0, right: 1, undroppable: 2, any: 3, both: 4 };
 
 /** Un porcentaje (`70%`) o un número. Devuelve `null` si no es ninguno. */
+/**
+ * El `atoi`/`atof` de C, que es lo que usa el intérprete del mod.
+ *
+ * No es `Number()`: lo que no empieza por un número **vale cero**, y no es un
+ * error. De ahí salen la mitad de las decisiones de un `game_fall` —un `if`
+ * sobre una constante que nadie declaró es falso porque `atoi` de un nombre es
+ * 0 (scriptcmds.cpp:3975)— y también sus cuentas (`atof`, :4210-4213).
+ */
+const atoi = (v) => { const n = parseInt(String(v ?? "").trim(), 10); return Number.isFinite(n) ? n : 0; };
+// Se exporta desde el 79: el lector de fichas de NPC lo necesitaba para `hp` y
+// se había escrito su propio `Number`. Ver `vidaDe`, más arriba.
+export const atof = (v) => { const n = parseFloat(String(v ?? "").trim()); return Number.isFinite(n) ? n : 0; };
+
 function numeroDe(v) {
   if (v === undefined || v === null) return null;
   const s = String(v).trim();
@@ -958,6 +1322,201 @@ function numeroDe(v) {
   if (pct) return Number(pct[1]) / 100;
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * `GET_CHARGE_FROM_TIME(a) = a + V_max(a - 1, 0) * .5` (genericitem.h:99).
+ *
+ * Está copiada aquí —y no importada de `src/play/golpe.js`— porque este lector
+ * no depende de la regla del juego: lo usan las herramientas de horneado, que
+ * corren sin nada del `play`. La gemela de allí es `cargaDe()`, y las dos
+ * tienen que decir lo mismo; hay una prueba que lo comprueba.
+ */
+function cargaDeTiempo(v) {
+  if (v === null || !(v > 0)) return v;
+  return v + Math.max(v - 1, 0) * 0.5;
+}
+
+/**
+ * CÓMO QUEDA UN OBJETO EN EL SUELO — el 71.
+ *
+ * ── Por qué esto no es una constante ───────────────────────────────────────
+ *
+ * Un `.mdl` de objetos de Master Sword trae tres submodelos por cosa —mano
+ * derecha, mano izquierda y suelo—, así que para dibujar una manzana tirada
+ * hace falta un número, y **ese número no está escrito en ningún sitio**: lo
+ * calcula el evento `game_fall` del propio guion, con dos o tres órdenes.
+ *
+ * Y cada familia lo calcula distinto:
+ *
+ *   `base_weapon`     `inc L_SUBMODEL 2`, y `−1` si `NO_WORLD_MODEL`  (:61-70)
+ *   `base_drink`      `add L_SUBMODEL 2`                              (:79-90)
+ *   `base_miscitem`   `add L_SUBMODEL 1`, **sólo si el modelo es `p_misc`**;
+ *                     si no, `setmodelbody 0 0`                       (:39-57)
+ *   `health_apple`    `[override] game_fall` con `add L_SUBMODEL 1`   (:47-57)
+ *
+ * O sea que la manzana hereda de `base_drink` —que dice `+2`— y **lo anula con
+ * `+1`**. Con la fórmula de la base, `MODEL_BODY_OFS 1` más dos da el submodelo
+ * 3 de `misc/p_misc.mdl`, que se llama `oldbook_rhand`: una manzana que al caer
+ * del árbol se convierte en un libro viejo, sin un solo error. Es la regla del
+ * 66 otra vez —`[override]` borra el del padre— y la del 64: lo que manda es lo
+ * que ejecuta el motor, no lo que parece razonable.
+ *
+ * ── Qué entiende esto y qué NO ─────────────────────────────────────────────
+ *
+ * No es un intérprete: es un lector de las cinco órdenes con las que las
+ * familias de arriba resuelven el número (`local`, `add`/`inc`,
+ * `subtract`/`dec`, `stradd`, `setmodelbody`) más el `if` de dos ramas de
+ * `base_miscitem`. Cualquier otra cosa —un `$calc`, un `if` anidado, un `if`
+ * VIEJO sin paréntesis (el del 67, que abandona el bloque entero)— **no se
+ * adivina**: se devuelve `cuerpo: null` con el motivo, y quien hornea lo cuenta
+ * en vez de inventarse un submodelo.
+ *
+ * `lineas` es el bloque YA aplanado por `partirScript` —las llaves anidadas no
+ * sobreviven—, así que la rama del `else` se reconoce por su propia línea y
+ * llega hasta el final del evento. Con un `if` sin `else` el final de la rama
+ * no se puede saber, y entonces esto se declara vencido.
+ *
+ * @param {string[]} lineas  el bloque de `game_fall`, aplanado
+ * @param {(n: string) => (string|null)} resolver  una constante a su valor
+ */
+export function caidaDe(lineas, resolver) {
+  const vars = new Map();
+  // Un nombre se resuelve primero como variable local del evento y después como
+  // constante del guion. El motor hace lo mismo: `local` crea una variable del
+  // objeto y las constantes son del script.
+  const val = (t) => {
+    if (t === undefined || t === null) return null;
+    // ── LAS COMILLAS SIMPLES NO SON COMILLAS ────────────────────────────
+    //
+    // Sólo las DOBLES agrupan y desaparecen (`GetParams`, script.cpp:5049-5064;
+    // y el lector de parámetros de un comando, :5639-5650). La simple es un
+    // carácter más del nombre, así que `'ANIM_PREFIX'` **no es** la constante
+    // `ANIM_PREFIX`: es una cadena que `GetConst` no encuentra y devuelve tal
+    // cual, comillas incluidas (script.cpp:349-354). Quitarlas aquí daría por
+    // ciertas unas comparaciones que en el juego son falsas siempre.
+    const limpio = String(t).trim().replace(/^"(.*)"$/s, "$1");
+    // EL 67 otra vez: este puerto es el lado SERVIDOR, y la mitad de los
+    // `game_fall` del mod empiezan por `if game.serverside`. Sin esto el
+    // lector se quedaría fuera de todos ellos — y además con la respuesta
+    // contraria a la del juego. La gemela viva está en `src/play/guion.js`.
+    if (limpio === "game.serverside") return "1";
+    if (limpio === "game.clientside") return "0";
+    if (vars.has(limpio)) return vars.get(limpio);
+    const c = resolver(limpio);
+    return c === null || c === undefined ? limpio : String(c);
+  };
+  let cuerpo = null, modelo = null, animacion = null, motivo = null;
+  let saltando = false, dentroDeIf = false, teniaElse = false;
+
+  const orden = (l) => {
+    const t = l.trim();
+    let m;
+    if ((m = t.match(/^setmodel\s+(\S+)/i))) { modelo = val(m[1]); return true; }
+    if ((m = t.match(/^local\s+(\S+)\s+(.+)$/i))) { vars.set(texto(m[1]), val(m[2])); return true; }
+    // `ScriptCmd_MathSet` usa `atof` en los dos operandos (scriptcmds.cpp:4210-4213),
+    // así que lo que no es un número **vale cero** y la cuenta sigue. Esto no es
+    // tolerancia nuestra: un `add L_SUBMODEL 1` con `MODEL_BODY_OFS` sin
+    // declarar da 1 en el juego, y hay objetos que caen justo así.
+    if ((m = t.match(/^(add|inc)\s+(\S+)\s+(\S+)$/i))) {
+      vars.set(texto(m[2]), String(atof(val(m[2])) + atof(val(m[3])))); return true;
+    }
+    if ((m = t.match(/^(subtract|dec)\s+(\S+)\s+(\S+)$/i))) {
+      vars.set(texto(m[2]), String(atof(val(m[2])) - atof(val(m[3])))); return true;
+    }
+    if ((m = t.match(/^stradd\s+(\S+)\s+(.+)$/i))) {
+      vars.set(String(m[1]).trim(), `${val(m[1]) ?? ""}${String(m[2]).trim().replace(/^"(.*)"$/s, "$1")}`); return true;
+    }
+    if ((m = t.match(/^playanim\s+(\S+)/i))) { animacion = val(m[1]); return true; }
+    if ((m = t.match(/^setmodelbody\s+(\d+)\s+(\S+)$/i))) {
+      // El primer parámetro es el `bodypart`, y los objetos de MSR tienen uno.
+      if (Number(m[1]) !== 0) { motivo = `'${t}' toca el bodypart ${m[1]}`; return false; }
+      cuerpo = atoi(val(m[2])); return true;
+    }
+    // Lo que no es ninguna de las cinco se ignora a propósito: un `callevent`,
+    // un sonido o un `clientevent` no cambian el submodelo.
+    return true;
+  };
+
+  for (let i = 1; i < lineas.length; i++) {
+    const t = lineas[i].trim();
+    if (/^else$/i.test(t)) {
+      if (!dentroDeIf) { motivo = "un `else` sin su `if` en bloque"; break; }
+      teniaElse = true; saltando = !saltando; continue;
+    }
+    const nuevo = t.match(/^if\s*\((.+?)\)\s*(.*)$/i);
+    if (nuevo) {
+      if (saltando) continue;
+      const r = condicion(nuevo[1], val);
+      if (r === null) { motivo = `no sé evaluar 'if (${nuevo[1].trim()})'`; break; }
+      // `if ( cond ) orden` en una línea: el hijo es ÚNICO y no abre bloque.
+      if (nuevo[2].trim()) { if (r && !orden(nuevo[2])) break; continue; }
+      dentroDeIf = true;
+      saltando = !r;
+      continue;
+    }
+    // EL `if` VIEJO, el del 67. No se salta una línea: con la condición falsa
+    // **abandona el evento entero** (`break`, script.cpp:5754-5758). Eso no es
+    // un hueco de este lector: es una respuesta, y la de verdad. Es lo que deja
+    // sin submodelo del suelo a los `game_fall` de `base_item_extras`, que
+    // empiezan por `if ITEM_RESERVE_FOR_STRONGEST` —una constante que nadie
+    // declara, o sea `atoi("ITEM_...") == 0`, o sea falso.
+    const viejo = t.match(/^if\s+(.+)$/i);
+    if (viejo) {
+      if (saltando) continue;
+      const r = condicion(viejo[1], val);
+      if (r === null) { motivo = `no sé evaluar 'if ${viejo[1].trim()}'`; break; }
+      if (!r) break;
+      continue;
+    }
+    if (saltando) continue;
+    if (!orden(t)) break;
+  }
+  if (!motivo && dentroDeIf && !teniaElse) {
+    motivo = "un `if` en bloque sin `else`: no se sabe dónde acaba la rama";
+  }
+  return { cuerpo: motivo ? null : cuerpo, modelo, animacion, motivo };
+}
+
+/**
+ * La condición de un `if` nuevo, reducida a lo que usan los `game_fall`.
+ *
+ * Devuelve `null` cuando no sabe —y eso es un resultado, no un `false`: un
+ * `false` inventado elige la rama contraria y da un modelo equivocado sin
+ * avisar.
+ */
+function condicion(txt, val) {
+  const t = txt.trim().replace(/\)\s*$/, "").trim();
+  const trozos = t.split(/\s+/).filter(Boolean);
+  // UN SOLO OPERANDO: `ConditionsMet = atoi(Value) ? true : false`, con el `!`
+  // delante invirtiendo (scriptcmds.cpp:3964-3977). Y `atoi` de un nombre que
+  // nadie ha definido es CERO, que es justo lo que hace que la mitad de los
+  // `game_fall` del mod no lleguen a su `setmodelbody`.
+  if (trozos.length === 1) {
+    const niega = trozos[0].startsWith("!");
+    return (atoi(val(niega ? trozos[0].slice(1) : trozos[0])) !== 0) !== niega;
+  }
+  if (trozos.length < 3) return null;
+  const a = val(trozos[0]), b = val(trozos.slice(2).join(" "));
+  // `FStrEq` para `equals`/`isnot`, y numérico para el resto
+  // (scriptcmds.cpp:3984-4018). Un comparador que el motor no conoce cae en
+  // `iCompareType = 0`, o sea `equals`; eso también se copia.
+  const op = trozos[1].toLowerCase();
+  const na = Number(a), nb = Number(b);
+  switch (op) {
+    case "isnot": case "!equals": return a !== b;
+    case "<": return na < nb;
+    case ">": return na > nb;
+    case "<=": return na <= nb;
+    case ">=": return na >= nb;
+    case "==": return na === nb;
+    case "!=": return na !== nb;
+    case "startswith": return String(a).startsWith(String(b));
+    case "contains": return String(a).includes(String(b));
+    case "!startswith": return !String(a).startsWith(String(b));
+    case "!contains": return !String(a).includes(String(b));
+    default: return a === b;
+  }
 }
 
 /**
@@ -1022,6 +1581,28 @@ export function leerFichaObjeto(raiz, ruta) {
   // no una ruta de sonido llamada «SOUND_HITWALL1».
   const c = (n) => resueltoO(acc.constantes, acc.constantes.get(n));
   const tipos = [...acc.registros].map((r) => REGISTROS[r]);
+  // ── EL 71: CÓMO QUEDA EN EL SUELO ────────────────────────────────────────
+  //
+  // Se recorren TODOS los `game_fall` que sobreviven al `[override]`, en orden,
+  // porque `CallScriptEvent` ejecuta todos los que se llamen igual y el último
+  // `setmodelbody` es el que queda. Y si cualquiera de ellos trae algo que
+  // `caidaDe` no sabe leer, el resultado entero se declara vencido: medio
+  // evento entendido es peor que ninguno, porque el submodelo que sale es
+  // plausible y es de otra cosa.
+  const caida = (() => {
+    const bloques = vivos.filter((e) => e.nombre === "game_fall");
+    if (!bloques.length) return { cuerpo: null, modelo: null, animacion: null, motivo: "no tiene `game_fall`" };
+    const out = { cuerpo: null, modelo: null, animacion: null, motivo: null };
+    for (const e of bloques) {
+      const r = caidaDe(e.lineas, c);
+      if (r.motivo) { out.motivo ??= r.motivo; continue; }
+      if (r.cuerpo !== null) out.cuerpo = r.cuerpo;
+      if (r.modelo) out.modelo = r.modelo;
+      if (r.animacion) out.animacion = r.animacion;
+    }
+    if (out.cuerpo === null && !out.motivo) out.motivo = "su `game_fall` no toca el submodelo";
+    return out;
+  })();
   const ficha = {
     id: ruta.replace(/^.*\//, ""),
     ruta,
@@ -1101,6 +1682,21 @@ export function leerFichaObjeto(raiz, ruta) {
       // de `MODEL_BODY_OFS` acaba dos armas más allá.
       suelo: numeroDe(c("PMODEL_IDX_FLOOR")),
       animaciones: c("ANIM_PREFIX"),
+      // ── EL 71, y es lo único de aquí que NO sale de una constante ────────
+      //
+      // `suelo` de arriba es `PMODEL_IDX_FLOOR`, que sólo declara la familia de
+      // las astas. Para los otros 700 objetos el submodelo del suelo lo calcula
+      // el `game_fall`, y cada familia con una cuenta distinta. Ver `caidaDe`.
+      cuerpoSuelo: caida.motivo ? null : caida.cuerpo,
+      // El modelo que el `game_fall` pone con `setmodel`, cuando lo pone:
+      // `base_miscitem` cambia al `MODEL_WORLD` al caer, que puede no ser el de
+      // la mano.
+      modeloSuelo: caida.modelo ?? null,
+      // `playanim apple_floor_idle`. Sin ella el objeto sale en el fotograma 0
+      // de la secuencia 0, que en `p_misc.mdl` es `idle` y no es la suya.
+      animacionSuelo: caida.animacion ?? null,
+      /** Por qué no se ha podido leer, cuando no se ha podido. Se cuenta. */
+      sueloSinLeer: caida.motivo ?? null,
     },
     sonidos: {
       blandir: c("SOUND_SWIPE"),
@@ -1180,10 +1776,20 @@ export function leerFichaObjeto(raiz, ruta) {
         // del cargado, que son dos ataques registrados y no un modificador.
         teclas: String(g("keys") ?? "").toLowerCase().split(/[;\s]+/).filter(Boolean),
         prioridad: numeroDe(g("priority")) ?? 0,
-        // `chargeamt` en tanto por uno, ya pasado por `%`. El motor lo convierte
-        // a tiempo con `GET_CHARGE_FROM_TIME(a) = a + max(a-1,0)*0.5`
-        // (genericitem.h:99), así que el 100 % son **un segundo** aguantando.
-        carga: numeroDe(g("chargeamt")),
+        // `chargeamt` en tanto por uno, ya pasado por `%`, y **pasado también
+        // por la misma curva que los segundos aguantados**, que es lo que el
+        // motor hace al REGISTRAR el ataque y no al compararlo:
+        //
+        //     attData.flChargeAmt = atof(...) / 100.0f;
+        //     if (attData.flChargeAmt > 0)
+        //       attData.flChargeAmt = GET_CHARGE_FROM_TIME(attData.flChargeAmt);
+        //                                              giattack.cpp:487-489
+        //
+        // Con lo cual `chargeamt 100%` son 1 de carga —un segundo justo— y
+        // `200%` son 2,5, que son dos segundos: un nivel por segundo. Sin esta
+        // línea el segundo nivel del cuchillo y del martillo pedía 2 de carga,
+        // o sea 1,67 s, y salía antes de tiempo.
+        carga: cargaDeTiempo(numeroDe(g("chargeamt"))),
         pideHabilidad: numeroDe(g("reqskill")) ?? 0,
         ruido: numeroDe(g("noise")),
         desde: vectorDe(g("ofs.startpos")),

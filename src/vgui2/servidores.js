@@ -23,7 +23,8 @@
 // `TrackerScheme.res`; dónde va cada control, de mirar la captura. El código de
 // `GameUI.dll` no es público.
 
-import { Frame, PropertySheet, Button, ListPanel, TextEntry, etiqueta, MEDIDAS } from "./widgets.js";
+import { Button, ListPanel, TextEntry, etiqueta, MEDIDAS } from "./widgets.js";
+import { cascara } from "./codice.js";
 
 /** Medido de la captura. */
 export const VENTANA = { ancho: 773, alto: 419 };
@@ -64,12 +65,15 @@ export class VentanaServidores {
     this.porQueVacio = porQueVacio;
     this.listas = new Map();
 
-    this.marco = new Frame(tema, {
+    const { Marco, Hojas, conCaja } = cascara();
+    this.conCaja = conCaja;
+
+    this.marco = new Marco(tema, {
       titulo: "Servers", ancho: VENTANA.ancho, alto: VENTANA.alto, x, y,
       alCerrar,
     });
 
-    this.hojas = new PropertySheet(tema);
+    this.hojas = new Hojas(tema);
     for (const p of PESTANAS) this.hojas.anadir(p, () => this.#pagina(p));
 
     this.marco.cuerpo.appendChild(this.hojas.nodo);

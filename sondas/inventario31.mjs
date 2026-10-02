@@ -19,7 +19,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5219;
@@ -43,11 +44,12 @@ try {
   const ANCHO = 1200, ALTO = 800;
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+  // SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  await entrarPorElMenu(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
   await pag.waitForFunction(() => window.probe.vgui.abierto() === null, null, { timeout: 60000 });
   // Para que haya algo que mirar dentro: las siete armas de partida.
@@ -86,11 +88,22 @@ try {
   control("LA REJILLA INVENTADA SE HA IDO: no sale ninguna casilla",
     abierto.rejilla === 0 && abierto.velo === false,
     `${abierto.rejilla} casillas, velo ${abierto.velo}`);
-  const piezas = await pag.evaluate(() => ({
-    listas: document.querySelectorAll(".vg-inv-lista").length,
-    info: [...document.querySelectorAll(".vg-etiqueta")].filter((n) => /Gold: /.test(n.textContent)).length,
-  }));
-  control("y están las tres piezas del original: equipo, contenedor e información",
+  // SE CUENTA DENTRO DEL PANEL ABIERTO, no en toda la pagina.
+  //
+  // Esto buscaba en el `document` entero y daba 2 porque el inventario era el
+  // unico panel con listas. En cuanto el 60 registro los dos de la tienda
+  // —que heredan de el y estan montados y ocultos— paso a contar 6 y el
+  // control se puso rojo con el inventario perfecto. Un control que cuenta
+  // nodos de toda la pagina mide lo que haya en la pagina, no lo que abre.
+  const piezas = await pag.evaluate(() => {
+    const raiz = [...document.querySelectorAll(".vg-inv")].find((n) => !n.hidden) ?? null;
+    if (!raiz) return { listas: 0, info: 0 };
+    return {
+      listas: raiz.querySelectorAll(".vg-inv-lista").length,
+      info: [...raiz.querySelectorAll(".vg-etiqueta")].filter((n) => /Gold: /.test(n.textContent)).length,
+    };
+  });
+  control("y estan las tres piezas del original: equipo, contenedor e informacion",
     piezas.listas === 2 && piezas.info === 1,
     `${piezas.listas} listas, ${piezas.info} etiqueta de oro`);
   // ── LA COLUMNA ES LA DEL JUEGO, no una entrada inventada ────────────────

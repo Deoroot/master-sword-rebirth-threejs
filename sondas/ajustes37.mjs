@@ -28,7 +28,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5221;
@@ -37,6 +38,12 @@ if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el
 const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
 await new Promise((r) => setTimeout(r, 6000));
+
+// Cuantos controles TIENE que haber. La sonda puede irse por el `catch` de
+// abajo, y entonces un «X de Y» calculado sobre los que llegaron a correr no
+// puede bajar nunca: es el experimento 65, que remató con «22 de 22 en verde»
+// habiéndose caído en el 22 de 30.
+const DECLARADOS = 16;
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
@@ -47,10 +54,25 @@ try {
   nav = await chromium.launch();
   const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+  // SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  await entrarPorElMenu(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
+
+  // LA LÍNEA BASE DEL SONIDO DEL MENÚ — el 84, y está aquí por un motivo.
+  //
+  // El control del tramo 5 compara el volumen del menú con lo que pide la
+  // ventana. Sin esta línea base, ese control **no distingue «el deslizador
+  // llegó» de «ya valía eso»**: se descubrió rompiéndolo por supresión y viéndolo
+  // seguir verde. Leído antes de tocar nada, el número de partida es el del
+  // `config.cfg`, y así la comparación de después mide un CAMBIO y no una
+  // coincidencia.
+  const menuVol0 = await pag.evaluate(() => window.probe.menu.volumen());
+  console.log(`    menú (partida)  ${menuVol0}`);
+  control("el menú arranca con el volumen del `config.cfg`, no con el 1 de un `Audio`",
+    menuVol0 !== null && Math.abs(menuVol0 - 0.12) < 1e-6,
+    menuVol0 === null ? "sin sonidos horneados" : `${menuVol0}`);
 
   // ── 0. EL NOMBRE VIENE PUESTO, Y VIENE DEL CVAR ──────────────────────────
   //
@@ -104,15 +126,26 @@ try {
     }
     return false;
   };
-  const hayApply = await aplicar();
+  // EL ASPECTO DE LAS VENTANAS CAMBIA EL CONTRATO, no sólo el color. Con el
+  // códice (`src/vgui2/codice.js`) no hay OK/Cancel/Apply: lo que se toca entra
+  // al tocarlo. O sea que estos dos controles miden cosas distintas según el
+  // aspecto, y los dos tienen que estar escritos — medir el contrato de la caja
+  // con el códice puesto es medir un juego que no existe.
+  const aspecto = await pag.evaluate(() => window.probe.vgui2.estado().aspecto);
+  const conCaja = aspecto !== "codice";
+  const hayApply = conCaja ? await aplicar() : false;
   await pag.waitForTimeout(400);
   const igual = await pag.evaluate(() => ({
     luz: window.probe.ajustes.luz(),
     brillo: window.probe.ajustes.brilloDelAtlas(),
   }));
-  control("CONTROL POSITIVO: «Apply» sin tocar nada deja el atlas INTACTO",
-    hayApply && igual.luz?.identidad === true && Math.abs(igual.brillo - brilloAntes) < 1e-9,
-    `identidad ${igual.luz?.identidad}, ${brilloAntes?.toFixed(3)} -> ${igual.brillo?.toFixed(3)}`);
+  control(conCaja
+      ? "CONTROL POSITIVO: «Apply» sin tocar nada deja el atlas INTACTO"
+      : "CONTROL POSITIVO: sin tocar nada el atlas queda INTACTO (códice: no hay «Apply»)",
+    (conCaja ? hayApply : true)
+      && igual.luz?.identidad === true && Math.abs(igual.brillo - brilloAntes) < 1e-9,
+    `aspecto ${aspecto}, identidad ${igual.luz?.identidad}, ` +
+    `${brilloAntes?.toFixed(3)} -> ${igual.brillo?.toFixed(3)}`);
 
   // ── 3. LA SENSIBILIDAD LLEGA HASTA EL RATÓN ──────────────────────────────
   await pag.click(".v2-pestana:nth-child(3)");            // Mouse
@@ -125,8 +158,19 @@ try {
     ventana: window.probe.vgui2.estado().opciones.valores.sensibilidad,
     grados: window.probe.ajustes.gradosPorCuenta(),
   }));
-  control("arrastrado el deslizador y SIN aplicar, el ratón sigue como estaba",
-    sinAplicar.ventana > 11 && Math.abs(Math.abs(sinAplicar.grados.yaw) - 0.22) < 1e-6,
+  // Y aquí el contrato se INVIERTE con el aspecto, que es lo que hace que esto
+  // no sea un cambio de piel. Con caja, mover el deslizador no mueve el ratón
+  // hasta «Apply» —se puede probar y cancelar—. Con el códice, mover el
+  // deslizador mueve el ratón YA, y se pierde el poder arrepentirse.
+  control(conCaja
+      ? "arrastrado el deslizador y SIN aplicar, el ratón sigue como estaba"
+      : "arrastrado el deslizador, el ratón cambia YA (códice: no hay «Apply»)",
+    sinAplicar.ventana > 11 && (conCaja
+      ? Math.abs(Math.abs(sinAplicar.grados.yaw) - 0.22) < 1e-6
+      // Que se movió, y que se movió a DONDE DICE LA VENTANA: «ya no vale 0,22»
+      // se cumpliría también con un número cualquiera.
+      : Math.abs(Math.abs(sinAplicar.grados.yaw) - sinAplicar.ventana * 0.022) < 1e-6
+        && Math.abs(Math.abs(sinAplicar.grados.yaw) - 0.22) > 1e-6),
     `la ventana dice ${sinAplicar.ventana.toFixed(2)}, el juego gira a ${Math.abs(sinAplicar.grados.yaw).toFixed(4)}°`);
 
   await aplicar();
@@ -169,12 +213,30 @@ try {
   const sonido = await pag.evaluate(() => ({
     ventana: window.probe.vgui2.estado().valores.volumen,
     real: window.probe.ajustes.volumen(),
+    // EL 84: Y EL MENÚ, que es el otro sitio donde suena algo.
+    menu: window.probe.menu.volumen(),
   }));
   control("subir el volumen lo sube en el nodo de Web Audio, no en un campo",
     Math.abs(sonido.real.efectos - sonido.ventana) < 1e-6 && sonido.ventana > 0.12,
     `la ventana dice ${sonido.ventana.toFixed(2)}, la ganancia es ${sonido.real.efectos.toFixed(2)}`);
   control("y la música NO se mueve con ella: son dos canales, como en el motor",
     Math.abs(sonido.real.musica - 0.2) < 1e-6, `música ${sonido.real.musica}`);
+  // ── Y LLEGA TAMBIÉN A LOS SONIDOS DEL MENÚ — el 84 ──────────────────────
+  //
+  // Los tres sonidos del menú principal son elementos `Audio` del DOM y NO pasan
+  // por el nodo de Web Audio que mide el control de arriba, así que ése podía
+  // estar —y estaba— en verde con el menú sonando a 1. Son dos caminos para el
+  // mismo deslizador y hacen falta los dos controles.
+  //
+  // Esto mide que el deslizador LLEGA; que el volumen de partida sea el del
+  // `config.cfg` y no el 1 de reposo se mide en `sondas/menu52.mjs`, que es la
+  // que está en el menú SIN mapa cargado — la otra mitad del fallo, porque quien
+  // reparte los ajustes no existe hasta que hay mapa.
+  console.log(`    menú            ${sonido.menu} (la ventana pide ${sonido.ventana.toFixed(2)})`);
+  control("y LLEGA A LOS SONIDOS DEL MENÚ, que no pasan por Web Audio",
+    sonido.menu !== null && Math.abs(sonido.menu - sonido.ventana) < 1e-6
+      && Math.abs(sonido.menu - menuVol0) > 1e-6,
+    sonido.menu === null ? "sin sonidos horneados" : `menú ${sonido.menu}, ventana ${sonido.ventana.toFixed(2)}`);
 
   // ── 6. EL BRILLO REHACE EL MAPA DE LUZ ───────────────────────────────────
   //
@@ -246,9 +308,12 @@ try {
 console.log("\n  CONTROLES");
 for (const c of controles) console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(66)} ${c.detalle}`);
 const mal = controles.filter((c) => !c.bien);
-console.log(`\n  ${controles.length - mal.length} de ${controles.length} en verde`);
+console.log(`\n  ${controles.length - mal.length} de ${DECLARADOS} en verde`);
 console.log(`  errores de página: ${errores.length ? errores.join(" | ") : "ninguno"}\n`);
 
 await nav?.close();
 matar(dev);
-process.exit(mal.length || errores.length || !controles.length ? 1 : 0);
+if (controles.length !== DECLARADOS) {
+  console.log(`  !! FALTAN ${DECLARADOS - controles.length}: la sonda no llegó al final`);
+}
+process.exit(mal.length || errores.length || controles.length !== DECLARADOS ? 1 : 0);

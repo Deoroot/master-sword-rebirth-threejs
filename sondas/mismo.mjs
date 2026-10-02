@@ -22,8 +22,15 @@ import { spawnSync } from "node:child_process";
 // La comprobación es de una línea y no puede fallar en falso: el `<title>` de
 // nuestro `index.html` es nuestro y no se parece al de nadie.
 
-/** Lo que dice `index.html`. Si cambia allí, cambia aquí. */
-export const TITULO = "Master Sword: Rebirth — Gate City";
+/**
+ * Lo que dice `index.html`. Si cambia allí, cambia aquí.
+ *
+ * El 47 le quitó «Gate City»: el título no puede nombrar un mapa cuando el
+ * mapa se elige con `?map=`. Sigue siendo bastante nuestro como para no poder
+ * fallar en falso contra otro `vite` que ande suelto, que es para lo único
+ * que se mira.
+ */
+export const TITULO = "Master Sword: Rebirth — Three.js port";
 
 /**
  * Comprueba que quien contesta en ese puerto somos nosotros, y **aborta** si no.
@@ -60,4 +67,27 @@ export function liberarPuerto(puerto) {
     .map((l) => l.trim().split(/\s+/).pop()).filter((x) => /^[0-9]+$/.test(x) && x !== "0"));
   for (const pid of pids) spawnSync("taskkill", ["/F", "/T", "/PID", pid], { stdio: "ignore", shell: true });
   return [...pids];
+}
+
+/**
+ * ESPERAR A QUE APAREZCAN LOS MONSTRUOS, que es lo que hace un jugador al entrar.
+ *
+ * Desde el 39, **38 de los 69 bichos de Gate City no están al llegar**: son la
+ * ficha de un `msarea_monsterspawn` y su área piensa por primera vez a los 3
+ * segundos (`pev->nextthink = pev->ltime + 3.0`, msmapents.cpp:744). Cada área
+ * suelta luego uno cada 0,2 s, y la más cargada lleva cinco.
+ *
+ * Sin esto, una sonda que teletransporta al jugador junto a un hostil lo pone al
+ * lado de un bicho que todavía no existe: se le ve —la posición es la de su
+ * ficha— y se le atraviesa, porque no tiene cilindro. `sonda:arco` cayó a 33 de
+ * 35 con «0 aciertos de 12» y `sonda:consecuencias` a 39 de 44, las dos con el
+ * mismo motivo y sin un solo error en consola.
+ *
+ * Se espera en tiempo REAL y no adelantando relojes a mano: el bucle del juego es
+ * quien llama a `bichos.aparecer`, así que esperar de verdad es recorrer el camino
+ * del jugador. Devuelve cuántos hay en el mundo, para poder comprobarlo.
+ */
+export async function esperarApariciones(pag, { segundos = 5 } = {}) {
+  await pag.waitForTimeout(segundos * 1000);
+  return pag.evaluate(() => window.probe?.ia?.apariciones?.() ?? null);
 }

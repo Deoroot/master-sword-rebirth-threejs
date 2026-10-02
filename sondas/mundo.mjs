@@ -17,7 +17,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5205;
@@ -34,14 +35,15 @@ const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (59). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda"));
 await pag.waitForTimeout(400);
 
@@ -55,6 +57,23 @@ console.log(`  la IA arranca ${encendida ? "ENCENDIDA" : "apagada"}`);
 control("la IA está encendida al entrar, sin tocar ninguna tecla", encendida === true);
 
 // ── 2. LA ANIMACIÓN DE ESTAR PARADO ────────────────────────────────────────
+//
+// SE MIRAN LOS QUE ESTÁN PARADOS, y esto lo enseñó el 59 al cambiar la entrada.
+//
+// Mientras esta sonda abría `?map=gatecity`, el mundo que medía acababa de
+// nacer: los 69 quietos y en su pose inicial. Dos controles de este apartado
+// estaban verdes por eso y no por lo que decían. Entrando por el menú —por
+// donde entra el jugador— el pueblo lleva rato andando cuando se mide, y los
+// dos se pusieron rojos **con el juego correcto**.
+//
+// La salida NO es congelar el paseo: se probó, y `congelarPaseo` deja a 46 de
+// los 69 clavados con la animación de andar puesta, que es un estado que el
+// juego no tiene —el reinicio de la animación va en el paso del vagabundo, y
+// congelarlo lo apaga—. Un ayudante de sonda que fabrica un estado imposible
+// mide otro juego.
+//
+// La salida es preguntar por quien de verdad está parado: los que no declaran
+// `roam 1`, que son dieciséis y lo están siempre, entre por donde se entre.
 const censo = await pag.evaluate(() => window.probe.vivo.censo());
 console.log(`\n  ${censo.total} bichos: ${censo.pasean} con 'roam 1', ${censo.total - censo.pasean} clavados`);
 console.log(`  parado: ${censo.nombran} lo nombran, ${censo.porActividad} por ACT_IDLE, ${censo.alaCero} a la secuencia 0`);
@@ -73,11 +92,43 @@ control("NINGÚN bicho quieto está en una secuencia de andar o correr",
 console.log(`  ${censo.andanConLaDeQuieto} declaran la misma secuencia para andar y para estar quietos`);
 control("y los que comparten secuencia es porque su script lo pide",
   censo.andanConLaDeQuieto >= 1, `${censo.andanConLaDeQuieto}`);
-const aldeano = censo.lista.find((b) => b.script === "NPCs/default_dwarf");
+// EL ALDEANO, y se coge uno QUIETO a propósito (59).
+//
+// Antes se cogía el primer `default_dwarf` de la lista y se le exigía no
+// estar en 'walk'. Con la entrada vieja eso era gratis —nadie había andado
+// todavía—; entrando por el menú, el primero de la lista suele ir de camino a
+// alguna parte y el control decía «está en 'walk'» con el juego correcto.
+//
+// Un aldeano andando **tiene** que estar en 'walk'. Lo que este control quiere
+// preguntar es otra cosa: que uno que NO declara animación de parado, cuando
+// está parado, no se quede con el pie levantado. Así que se le pregunta a uno
+// parado.
+// Y «parado» es ESTAR parado, no «no declarar `roam`»: los doce aldeanos de
+// Gate City declaran los doce `roam 1`, así que filtrar por eso no deja
+// ninguno. Lo que hace falta es uno con ACT_IDLE puesta en este instante.
+// Y «parado» es ESTAR parado, no «no declarar `roam`»: los doce aldeanos de
+// Gate City declaran los doce `roam 1`, así que filtrar por eso no deja
+// ninguno. Se espera a pillar uno con ACT_IDLE puesta, que es un instante que
+// llega solo —pasan más tiempo andando que parados— en vez de mirar una foto
+// y que salga cara o cruz.
+let aldeano = null, aldeanos = [];
+for (let n = 0; n < 60 && !aldeano; n++) {
+  aldeanos = (await pag.evaluate(() => window.probe.vivo.censo().lista))
+    .filter((b) => b.script === "NPCs/default_dwarf");
+  aldeano = aldeanos.find((b) => b.actividad === 1) ?? null;
+  if (!aldeano) await pag.waitForTimeout(500);
+}
+const aldeanoQuieto = Boolean(aldeano);
+console.log(`  aldeanos: ${aldeanos.length}, se ha esperado a pillar uno parado: ${aldeanoQuieto ? "sí" : "NO"}`);
 console.log(`  el aldeano: parado '${aldeano?.parado}', andando '${aldeano?.andando}', puesta '${aldeano?.animacion}' (${aldeano?.porque})`);
+// El positivo de la selección: sin esto, «no encontré ninguno andando» y «no
+// encontré ninguno» serían el mismo verde, que es el apartado 4 otra vez.
+control("hay un aldeano PARADO al que preguntarle, no sólo aldeanos",
+  aldeanoQuieto, `${aldeanos.length} aldeanos, uno parado ${aldeanoQuieto ? "encontrado" : "NO encontrado en 30 s"}`);
 control("el aldeano no declara animación de parado", aldeano?.parado === null);
-control("y aun así no está en 'walk'", aldeano?.animacion !== aldeano?.andando,
-  `está en '${aldeano?.animacion}'`);
+control("y estando parado no se queda con el pie levantado",
+  aldeanoQuieto && aldeano?.animacion !== aldeano?.andando,
+  `está en '${aldeano?.animacion}' (andando sería '${aldeano?.andando}')`);
 
 // ── 2 bis. EL SORTEO SE REPITE, Y POR ESO LOS ALDEANOS ASIENTEN ───────────
 //
@@ -86,15 +137,63 @@ control("y aun así no está en 'walk'", aldeano?.animacion !== aldeano?.andando
 // `nod` 10 y `anim_xbow_aim_idle` 3. Sin volver a sortear, los 69 se quedan
 // con la que les tocó al nacer — que se ve como un pueblo de estatuas, sólo
 // que con una pose distinta cada una.
-const poses = await pag.evaluate(() => window.probe.vivo.poses(30));
-const variados = poses.filter((p) => p.poses.length > 1);
-console.log(`\n  30 s de reposo: ${variados.length} bichos han cambiado de pose`);
-for (const p of poses.slice(0, 3)) console.log(`    ${p.nombre.padEnd(24)} ${p.poses.join(", ")}`);
-control("la pose de reposo se vuelve a sortear al acabar el ciclo",
-  variados.length > 0, `${variados.length} han cambiado`);
+//
+// Y SE MIDE BICHO A BICHO, no por especie (59). `poses()` agrupaba por
+// `ficha.nombre`, así que «dos enanos, cada uno en una pose» y «un enano que
+// cambió de pose» daban exactamente la misma lista de dos. Con 69 bichos y
+// tres poses posibles eso estaba verde aunque el sorteo no se repitiera
+// nunca. Ahora la clave es la instancia.
+//
+// Y se pregunta sólo a los QUIETOS: quien va andando está en su secuencia de
+// andar y no puede sortear una pose de reposo. Mezclarlos era lo que rompía
+// este control al entrar por el menú.
+// SE MIDE EN TIEMPO REAL, y no con el bucle sintético de `poses()`.
+//
+// `poses()` avanzaba 30 s de `animar()` de golpe sobre el estado congelado del
+// instante. Eso tiene dos agujeros y los dos estaban abiertos:
+//
+//   1. agrupaba por ESPECIE, así que «dos enanos, cada uno en su pose» y «un
+//      enano que cambió de pose» daban la misma lista. Con 69 bichos y tres
+//      poses posibles, verde asegurado aunque nadie cambiara nunca.
+//   2. no llamaba a `relojes()`, que es donde vive el sorteo
+//      (`src/play/manada.js:499`). **El mecanismo bajo prueba no llegaba a
+//      dispararse.**
+//
+// Arreglados los dos (59), el control se puso rojo: los catorce bichos que
+// están siempre quietos son especies con UNA sola secuencia ACT_IDLE, y los
+// doce enanos —que tienen tres— declaran los doce `roam 1`, así que el bucle
+// sintético los deja fuera con su destino puesto para siempre.
+//
+// Donde el sorteo pasa de verdad es en el juego andando: un enano alterna
+// caminar y estar parado, y cada vez que su secuencia de reposo acaba se echa
+// el dado. Así que se mira eso: veinticinco segundos de reloj de pared,
+// contando por bicho cuántas secuencias DE REPOSO distintas se le ven.
+// Contar todas valdría cualquier cosa —andar y parar ya son dos—, así que se
+// cuentan sólo las que tienen ACT_IDLE puesta.
+const reposos = new Map();   // índice del bicho -> Set de secuencias de reposo
+for (let n = 0; n < 50; n++) {
+  const foto = await pag.evaluate(() =>
+    window.probe.vivo.censo().lista.map((b) => ({ a: b.animacion, act: b.actividad, n: b.nombre })));
+  foto.forEach((b, i) => {
+    if (b.act !== 1 || !b.a) return;         // ACT_IDLE = 1
+    if (!reposos.has(i)) reposos.set(i, { nombre: b.n, vistas: new Set() });
+    reposos.get(i).vistas.add(b.a);
+  });
+  await pag.waitForTimeout(500);
+}
+const mirados = [...reposos.values()];
+const variados = mirados.filter((p) => p.vistas.size > 1);
+console.log(`\n  25 s de juego: ${mirados.length} bichos vistos en reposo, ${variados.length} con más de una pose`);
+for (const p of variados.slice(0, 3)) console.log(`    ${p.nombre.padEnd(22)} ${[...p.vistas].join(", ")}`);
+// El positivo: sin bichos vistos en reposo, «ninguno varió» sería verdad
+// también con la lista vacía, que es el apartado 4 otra vez.
+control("hay bichos a los que se les ha visto la pose de reposo",
+  mirados.length > 0, `${mirados.length} de 69`);
+control("la pose de reposo se vuelve a sortear al acabar el ciclo, EN EL MISMO bicho",
+  variados.length > 0, `${variados.length} de ${mirados.length}`);
 control("y sale más de una pose distinta, que es lo que el .mdl declara",
-  Math.max(0, ...poses.map((p) => p.poses.length)) >= 2,
-  `${Math.max(0, ...poses.map((p) => p.poses.length))} poses el que más`);
+  Math.max(0, ...mirados.map((p) => p.vistas.size)) >= 2,
+  `${Math.max(0, ...mirados.map((p) => p.vistas.size))} poses de reposo el que más`);
 
 // ── 3. EL PASEO ────────────────────────────────────────────────────────────
 //
@@ -182,7 +281,13 @@ control("la guarda del rebobinado HACE algo: el sorteo cae en la misma pose a me
 // así cambia de animación sin parar. Es el ciclo andar→chocar→quieto que
 // teníamos y el motor no tiene, porque chocar no suelta el destino: sólo lo
 // sueltan llegar y el plazo de 7 s. Eran las cuatro ratas hundidas.
-console.log(`  bichos temblando en el sitio: ${vivo.temblando}`);
+console.log(`  bichos temblando en el sitio: ${vivo.temblando}` +
+  `  (con algún cambio de actividad: ${vivo.conCambioDeActividad})`);
+// EL POSITIVO DEL CERO. La cuenta del temblor se mide en cambios de
+// ACTIVIDAD desde el 59, y un contador que no se incrementara nunca daría
+// «0 temblando» igual de verde. Así que se exige que alguien cambie.
+control("el contador de cambios de actividad CUENTA: alguien anda y se para",
+  vivo.conCambioDeActividad > 0, `${vivo.conCambioDeActividad} de ${vivo.conRoam} con roam`);
 control("ninguno tiembla en el sitio cambiando de animación sin moverse",
   vivo.temblando === 0, `${vivo.temblando} temblando`);
 
@@ -228,8 +333,12 @@ await pag.screenshot({ path: "build/gatecity/vistas/mundo-pueblo.png" });
 // seguía muerto. Aquí no se llama a nada: se aparece al lado de un goblin y
 // se esperan seis segundos de reloj de pared.
 const solo = await pag.evaluate(() => {
-  const h = window.probe.ia.censo().lista.filter((b) => b.hostil);
-  if (!h.length) return null;
+  // Y NO SE COGE UNO DORMIDO (59). Un bicho fuera del área activa no piensa,
+  // así que «no reaccionó» mediría el sueño y no la IA. Este control salía
+  // rojo una vez de cada dos por eso, que es tan inútil como un verde vacío.
+  const todos = window.probe.ia.censo().lista;
+  const h = todos.filter((b) => b.hostil && !b.dormido);
+  if (!h.length) return { vacio: true, hostiles: todos.filter((b) => b.hostil).length };
   // Se le para el PASEO al pueblo, y sólo el paseo. Lo que aquí se mide es si
   // la caza arranca sola; con el goblin andándose sus seis metros mientras
   // esperamos, lo que se mide es si le apetece quedarse — y sale rojo una vez
@@ -245,15 +354,21 @@ const solo = await pag.evaluate(() => {
   // el 0 puede haber acabado en un rincón desde el que ninguno de los ocho
   // rumbos tiene línea de visión, y entonces el control vuelve a medir la
   // geometría. Se para en el primer goblin que de verdad vea al jugador.
-  let cual = 0, visto = false;
-  for (let n = 0; n < h.length && !visto; n++) {
+  // Los índices de `irA`/`ve`/`estado` van sobre TODOS los hostiles, dormidos
+  // incluidos, así que se recorre esa lista y se saltan los dormidos.
+  const indices = todos.map((b, k) => [b, k]).filter(([b]) => b.hostil)
+    .map(([b], k) => [b, k]).filter(([b]) => !b.dormido).map(([, k]) => k);
+  let cual = indices[0] ?? 0, visto = false;
+  for (const n of indices) {
+    if (visto) break;
     for (let k = 0; k < 8 && !visto; k++) {
       window.probe.ia.irA(n, 7, (k * Math.PI) / 4);
       if (window.probe.ia.ve(n)) { cual = n; visto = true; }
     }
   }
   return {
-    quien: h[cual].nombre, cual, visto,
+    quien: window.probe.ia.estado(cual)?.nombre ?? "?", cual, visto,
+    despiertos: h.length, hostiles: todos.filter((b) => b.hostil).length,
     atacantes: window.probe.ia.atacantes().length, golpes: window.probe.ia.golpes,
   };
 });
@@ -265,6 +380,10 @@ const luego = await pag.evaluate((n) => ({
 }), solo?.cual ?? 0);
 // Y un control para que lo de arriba no pase en vacío: si ningún hostil llega
 // a ver al jugador, los dos de abajo miden la geometría del mapa y no la IA.
+// El positivo de la selección: si todos los hostiles estuvieran dormidos, los
+// dos controles de abajo medirían el sueño y no la IA.
+control("hay hostiles DESPIERTOS a los que preguntarles",
+  (solo?.despiertos ?? 0) > 0, `${solo?.despiertos} despiertos de ${solo?.hostiles} hostiles`);
 control("hay un hostil con línea de visión al jugador al que mirarle la reacción",
   solo?.visto === true, `goblin ${solo?.cual}`);
 console.log(`\n  6 s parado al lado de un ${solo?.quien}, sin llamar a la IA:`);

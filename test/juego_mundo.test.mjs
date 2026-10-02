@@ -15,6 +15,7 @@ import {
   ESPERA, PLAZO, ATASCADO, ABANICO, INTENTOS,
 } from "../src/play/paseo.js";
 import { leerFichaNpc, iaDe, sonidosDeEvento } from "../src/bsp/script.js";
+import { CINTURA, Manada, avanzar, ojoDe } from "../src/play/manada.js";
 
 const SCRIPTS = "../MSC/MSCScripts/scripts";
 const hayScripts = existsSync(`${SCRIPTS}/monsters/goblin.script`);
@@ -55,9 +56,27 @@ describe("la animación de estar parado", () => {
     // `weighttotal += actweight; if (!weighttotal || RANDOM_LONG(0, weighttotal-1) < actweight)`
     const secs = [sec(0, "a", ACT.IDLE, 1), sec(1, "b", ACT.IDLE, 9)];
     const cuenta = { 0: 0, 1: 0 };
-    // Un dado uniforme de verdad, no fijado: lo que se comprueba es el reparto.
-    for (let n = 0; n < 20000; n++) cuenta[buscarActividad(secs, ACT.IDLE, (m) => Math.floor(Math.random() * m))]++;
+    // CON EL DADO POR OMISIÓN, que es el de la casa: `Math.random`.
+    //
+    // Esta prueba pasaba su propio `(m) => Math.floor(Math.random() * m)`, y
+    // por eso estaba verde mientras el juego no sorteaba nada: medía que la
+    // función sabe repartir, no que la llamen como es debido. `Manada` le
+    // pasaba `Math.random` y con eso ganaba SIEMPRE la última (59).
+    for (let n = 0; n < 20000; n++) cuenta[buscarActividad(secs, ACT.IDLE)]++;
     const p = cuenta[1] / 20000;
+    assert.ok(p > 0.85 && p < 0.95, `la de peso 9 deberia salir el 90 %, sale el ${(p * 100).toFixed(1)} %`);
+  });
+
+  test("EL FALLO DEL 59: con el dado de la casa no gana siempre la última", () => {
+    // El control que faltaba. La de peso 1 va la PRIMERA y la de peso 9 la
+    // segunda, así que «gana siempre la última» y «sortea bien» dan las dos
+    // mucha «b». Para distinguirlas hay que poner la pesada DELANTE: si el
+    // sorteo no existe, la ligera de detrás gana el 100 % de las veces.
+    const secs = [sec(0, "pesada", ACT.IDLE, 9), sec(1, "ligera", ACT.IDLE, 1)];
+    const cuenta = { 0: 0, 1: 0 };
+    for (let n = 0; n < 20000; n++) cuenta[buscarActividad(secs, ACT.IDLE)]++;
+    assert.ok(cuenta[0] > 0, "la primera no sale NUNCA: el dado no se está tirando");
+    const p = cuenta[0] / 20000;
     assert.ok(p > 0.85 && p < 0.95, `la de peso 9 deberia salir el 90 %, sale el ${(p * 100).toFixed(1)} %`);
   });
 
@@ -187,6 +206,101 @@ describe("el paseo de `SetWanderDest`", () => {
     assert.ok(Math.abs(x2) < 1e-9 && y2 === 0 && Math.abs(z2 + 1) < 1e-9);
     assert.equal(anguloMod(-30), 330);
     assert.equal(anguloMod(390), 30);
+  });
+});
+
+describe("a qué ALTURA se pregunta si hay hueco", () => {
+  // El fallo que esto defiende: el arnés sumaba la cintura a la altura que le
+  // dieran, y el paseo le da el OJO (`EyePosition()`, msmonsterserver.cpp:1084).
+  // Resultado, dos cinturas: el rayo del paseo salía a 2,27 m del suelo en un
+  // enano de 1,37 y elegía rumbos despejados a la altura de la cabeza. Medido en
+  // Gate City con 16 aldeanos y 300 s, el peor atasco contra una pared pasaba de
+  // 44 s a 114 s. El contrato ahora es: `libre` traza desde la `y` que se le da.
+
+  /** Un bicho de mentira con lo justo para que `avanzar` haga algo. */
+  const bicho = (donde = [0, 0, 0]) => ({
+    donde: [...donde], yaw: 0, destino: [10 * 39.37, 0, 0], cerca: 0,
+    velocidad: 1, velocidadCorriendo: 2, frenado: null,
+    ficha: { ia: { alto: 60 } },
+  });
+
+  test("`avanzar` pregunta a la CINTURA y no a los pies", () => {
+    const alturas = [];
+    const i = bicho([0, 5, 0]);
+    avanzar(i, 1 / 20, (x, y) => { alturas.push(y); return true; }, null);
+    assert.equal(alturas.length, 1);
+    // Los pies están a 5; se pregunta a 5,9 y no a 5.
+    assert.equal(alturas[0], 5 + CINTURA);
+    assert.notEqual(alturas[0], 5);
+  });
+
+  test("una pared a la cintura lo para; y el control: sin pared, avanza", () => {
+    // El positivo primero, porque un `no avanza` es lo que se ve cuando esto no
+    // se llama siquiera.
+    const libre = bicho([0, 0, 0]);
+    assert.equal(avanzar(libre, 1 / 20, () => true, null), true);
+    assert.equal(libre.frenado, "avanza");
+    assert.ok(libre.donde[0] > 0);
+
+    // Y la misma pared, puesta sólo a la altura de la cintura.
+    const topa = bicho([0, 0, 0]);
+    const pared = (x, y) => y < 0.5 || y > 1.4;   // hueco arriba y abajo, no en medio
+    assert.equal(avanzar(topa, 1 / 20, pared, null), false);
+    assert.equal(topa.frenado, "pared delante");
+    assert.equal(topa.donde[0], 0);
+  });
+
+  test("el PASEO pregunta desde el ojo, y nunca por encima de él", () => {
+    // El bicho de Gate City más pequeño de los que pasean mide 60 unidades, o
+    // sea que su ojo está a 54: en metros, 1,37. Ni un rayo del paseo puede
+    // salir más alto que eso, y con la cintura de más salían todos.
+    //
+    // ── CORRECCIÓN DEL 81 ──────────────────────────────────────────────────
+    //
+    // Las dos frases de arriba se conservan porque dicen lo que esta prueba vino
+    // a defender —el rayo del paseo no sale por encima del ojo, que es lo que
+    // pasaba con la cintura sumada dos veces— y ESO sigue midiéndose igual.
+    // Lo que estaba mal es **el valor del ojo**: aquí iba escrito `alto * 0.9`,
+    // o sea 54 unidades y 1,371 m, y el ojo de un monstruo de MSR es su alto
+    // ENTERO —`pev->view_ofs = Vector(0, 0, m_Height)`, msmonsterserver.cpp:250—,
+    // o sea 60 unidades y 1,524 m. El 0,9 es la proporción del JUGADOR (caja de
+    // 72, ojo a 64). Ver `ojoDe` en `src/play/manada.js`.
+    //
+    // Se pide a `ojoDe` en vez de volver a escribir el número: una prueba que
+    // copia la constante es una quinta copia del mismo valor, y el fallo de
+    // partida fue justo que había cuatro.
+    const U = 39.37;
+    const alto = 60;
+    const ficha = {
+      clave: "x", escena: [0, 0, 0], yaw: 0, ancho: 32, andando: "walk",
+      ia: { pasea: true, ancho: 32, alto, corriendo: "run" },
+    };
+    const m = new Manada({ unidadesPorMetro: U, colocados: [ficha] }, { azar: () => 0.5 });
+    const i = m.instancias[0];
+    i.velocidad = 1; i.velocidadCorriendo = 2;   // el `.mdl` no está aquí
+
+    const alturas = [];
+    // 40 s: sobra para que el plazo de 7 s venza varias veces y se pidan rumbos.
+    for (let t = 0; t < 40; t += 1 / 20) {
+      m.pasear(1 / 20, {
+        libre: (x, y, z, dx, dz, dist) => { alturas.push(y); return true; },
+        suelo: () => 0,
+      });
+    }
+    assert.ok(alturas.length > 0, "el paseo no ha preguntado nada: no mide nada");
+    const ojo = ojoDe(i) / U;                           // 60 u = 1,524 m
+    const cintura = CINTURA;                            // lo que suma `avanzar`
+    const max = Math.max(...alturas);
+    assert.ok(max <= ojo + 1e-9,
+      `el paseo ha trazado a ${max.toFixed(3)} m y el ojo está a ${ojo.toFixed(3)}`);
+    // Y el control de que esta prueba distingue: con la cintura de más el
+    // máximo habría sido 2,27, o sea por encima del ojo.
+    assert.ok(ojo + cintura > ojo + 1e-9);
+    // Las dos alturas que se esperan y ninguna más: el ojo (el paseo) y la
+    // cintura (el `avanzar` que viene detrás, con los pies a 0).
+    const vistas = [...new Set(alturas.map((y) => y.toFixed(3)))].sort();
+    assert.deepEqual(vistas, [cintura.toFixed(3), ojo.toFixed(3)].sort(),
+      `alturas distintas: ${vistas.join(", ")}`);
   });
 });
 

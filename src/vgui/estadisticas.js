@@ -52,8 +52,80 @@
 
 import { Panel, MSLabel, LineBorder } from "./widgets.js";
 import { PanelConNombre, CERRAR_CON_ESC, ATRAPA_RUEDA, RUEDA } from "./registro.js";
+import { PROPIEDADES, ESCUELAS, expNecesaria } from "../juego/stats.js";
 
 export const NOMBRE = "stats";
+
+// ── DOS formatos, y no es un descuido del original ─────────────────────────
+//
+// Este panel pinta las habilidades en dos sitios y con dos formatos DISTINTOS a
+// propósito. Conviene tenerlo escrito porque en una captura se ve como si a la
+// lista le faltara algo, y «arreglarlo» sería inventarse un Master Sword que no
+// existe — el experimento 65 calcado.
+//
+//   LA LISTA DE LA IZQUIERDA, nombre y número y nada más:
+//
+//     _snprintf(cDisplayText, ..., "%s: %i\n", SkillStatList[real_idx].Name,
+//               player.GetSkillStat(SKILL_FIRSTSKILL + real_idx));
+//     if (m_ActiveStat == real_idx) pTextbox->SetFGColorRGB(Color_SelectedText);
+//                                     vgui_stats.cpp:277-285
+//
+//   EL PANEL DE LA DERECHA, con el porcentaje y lo que falta:
+//
+//     _snprintf(cDisplayText, ..., "%s: %i (%.2f%%%%) [%i left]\n",
+//               Name, (int)SubStat.Value, Percent, (int)ceil(ExpToLevel));
+//                                     vgui_stats.cpp:344
+//
+// Lo único que le pasa a la fila ELEGIDA de la izquierda es que se pone roja.
+// El porcentaje vive en la derecha, y sólo ahí.
+
+/** `STATPROP_TOTAL`: más propiedades que esto y son escuelas de magia. */
+const PROPIEDADES_DE_ARMA = 3;
+
+/**
+ * Una fila del panel de la derecha, tal y como la escribe `vgui_stats.cpp:320-344`.
+ *
+ *     long double ExpNeeded = GetExpNeeded(SubStat.Value);
+ *     float Percent = (float(SubStat.Exp) / float(ExpNeeded)) * 100;
+ *     if (Percent > 100.0) Percent = 100.0;
+ *     if (Percent < 0.0)   Percent = 0.0;
+ *     if (SubStat.Value == 0) Percent = 0.0;
+ *     double ExpToLevel = ExpNeeded - SubStat.Exp;
+ *
+ * Tres detalles que parecen de adorno y no lo son:
+ *
+ * 1. **`GetExpNeeded(SubStat.Value)`, con el valor ACTUAL y no `valor + 1`.**
+ *    Es la misma trampa que `src/juego/stats.js:300` ya tiene documentada para
+ *    la subida. `src/juego/interfaz.js` usa `expNecesaria(prop.valor + 1)`, y
+ *    eso es correcto ALLÍ porque responde a otra pregunta; copiarlo aquí daría
+ *    un porcentaje plausible y equivocado.
+ * 2. **La guarda de `Value == 0` es la que sostiene la división.**
+ *    `expNecesaria(0)` vale 0 —lo dice su propio comentario: «el primer punto es
+ *    gratis»—, así que sin ella esto sería `0/0`. En C eso da `inf` o `NaN` y lo
+ *    recogen los topes; en JavaScript daría «NaN%» en pantalla.
+ * 3. **`ExpToLevel` NO se topa**, y por eso una propiedad a cero dice
+ *    `[0 left]`. Es lo que hace el original, con lo cual un personaje recién
+ *    creado enseña `[0 left]` en Proficiency y Balance. Se porta así.
+ *
+ * LO QUE NO SE PORTA, dicho aquí y no descubierto luego: la rama
+ * `if (SubStat.Value > 25)`, que recalcula el porcentaje desde `TestExpArray` —la
+ * copia de sombra que el cliente lleva contra las trampas, con su comentario de
+ * Shuriken al lado—. En este puerto ese array no existe, así que por encima de
+ * 25 el porcentaje sale de la experiencia de verdad. Inventarlo sería peor.
+ */
+export function filaDePropiedad(prop, cuantas) {
+  const nombre = (cuantas > PROPIEDADES_DE_ARMA ? ESCUELAS : PROPIEDADES)
+    .find((x) => x.clave === prop.clave)?.nombre ?? prop.clave;
+
+  const falta = expNecesaria(prop.valor);
+  let pct = (prop.exp / falta) * 100;
+  if (pct > 100) pct = 100;
+  if (pct < 0) pct = 0;
+  if (prop.valor === 0) pct = 0;
+
+  const quedan = Math.ceil(falta - prop.exp);
+  return `${nombre}: ${Math.trunc(prop.valor)} (${pct.toFixed(2)}%) [${quedan} left]`;
+}
 
 /** Las medidas, en la pantalla de referencia de 640×480. */
 export const MEDIDAS = {
@@ -236,12 +308,34 @@ export class PanelDeHoja extends PanelConNombre {
     }
 
     const s = h.habilidades?.[this.elegida] ?? null;
-    this.infoTitulo.ponTexto(s?.nombre ?? "");
+
+    // `Parry` ESCONDE el panel entero, y no es una rareza: tiene una sola
+    // propiedad, así que un panel de cinco renglones para un número no dice nada.
+    //
+    //     if (m_ActiveStat < 0 || msstring(SkillStatList[m_ActiveStat].Name) == "Parry")
+    //     { m_InfoPanel->setVisible(false); return; }
+    //                                     vgui_stats.cpp:295-299
+    //
+    // El original lo compara por el NOMBRE y no por el índice; aquí por la clave,
+    // que es lo mismo y no se mueve si alguien reordena la lista.
+    const escondido = !s || s.clave === "parry";
+    this.info.ver(!escondido);
+    if (escondido) return this._colocarSiProcede();
+
+    this.infoTitulo.ponTexto(s.nombre ?? "");
+    const props = s.propiedades ?? [];
     for (const [i, l] of this.infoFilas.entries()) {
-      const p = s?.propiedades?.[i];
-      l.ponTexto(p ? `${p.clave}: ${p.valor}` : "");
+      const p = props[i];
+      l.ponTexto(p ? filaDePropiedad(p, props.length) : "");
+      // `m_StatTypeLabel[i]->setVisible(false)` para los renglones que sobran
+      // (`vgui_stats.cpp:315`): un mago gasta los cinco y un arma sólo tres.
+      l.ver(Boolean(p));
     }
 
+    return this._colocarSiProcede();
+  }
+
+  _colocarSiProcede() {
     if (this._ancho) this.colocar(this._ancho, this._alto, this.esquema);
     return this;
   }

@@ -30,6 +30,7 @@
 import {
   ConsolaDeSucesos, CVARS, AJUSTES, XRES, YRES,
   colorDeSuceso, colorDeCifra, cuadroDeBarra, seguir, disposicionDelHud, seVeElHud,
+  esquinaDeLaConsola,
   cargaVisible, cargaDelTiro,
 } from "../play/hud.js";
 // El nivel de carga, su color y su número viven con el resto de la regla del
@@ -214,14 +215,18 @@ export function montarHud({ raiz = document.body, ficha = null, ajustes = AJUSTE
     // sitio, que es abajo a la derecha y crece hacia arriba.
     cuerpoDeLetra = Math.max(11, Math.round(14 * (h / 480) * 0.62));
     altoDeLinea = Math.round(cuerpoDeLetra * 1.25);
-    const anchoConsola = XRES(230, w);
+    // Su sitio ya no se calcula aquí: es `esquinaDeLaConsola`, en la regla,
+    // porque desde el 60 hay que poder compararlo con el de la ventana de
+    // aviso sin abrir un navegador.
+    const esquina = esquinaDeLaConsola(w, h);
+    const anchoConsola = esquina.w;
     consola.ancho = anchoConsola - 4;
     caja.style.font = `${cuerpoDeLetra}px ${FUENTE}`;
     caja.style.width = `${anchoConsola}px`;
-    caja.style.left = `${w - anchoConsola - XRES(20, w)}px`;
+    caja.style.left = `${esquina.x}px`;
     caja.style.background = consola.fondo;
     // `EVENTCON_Y = YRES(480) - YRES(10)`: el borde de ABAJO es fijo.
-    caja._abajo = h - YRES(10, h);
+    caja._abajo = esquina.y;
 
     const altoRanura = YRES(14, h);
     ranura.style.left = `${XRES(170, w)}px`;

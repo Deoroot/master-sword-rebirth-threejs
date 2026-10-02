@@ -314,7 +314,15 @@ export function dentroDelCono(desde, mirando, punto, cono = CONO) {
  *   `centro`     el del jugador, para el cono — que se mide desde ahí
  *   `mirando`    el vector de la vista, en la escena
  *   `candidatos` `{ id, centro: [x,y,z] en unidades, vivo }`
- *   `libre`      `(desde, hasta) => bool`, la traza que IGNORA monstruos
+ *   `libre`      `(desde, hasta, candidato) => bool`, la traza que IGNORA monstruos
+ *
+ * EL TERCER ARGUMENTO DE `libre` ES DEL 69, y lo puso un fallo entre dos piezas
+ * que funcionaban. El motor traza con `ignore_monsters`, así que un monstruo no
+ * se tapa a sí mismo; los `func_breakable` del 69 **sí**, porque son geometría
+ * de colisión de verdad. El almiar bloqueaba el rayo hasta su propio centro y
+ * salía descartado por «pared en medio»: entraba en el cono, estaba a tiro y no
+ * se podía golpear nunca. Pasando el candidato, quien traza puede dejar fuera su
+ * colisionador — que es lo que `ignore_monsters` hace por los monstruos.
  */
 export function elegirObjetivo({
   desde, centro = desde, mirando, alcance = 0, candidatos = [],
@@ -326,11 +334,78 @@ export function elegirObjetivo({
     const p = c.centro;
     const dist = Math.hypot(p[0] - desde[0], p[1] - desde[1], p[2] - desde[2]);
     if (dist > alcance) continue;
-    if (!libre(desde, p)) continue;
+    if (!libre(desde, p, c)) continue;
     if (!dentroDelCono(centro, mirando, p, cono)) continue;
     if (!mejor || dist < mejor.distancia) mejor = { objetivo: c, distancia: dist };
   }
   return mejor;
+}
+
+/**
+ * EL GOLPE COMPLETO, QUE SON DOS INTENTOS Y NO UNO — el 80.
+ *
+ * `elegirObjetivo` es sólo el PRIMERO. Cuando la esfera no encuentra a nadie, el
+ * motor no se rinde: traza la línea de verdad, **con los monstruos puestos**, y
+ * le hace el daño a lo que toque:
+ *
+ *     MSTraceLine(vecSrc, vecEnd, dont_ignore_monsters, pAttacker->edict(),
+ *                 outTraceResult, trflags);            // + MSTRACE_LARGEHITBOXES
+ *     if ((outTraceResult.flFraction < 1.0f) && outTraceResult.pHit) {
+ *       CBaseEntity *pHit = DoDamage(Damage, CBaseEntity::Instance(pHit)); ... }
+ *                                             giattack.cpp:1636-1646
+ *
+ * Y es `DoDamage` entero, no un sonido: daño completo, experiencia y reacción.
+ *
+ * ── POR QUÉ ESTO NO ES UN ADORNO, CON LOS NÚMEROS DE UNA RATA ─────────────
+ *
+ * Porque la esfera mide contra el **centro** del bicho y la línea contra su
+ * cuerpo, y la diferencia es casi todo el alcance del arma. Con la espada
+ * oxidada (`alcance 60`), el ojo del jugador a 64 unidades del suelo y el centro
+ * de una rata de 32 de alto a 16:
+ *
+ *     el radio horizontal de la esfera   √(60² − 48²) = 36,0 u
+ *     lo que ya separan los colisionadores  16 + 16 = 32,0 u
+ *
+ * O sea que **la franja en la que una rata se puede herir por la esfera mide
+ * 4 unidades, diez centímetros**. Fuera de ella la línea sí la alcanza, porque
+ * va a su cuerpo y no a su centro. Sin este segundo intento, pegarle a algo
+ * pequeño es imposible y lo único que pasa es que suena el arma contra piedra —
+ * que es el otro fallo del 80, y el que se oye.
+ *
+ * ── LO QUE LA LÍNEA NO MIRA, Y HAY QUE RESPETARLO ─────────────────────────
+ *
+ * Ni el cono ni `ignore_monsters`. El cono es del primer intento —es la
+ * «autopuntería» que `Damage.flRange` enciende (giattack.cpp:1645 y el
+ * comentario de `NoAutoAim`)— y la línea es la puntería de verdad: va donde
+ * apuntas. Meterle el cono la haría inútil justo donde sirve.
+ *
+ * @param linea `(desde, direccion, alcance) => { tipo, objetivo } | null`, la
+ *   traza del mundo CON los bichos dentro. `tipo` es `"bicho"`, `"rompible"` o
+ *   `"mundo"`, que son las tres cosas distintas que hay que hacer con ella.
+ * @returns `null` si no se ha dado a nada; si no, `{ objetivo, distancia, por }`
+ *   con `por` = `"esfera"` o `"linea"`, o `{ mundo: true, por: "linea" }`.
+ *   `por` no es decoración: es lo que una sonda necesita para distinguir «le
+ *   pegué» de «le pegué por donde creía».
+ */
+export function resolverGolpe({
+  desde, centro = desde, mirando, alcance = 0, candidatos = [],
+  libre = () => true, cono = CONO, linea = () => null,
+} = {}) {
+  const porLaEsfera = elegirObjetivo({ desde, centro, mirando, alcance, candidatos, libre, cono });
+  if (porLaEsfera) return { ...porLaEsfera, por: "esfera" };
+  const g = linea(desde, mirando, alcance);
+  if (!g) return null;
+  // Dar a la pared es dar a la pared: no hay a quien herir, y es de aquí de
+  // donde sale el `hitwall` del guion del arma. Un monstruo NO pasa por aquí
+  // —`CMSMonster::CounterEffect` manda `CE_HITMONSTER` (msmonsterserver.cpp:2438-2445)
+  // y `hitwall` sólo lo dispara `CE_HITWORLD` (entity.cpp:20-26)—, así que una
+  // rata nunca puede sonar a piedra.
+  if (g.tipo === "mundo" || !g.objetivo) return { mundo: true, por: "linea" };
+  const p = g.objetivo.centro;
+  const distancia = p
+    ? Math.hypot(p[0] - desde[0], p[1] - desde[1], p[2] - desde[2])
+    : (g.distancia ?? 0);
+  return { objetivo: g.objetivo, distancia, por: "linea" };
 }
 
 /**
@@ -428,6 +503,12 @@ export class Brazo {
     this.pulsadoAntes = false;
     this.cargando = 0;
     this.cargaHecha = 0;
+    /**
+     * La destreza del dueño, que el motor lee de `m_pOwner` cuando le hace
+     * falta. Aquí llega por `tic`, así que se guarda para que `cargaTope` —que
+     * se consulta desde el getter `carga`, sin argumentos— pueda mirarla.
+     */
+    this.destreza = 0;
     /** Sólo del arco: se soltó el botón antes del mínimo y la suelta espera. */
     this.sueltaPendiente = false;
     /** Cuál de las animaciones de ataque tocó, que el arma tiene varias. */
@@ -441,8 +522,57 @@ export class Brazo {
    */
   get atacando() { return this.fase !== FASE.QUIETO; }
 
-  /** La carga que llevaría si soltara ahora, en tanto por uno. */
-  get carga() { return this.cargando > 0 ? cargaDe(this.cargando) : 0; }
+  /**
+   * EL TOPE DE CARGA DEL ARMA, que es lo que impide que una espada oxidada
+   * llegue al nivel 3.
+   *
+   *     float CGenericItem::GetHighestAttackCharge() {
+   *       float HighestCharge = 0;
+   *       for (int i = 0; i < m_Attacks.size(); i++) {
+   *         attackdata_t &Attack = m_Attacks[i];
+   *         if (Attack.flChargeAmt <= HighestCharge) continue;
+   *         if (m_pOwner && Attack.RequiredSkill) {
+   *           int Stat = m_pOwner->GetSkillStat(...);
+   *           if (Stat < Attack.RequiredSkill && i > 0) continue;
+   *         }
+   *         HighestCharge = Attack.flChargeAmt;
+   *       }
+   *       return HighestCharge;
+   *     }                                          giattack.cpp:600-628
+   *
+   * El `i > 0` es el mismo indulto al primer ataque que ya está en `elegir`:
+   * al ataque de índice cero no se le mira la destreza nunca.
+   */
+  cargaTope(destreza = this.destreza) {
+    let alta = 0;
+    for (let i = 0; i < this.ataques.length; i++) {
+      const a = this.ataques[i];
+      const c = a.carga ?? 0;
+      if (c <= alta) continue;
+      if (a.pideHabilidad > 0 && destreza < a.pideHabilidad && i > 0) continue;
+      alta = c;
+    }
+    return alta;
+  }
+
+  /**
+   * La carga que llevaría si soltara ahora, en unidades de carga.
+   *
+   *     Charge = V_max(Charge, 0);              //Cap ratio at 0
+   *     Charge = V_min(Charge, HighestCharge);  //Cap ratio at highest charge found
+   *                                               giattack.cpp:1108-1111
+   *
+   * **El tope es del ARMA, no del sistema.** La espada oxidada registra un solo
+   * ataque cargado, a `chargeamt 100%`, así que su tope es 1 y la barra se para
+   * llena en el nivel 1 por mucho que se aguante el botón. El cuchillo y el
+   * martillo registran dos y llegan a 2,5. Sin esta línea el reloj sube para
+   * siempre, la barra se vacía y se vuelve a llenar en niveles que el arma no
+   * tiene, y suena el aviso de subir de nivel en cada vuelta.
+   */
+  get carga() {
+    if (!(this.cargando > 0)) return 0;
+    return Math.min(cargaDe(this.cargando), this.cargaTope());
+  }
 
   /**
    * El ataque que toca, con las reglas de `StartAttack`:
@@ -500,6 +630,7 @@ export class Brazo {
    *     acaba     verdadero el paso en que termina
    */
   tic(dt, { pulsado = false, destreza = 0 } = {}) {
+    this.destreza = destreza;
     if (this.esDeTiro) return this.ticDelTiro(dt, { pulsado, destreza });
     const out = { empieza: null, golpe: null, acaba: false, fase: this.fase };
     const pulsaAhora = pulsado && !this.pulsadoAntes;
@@ -508,7 +639,9 @@ export class Brazo {
     //    atacando** (o con `ms_autocharge 1`).
     if (pulsaAhora && !this.cargando &&
         ((this.atacando && !this.ataque?.carga) || this.autocarga) &&
-        this.ataques.some((a) => a.carga > 0)) {
+        // `&& GetHighestAttackCharge()` (genericitem.cpp:735-741), que es el
+        // mismo tope de arriba: un arma sin ataque cargado no arranca el reloj.
+        this.cargaTope(destreza) > 0) {
       this.cargando = 1e-9; // arranca el reloj sin darle tiempo todavía
     }
     // 2. `ActivateButtonUp`, y va con el botón ARRIBA, **no en el flanco**:

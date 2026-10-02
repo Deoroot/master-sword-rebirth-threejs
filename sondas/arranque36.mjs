@@ -6,7 +6,17 @@
 // era «Establish a Kingdom» —montar una partida local— sólo que ocurría sola, en
 // silencio y sin que nadie la pidiera. Esta sonda comprueba que ahora hay puerta.
 //
-// ── Ésta es la única sonda que carga la página SIN `?map=` ────────────────
+// ── POR QUÉ ÉSTA NO ENTRA POR EL MENÚ con el ayudante común (59) ─────────
+//
+// Porque ÉSTA ES la entrada. `sondas/entrar.mjs` recorre el menú de una
+// tirada para que las demás lleguen dentro; aquí el recorrido es lo que se
+// mide, paso a paso, y su apartado 7 abre una segunda pestaña con `?map=`
+// **a propósito**: es el control positivo que demuestra que sin `?map=` hay
+// menú y con `?map=` no lo hay. Usar el ayudante sería medirlo con él mismo.
+//
+// ── Ésta era la única sonda que cargaba la página SIN `?map=` ─────────────
+//
+// Desde el 59 ya no: son veintisiete.
 //
 // Y eso es el experimento: `?map=` es la línea de comandos del juego
 // (`hl.exe +map <mapa>` entra sin pasar por el menú), y las otras veinte sondas
@@ -29,6 +39,7 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { MAPAS_PORTADOS } from "../src/play/mapa.js";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5220;
@@ -67,6 +78,105 @@ try {
   control("y trae las entradas de gamemenu.res",
     entrada.opciones.includes("Visit a Kingdom") && entrada.opciones.includes("Establish a Kingdom"),
     entrada.opciones.filter(Boolean).join(" · "));
+
+  // ── 1b. DETRÁS DEL MENÚ HAY UNA ESCENA, NO UNA PARTIDA ───────────────────
+  //
+  // Lo que esto arregla, medido antes de arreglarlo y con el menú delante:
+  //
+  //   NPC             69 montados, 33 hostiles
+  //   ¿se mueven?     45 de los 69 se movieron en 4 s, hasta 3,74 m
+  //   jugador         existe, con posición
+  //   sesion          true
+  //
+  // O sea que arrancar el juego era entrar a Gate City con treinta y tres
+  // monstruos cazando, y el menú una tapa encima. Un mapa de fondo del motor
+  // no es eso: al jugador le ponen `FL_GODMODE|FL_NOTARGET` —«don't attack
+  // player in background mode», sv_client.c:1422-1423— y lo congelan
+  // (`sv_background_freeze`, sv_main.c:111). Aquí se va más lejos y no se
+  // monta ninguno, porque sin jugador no hay a quién no atacar; está
+  // declarado en `src/play/fondomenu.js`.
+  //
+  // ── CORRECCIÓN, antes de que este control mienta ─────────────────────
+  //
+  // La primera versión de esto exigía además que NO hubiera cuerpo de jugador
+  // y que no hubiera sesión. Al medirlo con cuidado, dos de los tres cargos
+  // eran una mala lectura mía:
+  //
+  //   `sesion: true`   era `Boolean(S.sesion)`, o sea que el OBJETO existe.
+  //                    El estado real es «fuera» y `personaje` es `null`:
+  //                    no hay ninguna partida corriendo. No había nada que
+  //                    arreglar ahí.
+  //   el cuerpo        existe, sí, pero **no se mueve**: con el menú delante
+  //                    y la tecla de andar puesta 1,2 s se anduvo 0,000 m.
+  //                    Eso es exactamente lo que hace el motor en un mapa de
+  //                    fondo (`sv_background_freeze`, sv_main.c:111), así que
+  //                    quitarlo no sería más fiel, sería menos. Y la cámara
+  //                    del menú ES la del jugador conducida desde fuera, así
+  //                    que quitar el cuerpo se llevaría el paseo del 52.
+  //
+  // Lo que queda, que es el cargo de verdad, es la simulación: 69 NPC y 33
+  // hostiles cazando un cuerpo congelado. Así que el control del cuerpo pasa
+  // a medir lo que importa —que esté quieto— en vez de que no exista.
+  //
+  // Se espera de verdad antes de contar: un censo leído en el fotograma uno
+  // daría cero también con los 69 en camino.
+  await pag.waitForTimeout(3000);
+  const detras = await pag.evaluate(() => ({
+    npc: window.probe.ia?.censo?.()?.total ?? null,
+    hostiles: window.probe.ia?.censo?.()?.hostiles ?? null,
+    estado: window.probe.sesion?.estado?.() ?? null,
+    personaje: window.probe.sesion?.personaje ?? null,
+    tri: window.probe.level?.mesh?.triangleCount ?? 0,
+  }));
+
+  // CUÁNTOS TRIÁNGULOS DIBUJA EL FOTOGRAMA ENTERO, no la última pasada.
+  //
+  // Esto era `renderer.info.render.triangles` leído sin más, y daba **1**.
+  // No era un fallo del dibujo: durante el paseo del menú se dibuja en dos
+  // pasadas —la escena a un destino intermedio y luego el destino a la
+  // pantalla (`src/render/pasadamenu.js:95-97`)— y la segunda es el triángulo
+  // grande de pantalla completa, `[-1,-1, 3,-1, -1,3]`. Three.js pone a cero
+  // `info.render` en CADA `render()`, así que lo que se leía era el triángulo
+  // del compositor y el control se ponía rojo con el pueblo perfectamente
+  // dibujado. Un contador que se reinicia por pasada mide una pasada (61).
+  //
+  // Con `autoReset` apagado, `info` acumula las dos y el número es el del
+  // fotograma. Se deja como estaba al salir.
+  const dibujados = await pag.evaluate(async () => {
+    const info = window.probe.renderer?.info;
+    if (!info) return 0;
+    const antes = info.autoReset;
+    info.autoReset = false;
+    info.reset();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const n = info.render.triangles;
+    info.autoReset = antes;
+    return n;
+  });
+  detras.dibujados = dibujados;
+  control("detrás del menú NO hay monstruos montados",
+    detras.npc === 0, `${detras.npc} NPC, ${detras.hostiles} hostiles`);
+  control("ni partida empezada: nadie ha elegido personaje todavía",
+    detras.estado === "fuera" && detras.personaje === null,
+    `estado ${JSON.stringify(detras.estado)}, personaje ${JSON.stringify(detras.personaje)}`);
+  // EL CUERPO SÍ ESTÁ, Y CONGELADO, que es lo que hace el motor. Se mide
+  // andando de verdad, no leyendo una bandera: `sv_background_freeze` no es
+  // un `if` que se pueda preguntar, es un efecto.
+  const antesQuieto = await pag.evaluate(() => [...window.probe.player.feet]);
+  await pag.keyboard.down("KeyW");
+  await pag.waitForTimeout(1200);
+  await pag.keyboard.up("KeyW");
+  const trasQuieto = await pag.evaluate(() => [...window.probe.player.feet]);
+  const seMovio = Math.hypot(trasQuieto[0] - antesQuieto[0], trasQuieto[2] - antesQuieto[2]);
+  control("el cuerpo está pero NO se mueve, como en un mapa de fondo del motor",
+    seMovio < 0.05, `${seMovio.toFixed(3)} m con la W puesta 1,2 s`);
+  // EL CONTRARIO, y hace falta: «cero NPC» y «no se cargó nada» se ven igual.
+  // Si el fondo estuviera vacío, los dos controles de arriba saldrían verdes
+  // sobre una pantalla negra — que es la primera fila de la tabla del
+  // apartado 4, la del laboratorio.
+  control("CONTROL: y sin embargo hay una escena cargada y dibujándose",
+    detras.tri > 1000 && detras.dibujados > 1000,
+    `${detras.tri} tri en el nivel, ${detras.dibujados} dibujados`);
 
   // ── 2. «ESTABLISH A KINGDOM» YA NO ESTÁ APAGADA ──────────────────────────
   // El menú NO usa `disabled`: marca las entradas apagadas con
@@ -179,8 +289,14 @@ try {
   await pag.click(".v2-desplegable");
   await pag.waitForTimeout(200);
   const mapas = await pag.$$eval(".v2-lista-abierta > button", (ns) => ns.map((n) => n.textContent));
-  control("la lista de mapas enseña UNO, que es el que hay portado",
-    mapas.length === 2 && mapas.includes("gatecity"), mapas.join(" · "));
+  // LA CUENTA SE CALCULA. Estaba escrita —«enseña UNO», `length === 2`— y el
+  // día que Edana entró en `MAPAS_PORTADOS` (el 50) esto se puso rojo diciendo
+  // que la lista mentía, cuando la que mentía era la sonda. Lo que hay que
+  // comprobar es que la ventana enseña **lo que la lista promete y nada más**.
+  const esperados = ["< Random Map >", ...MAPAS_PORTADOS];
+  control(`la lista de mapas enseña los ${MAPAS_PORTADOS.length} portados y ninguno más`,
+    JSON.stringify(mapas) === JSON.stringify(esperados),
+    `${mapas.join(" · ")}   (esperados: ${esperados.join(" · ")})`);
   // La Escape con la lista abierta cierra LA LISTA, no la ventana. Es lo que
   // hace el juego, y aquí no lo hacía: «Create Server» se iba entera y la
   // pestaña siguiente ya no existía. Este control lo fija.
@@ -192,6 +308,29 @@ try {
   }));
   control("la Escape cierra el DESPLEGABLE, y la ventana se queda",
     trasEscape.lista === false && trasEscape.ventana === true, JSON.stringify(trasEscape));
+
+  // ── 4b. Y SE ELIGE UNO A MANO, porque `< Random Map >` ya sortea ─────────
+  //
+  // Hasta el 50 la fila venía con `< Random Map >` y había **un** mapa, así
+  // que «Start entra con el mapa de la fila» y «Start entra con gatecity»
+  // eran la misma frase. Con dos portados, dejar el valor por omisión
+  // convierte el control de abajo en una moneda al aire: la mitad de las
+  // veces saldría rojo con todo bien.
+  //
+  // Así que aquí se elige Gate City **con el ratón**, que además es lo que
+  // esta sonda tiene que medir — el camino del jugador. La otra mitad, que
+  // elegir el OTRO trae el otro, se mide en `sonda:edana50`: ése es el
+  // control que separa «se aplicó la fila» de «siempre sale el mismo».
+  await pag.click(".v2-desplegable");
+  await pag.waitForTimeout(200);
+  for (const b of await pag.$$(".v2-lista-abierta > button")) {
+    if ((await b.textContent()).trim() === "gatecity") { await b.click(); break; }
+  }
+  await pag.waitForTimeout(200);
+  const elegido = await pag.evaluate(() =>
+    window.probe.vgui2.estado().crearServidor.valores.mapa);
+  control("elegir «gatecity» en el desplegable deja la fila «Map» con ese valor",
+    elegido === "gatecity", `fila «Map»: ${JSON.stringify(elegido)}`);
 
   // ── 5. LAS TRES CASILLAS QUE CUADRAN CON LOS CVARS ───────────────────────
   await pag.click(".v2-pestana:nth-child(2)");             // Game
@@ -211,7 +350,33 @@ try {
   for (const b of await pag.$$(".v2-boton")) {
     if ((await b.textContent()) === "Start") { await b.click(); break; }
   }
-  await pag.waitForTimeout(1500);
+  // EL ORDEN: NO SE ABRE EL MUNDO VACÍO ────────────────────────────────────
+  //
+  // Este control existe porque una rotura a propósito **no puso nada rojo**.
+  // Se probó el orden que parece natural —cerrar el menú y poblar después— y
+  // la sonda daba 29 de 29: los bichos acababan llegando, así que todos los
+  // controles del final los veían. Lo que no veía nadie es que entre medias
+  // hay **5 610 ms de Gate City vacía** con el jugador ya dentro y el menú ya
+  // fuera. Un fallo de cinco segundos y medio que ningún verde contradice.
+  //
+  // Así que se mira en el borde: en cuanto el menú se cierra, tiene que haber
+  // pueblo. Se espera al menú y no a `newchar` a propósito — `newchar` llega
+  // después de `sesion.arrancar()` y para entonces ya se ha perdido el
+  // instante que importa.
+  await pag.waitForFunction(() => document.querySelector(".ms-menu")?.hidden === true,
+    null, { timeout: 60000 });
+  const alAbrirse = await pag.evaluate(() => window.probe.ia?.censo?.()?.total ?? null);
+  control("al cerrarse el menú el mundo YA está poblado, no se abre vacío",
+    alAbrirse > 0, `${alAbrirse} NPC en el fotograma en que el menú se va`);
+
+  // SE ESPERA AL EFECTO, NO A UN RELOJ. Desde el 53 «Start» al mismo mapa del
+  // fondo monta los 69 bichos aquí mismo, y eso tarda **5 610 ms medidos**:
+  // con el `waitForTimeout(1500)` que había, esta sonda medía el instante de
+  // antes y habría dicho que «Start» no lleva a ninguna parte. Alargar el
+  // reloj habría sido esconderlo — el número volvería a quedarse corto el día
+  // que el mapa traiga más modelos.
+  await pag.waitForFunction(() => window.probe.vgui.abierto() === "newchar",
+    null, { timeout: 60000 });
   const dentro = await pag.evaluate(() => ({
     menu: !document.querySelector(".ms-menu")?.hidden,
     panel: window.probe.vgui.abierto(),
@@ -230,9 +395,42 @@ try {
   //
   // Se mide LO APLICADO, no lo que la ventana enseñaba: son dos cosas y hasta
   // ahora sólo existía la segunda. El control positivo va en el apartado 7.
+  //
+  // Y el valor que se exige es el que se eligió a mano en el 4b, no una
+  // constante: con `< Random Map >` puesto esto sería un sorteo desde el 50.
   const conQue = await pag.evaluate(() => window.probe.vgui2.mapaDeLaPartida());
   control("«Start» entra con el mapa que resuelve la fila «Map»",
-    conQue === "gatecity", `mapa aplicado: ${JSON.stringify(conQue)}`);
+    conQue === elegido, `elegido ${JSON.stringify(elegido)} · aplicado ${JSON.stringify(conQue)}`);
+
+  // ── 6c. EL POSITIVO DEL 1b: JUGANDO SÍ HAY PARTIDA ──────────────────────
+  //
+  // Sin esto, «detrás del menú no hay monstruos» estaría verde también con un
+  // censo roto, con los bichos que no se montan nunca, o con `probe.ia`
+  // devolviendo `null` por un renombrado. **Un cero sin control positivo no es
+  // un resultado**: aquí se comprueba que el mismo censo que decía 0 dice 69
+  // en cuanto hay partida.
+  await pag.evaluate(() => window.probe.sesion.nuevo("Sonda36", "swords_rsword"));
+  await pag.waitForTimeout(2500);
+  const jugando = await pag.evaluate(() => ({
+    npc: window.probe.ia?.censo?.()?.total ?? null,
+    hostiles: window.probe.ia?.censo?.()?.hostiles ?? null,
+    jugador: window.probe.player ? [...window.probe.player.feet] : null,
+  }));
+  control("CONTROL POSITIVO: empezada la partida, los monstruos SÍ están",
+    jugando.npc > 0 && jugando.npc !== detras.npc,
+    `detrás del menú ${detras.npc} → jugando ${jugando.npc} (${jugando.hostiles} hostiles)`);
+  // Y EL CONTRARIO DEL CUERPO CONGELADO. Sin esto, «no se mueve con el menú
+  // delante» estaría verde con un jugador que no se mueve NUNCA — que es el
+  // experimento 37 con otra ropa, y ya costó una sesión.
+  const antesAnda = await pag.evaluate(() => [...window.probe.player.feet]);
+  await pag.keyboard.down("KeyW");
+  await pag.waitForTimeout(1200);
+  await pag.keyboard.up("KeyW");
+  const trasAnda = await pag.evaluate(() => [...window.probe.player.feet]);
+  const anduvo = Math.hypot(trasAnda[0] - antesAnda[0], trasAnda[2] - antesAnda[2]);
+  control("CONTROL POSITIVO: y jugando el mismo cuerpo SÍ anda",
+    anduvo > 0.5 && seMovio < 0.05,
+    `con el menú ${seMovio.toFixed(3)} m → jugando ${anduvo.toFixed(2)} m`);
 
   // ── 7. EL CONTROL POSITIVO: con `?map=` NO hay menú ──────────────────────
   //
@@ -260,6 +458,22 @@ try {
   await otra.close();
 } catch (e) {
   errores.push(`la sonda se cayó: ${String(e).slice(0, 300)}`);
+  // ── Y SE CUENTA COMO UNA ROJA, que hasta el 65 no se contaba ────────────
+  //
+  // Esta sonda declara 30 controles y llevaba tiempo **cayéndose en el 22**:
+  // el `waitForFunction` de «el menú se cierra» agota sus 60 segundos y los
+  // ocho de después —entre ellos «Start entra con el mapa que resuelve la fila
+  // Map», que es el control del experimento 50— no llegaban a correr. Y el
+  // resumen decía «22 de 22 en verde», con el fallo en una nota al pie.
+  //
+  // Un recuento que sólo cuenta lo que se ejecutó no puede bajar: es el
+  // apartado 4 aplicado al propio marcador. Ahora la caída ES una roja, así
+  // que el «X de Y» no puede volver a salir limpio con un tercio sin correr.
+  controles.push({
+    que: "LA SONDA LLEGA AL FINAL: si no, lo de abajo cuenta sólo lo que corrió",
+    bien: false,
+    detalle: String(e?.message ?? e).slice(0, 90),
+  });
 }
 
 console.log("\n  CONTROLES");

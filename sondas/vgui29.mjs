@@ -30,7 +30,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5215;
@@ -54,11 +55,12 @@ try {
   const ANCHO = 1200, ALTO = 800;
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+  // SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  await entrarPorElMenu(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
   // Desde el experimento 30 la pantalla de personajes es un panel de VGUI y
   // está abierta al arrancar. `sesion.nuevo` crea y entra, y al entrar se
@@ -305,6 +307,28 @@ try {
   // `player/player_sv_menu.script:17-64`, y son SEIS opciones fijas. Ahora se
   // comprueban las seis por su texto, que es lo que se lee en pantalla.
   console.log(`\n  LAS OPCIONES`);
+  // ── UN AVISO DEL 85, que esta sonda destapó al pasarla de vecina ────────
+  //
+  // Esta sonda pulsa el **1** más arriba para probar que la tecla elige el primer
+  // botón, y el primer botón del menú del jugador es «Sit Down (Rest)». Hasta el
+  // 84 eso no hacía nada —contestaba «That is not implemented yet»— y desde el 85
+  // **te sienta**. Sentado el menú encoge a tres (`if ( !$get(ent_me,sitting) )`,
+  // player_sv_menu.script:19-52), así que este control leía cuatro botones y daba
+  // rojo con el juego bien. Hay que levantarse antes de contar las seis.
+  //
+  // *Una sonda que pulsa un botón hereda lo que ese botón haga el día que alguien
+  // lo conecte.*
+  if (await pag.evaluate(() => Boolean(window.probe.emociones?.estado()?.sentado))) {
+    const sentadoMenu = await pag.evaluate(() => window.probe.vgui.botones());
+    const arriba = sentadoMenu.find((b) => b.texto === "Stand Up");
+    if (arriba) {
+      await pag.mouse.click(arriba.centro, arriba.arriba + 6);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    await pag.keyboard.press("KeyF");
+    await new Promise((r) => setTimeout(r, 700));
+    console.log(`    (de pie otra vez: el 1 de más arriba me habia sentado — el 85)`);
+  }
   const solo = await pag.evaluate(() => ({
     titulo: window.probe.vgui.panel()?.titulo,
     opciones: window.probe.vgui.opciones(),

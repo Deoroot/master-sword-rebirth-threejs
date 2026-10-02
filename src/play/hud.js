@@ -225,7 +225,20 @@ export function disposicionDelHud(ancho, alto, { ajustes = AJUSTES } = {}) {
 export function cargaEn(ancho, alto) {
   const w = XRES(30, ancho), h = YRES(6, alto);
   const espaciador = XRES(2, ancho);
-  const manos = ["derecha", "izquierda"];
+  // QUÉ MANO ES CADA ÍNDICE, que estuvo al revés desde el 24 y se veía jugando:
+  // cargabas con la derecha y se encendía la barra de la izquierda.
+  //
+  //     enum hand_e { LEFT_HAND, RIGHT_HAND, HAND_PLAYERHANDS, ... };
+  //                                                      genericitem.h:15-23
+  //     int Bar = Item->m_Hand < 2 ? Item->m_Hand : 1;
+  //                                                      vgui_health.h:234
+  //
+  // O sea `LEFT_HAND == 0` y `RIGHT_HAND == 1`: el índice 0 es la IZQUIERDA, y
+  // con el multiplicador de abajo —que es −1 en el 0— sale a la izquierda del
+  // ancla. Cada barra cae del lado de su mano, que es lo que uno espera. Y un
+  // arma a dos manos (`BOTH_HANDS == 4`) cae en la 1 por el `< 2 ? : 1`, o sea
+  // en la derecha.
+  const manos = ["izquierda", "derecha"];
   return manos.map((mano, i) => {
     const multiplicador = i === 0 ? -1 : 1;
     // La errata, transcrita: el `+` liga antes que el `?:`, así que lo que se
@@ -425,6 +438,28 @@ export function cargaDelTiro(sostenido, sostener) {
 }
 
 // ── LA CONSOLA DE SUCESOS ───────────────────────────────────────────────────
+
+/**
+ * DÓNDE CAE LA CONSOLA: abajo a la derecha, y creciendo hacia arriba.
+ *
+ *     const int EVENTCON_SIZE_X = XRES(230);
+ *     const int EVENTCON_X = XRES(640) - EVENTCON_SIZE_X - XRES(20);
+ *     const int EVENTCON_Y = (YRES(480) - YRES(10));
+ *                                                      vgui_hud.cpp:144-146
+ *
+ * `y` es el borde de ABAJO y no el de arriba: el panel se recoloca con
+ * `setPos(x, m_StartY - LINE_SIZE * m_VisibleLines)` cada vez que crece, o sea
+ * que la esquina de abajo no se mueve nunca.
+ *
+ * Esto estaba calculado a mano dentro de `src/juego/hudms.js` y no se podía
+ * mirar sin un navegador. Sale aquí desde el experimento 60, que es cuando hizo
+ * falta comparar esta esquina con la de la ventana de aviso —`src/play/aviso.js`,
+ * arriba a la izquierda— para probar que son dos sitios distintos.
+ */
+export function esquinaDeLaConsola(ancho, alto) {
+  const w = XRES(230, ancho);
+  return { x: XRES(640, ancho) - w - XRES(20, ancho), y: YRES(480, alto) - YRES(10, alto), w };
+}
 
 /**
  * La consola de sucesos de Master Sword, portada con su buffer circular.

@@ -15,9 +15,17 @@ import assert from "node:assert/strict";
 
 import {
   Brazo, FASE, CONO, GRADOS_DEL_CONO, CRITICO, SUELO_DE_POTENCIA,
-  cargaDe, segundosDeCarga, fraccionDePotencia, danoDelGolpe,
+  cargaDe, segundosDeCarga, nivelDeCarga, fraccionDePotencia, danoDelGolpe,
   dentroDelCono, elegirObjetivo, expDeLaMuerte,
 } from "../src/play/golpe.js";
+import { leerFichaObjeto } from "../src/bsp/script.js";
+
+/** Los scripts de MSR, que no todo el mundo tiene instalados. */
+const SCRIPTS = "../MSC/MSCScripts/scripts";
+const HAY_SCRIPTS = (() => {
+  try { return Boolean(leerFichaObjeto(SCRIPTS, "items/swords_rsword")); }
+  catch { return false; }
+})();
 
 // La espada oxidada, tal y como la lee `leerFichaObjeto`. Se copia aquí para
 // que la prueba no dependa de tener el juego instalado; que estos números sean
@@ -183,6 +191,104 @@ test("sin la destreza que pide, el cargado no se elige", () => {
   avanzar(b, 1.1, { pulsado: true, destreza: 1 });
   const e = avanzar(b, 0.5, { pulsado: false, destreza: 1 });
   assert.equal(e.filter((x) => x.empieza).length, 0);
+});
+
+// ── el TOPE de carga, que es del arma y no del sistema ────────────────────
+//
+//     Charge = V_min(Charge, HighestCharge);          giattack.cpp:1110
+//
+// Sin esa línea el reloj sube para siempre: la barra de la espada oxidada se
+// vaciaba y se volvía a llenar en el nivel 2, en el 3 y en el 4, con el aviso
+// sonando en cada vuelta, y el arma no tiene más que un ataque cargado.
+
+/** El cuchillo, que SÍ tiene dos niveles, para que el tope no sea el mismo. */
+const CUCHILLO = {
+  id: "smallarms_rknife",
+  multiplicadorDeCarga: 2,
+  animaciones: { ataque: [2], parado: 1, sacar: 0, guardar: 5 },
+  ataques: [
+    { tipo: "strike-land", dano: 40, duracion: 0.8, retardo: 0.4,
+      teclas: ["+attack1"], prioridad: 0, carga: null, pideHabilidad: 0 },
+    { tipo: "strike-land", dano: 40, duracion: 0.8, retardo: 0.4,
+      teclas: ["-attack1"], prioridad: 1, carga: 1, pideHabilidad: 2 },
+    // 200 % ya pasado por `GET_CHARGE_FROM_TIME`, que es como lo guarda el
+    // motor al registrar el ataque (giattack.cpp:487-489): 2,5, o sea 2 s.
+    { tipo: "strike-land", dano: 40, duracion: 0.8, retardo: 0.4,
+      teclas: ["-attack1"], prioridad: 2, carga: 2.5, pideHabilidad: 4 },
+  ],
+};
+
+/** Deja el brazo cargando: un clic que blande, y otro encima que arranca el reloj. */
+const ponerACargar = (b, destreza) => {
+  b.tic(1 / 60, { pulsado: true, destreza });      // el mandoble
+  b.tic(1 / 60, { pulsado: false, destreza });     // soltar
+  b.tic(1 / 60, { pulsado: true, destreza });      // el segundo clic: arranca la carga
+};
+
+test("la espada oxidada se para en 1 de carga por mucho que se aguante", () => {
+  const b = new Brazo(ESPADA, { azar: () => 0.9 });
+  assert.equal(b.cargaTope(5), 1, "el tope de la espada es su único cargado");
+  ponerACargar(b, 5);
+  avanzar(b, 10, { pulsado: true, destreza: 5 });
+  // Diez segundos aguantando. Sin el tope la carga valdría cargaDe(10) = 14,5.
+  assert.equal(b.carga, 1, `la carga se fue a ${b.carga}`);
+  assert.ok(b.cargando > 9, "y el reloj SÍ sigue corriendo, como en el motor");
+});
+
+test("pero el cuchillo, que tiene dos, llega a 2,5 y ahí se para", () => {
+  // El positivo del de arriba: si el tope fuera una constante nuestra en vez
+  // del arma, este daría 1 también y la prueba anterior no diría nada.
+  const b = new Brazo(CUCHILLO, { azar: () => 0.9 });
+  assert.equal(b.cargaTope(5), 2.5);
+  ponerACargar(b, 5);
+  avanzar(b, 10, { pulsado: true, destreza: 5 });
+  assert.equal(b.carga, 2.5, `la carga se fue a ${b.carga}`);
+});
+
+test("y el tope baja con la destreza, porque el motor se salta lo que no sabes", () => {
+  // `if (Stat < Attack.RequiredSkill && i > 0) continue;` (giattack.cpp:617-623).
+  // Con destreza 3 el cuchillo no alcanza su segundo nivel, así que su tope es
+  // el del primero. Con 4 sí.
+  const b = new Brazo(CUCHILLO, { azar: () => 0.9 });
+  assert.equal(b.cargaTope(3), 1);
+  assert.equal(b.cargaTope(4), 2.5);
+  // Y sin destreza ni para el primero, el reloj de carga no arranca siquiera:
+  // `&& GetHighestAttackCharge()` en `ActivateButtonDown`.
+  assert.equal(b.cargaTope(0), 0);
+  const sinDestreza = new Brazo(CUCHILLO, { azar: () => 0.9 });
+  ponerACargar(sinDestreza, 0);
+  avanzar(sinDestreza, 3, { pulsado: true, destreza: 0 });
+  assert.equal(sinDestreza.cargando, 0, "no tenía que haber arrancado el reloj");
+  assert.equal(sinDestreza.carga, 0);
+});
+
+test("con el tope puesto la barra se queda llena en el nivel 1 y no da otra vuelta", () => {
+  // Esto es lo que el jugador veía mal: la barra seguía después del 1. El HUD
+  // pinta `nivelDeCarga(cargaBruta)`, así que basta con mirar qué sale de la
+  // carga tope de la espada… y de la que habría sin tope.
+  const lleno = nivelDeCarga(1);
+  assert.equal(lleno.fraccion, 1, "en el tope la barra está llena");
+  assert.equal(lleno.etiqueta, "1");
+  // El negativo: con la carga suelta a los 3 s iba por el nivel 3, que la
+  // espada oxidada no tiene.
+  const desbocado = nivelDeCarga(cargaDe(3));
+  assert.ok(desbocado.nivel > 2, `sin tope iba por el nivel ${desbocado.nivel}`);
+});
+
+// El `chargeamt` del script pasa por la MISMA curva que los segundos, y lo
+// hace al registrarse (giattack.cpp:487-489). Es lo que hace que los niveles
+// caigan en segundos enteros: 100 % → 1 (1 s), 200 % → 2,5 (2 s).
+test("el `chargeamt` del script se guarda ya pasado por la curva", { skip: !HAY_SCRIPTS }, () => {
+  const espada = leerFichaObjeto(SCRIPTS, "items/swords_rsword");
+  const cuchillo = leerFichaObjeto(SCRIPTS, "items/smallarms_rknife");
+  const cargas = (f) => f.ataques.map((a) => a.carga).filter((c) => c > 0);
+  assert.deepEqual(cargas(espada), [1], "la espada oxidada tiene UN nivel, y es 1");
+  assert.deepEqual(cargas(cuchillo), [1, 2.5], "el cuchillo tiene dos, y el segundo es 2,5");
+  // Y que la gemela del lector dice lo mismo que la de la regla, que es la
+  // única razón por la que puede haber dos copias de la macro.
+  assert.equal(cargas(cuchillo)[1], cargaDe(2));
+  // El negativo, para que esto no pase con la curva sin aplicar: 2 ≠ 2,5.
+  assert.notEqual(cargas(cuchillo)[1], 2);
 });
 
 test("la curva de carga es la del motor: 100 % a 1 s, 200 % a 1,67", () => {

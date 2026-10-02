@@ -20,10 +20,11 @@ import { AJUSTES, PESTANAS, ajuste, cuenta, porDefecto, leerAjustes } from "../s
 import { PESTANAS as PESTANAS_SRV, COLUMNAS } from "../src/vgui2/servidores.js";
 import { PESTANAS as PESTANAS_CS, AJUSTES as AJUSTES_CS, MAPAS, mapaElegido,
          cuenta as cuentaCS } from "../src/play/crearpartida.js";
+import { MAPAS_PORTADOS } from "../src/play/mapa.js";
 
 const ajusteCS = (clave) => AJUSTES_CS.find((a) => a.clave === clave);
 
-const FICHA = "build/gatecity/vgui2.json";
+const FICHA = "build/msr/vgui2.json";
 const ficha = existsSync(FICHA) ? JSON.parse(readFileSync(FICHA, "utf8")) : null;
 
 // El `config.cfg` de la instalación que hay al lado. Como el resto del juego, no
@@ -500,19 +501,49 @@ test("la fila que es NUESTRA está declarada como nuestra", () => {
   assert.equal(AJUSTES_CS.filter((x) => x.nuestra).length, 1);
 });
 
-test("la lista de mapas dice la verdad: sólo hay uno portado", () => {
+test("la lista de mapas dice la verdad: los portados y el rótulo", () => {
   // El original lista los ciento y pico `.bsp` del juego. Enseñarlos aquí sería
   // una lista de nombres que no abren.
-  assert.deepEqual(MAPAS, ["< Random Map >", "gatecity"]);
-  assert.equal(MAPAS.filter((m) => !m.startsWith("<")).length, 1);
+  //
+  // CORRECCIÓN DEL 50: esto decía «sólo hay uno portado» y lo comprobaba con
+  // un `["< Random Map >", "gatecity"]` escrito y un `length === 1`. Al entrar
+  // Edana se puso rojo diciendo que la lista mentía, y la que había envejecido
+  // era la prueba. La cuenta se calcula: lo que importa es que la ventana
+  // enseñe **lo que `MAPAS_PORTADOS` promete, con el rótulo delante y nada
+  // más**, que es lo que seguirá haciendo falta con el tercero.
+  assert.deepEqual(MAPAS, ["< Random Map >", ...MAPAS_PORTADOS]);
+  assert.equal(MAPAS.filter((m) => !m.startsWith("<")).length, MAPAS_PORTADOS.length);
+  // Y el rótulo va delante y es el único que no es un mapa.
+  assert.equal(MAPAS.filter((m) => m.startsWith("<")).length, 1);
+  assert.ok(MAPAS[0].startsWith("<"));
 });
 
 test("«< Random Map >» elige entre los que existen, no devuelve el rótulo", () => {
-  assert.equal(mapaElegido("< Random Map >"), "gatecity");
-  assert.equal(mapaElegido(""), "gatecity");
-  assert.equal(mapaElegido("gatecity"), "gatecity");
+  // CORRECCIÓN DEL 50: esto exigía `"gatecity"` a un sorteo. Con un mapa
+  // portado el sorteo tenía una sola bola y la prueba pasaba siempre; con dos
+  // es cara o cruz, o sea una prueba que falla la mitad de las veces sin que
+  // nada esté roto. Lo que se puede afirmar de un sorteo es **de dónde salen
+  // las bolas**, y que no sale el rótulo.
+  for (let i = 0; i < 200; i++) {
+    for (const v of ["< Random Map >", "", null, undefined]) {
+      const m = mapaElegido(v);
+      assert.ok(MAPAS_PORTADOS.includes(m), `«${m}» no está en MAPAS_PORTADOS`);
+    }
+  }
+  // CONTROL POSITIVO: y con dos bolas el sorteo SORTEA. Sin esto, «sale uno de
+  // los portados» estaría verde con un `return reales[0]` que no sortea nada.
+  // Con un solo mapa portado no se puede preguntar, y se dice en vez de
+  // fingir que se comprobó.
+  if (MAPAS_PORTADOS.length > 1) {
+    const vistos = new Set();
+    for (let i = 0; i < 500; i++) vistos.add(mapaElegido("< Random Map >"));
+    assert.equal(vistos.size, MAPAS_PORTADOS.length,
+      `en 500 sorteos salieron ${[...vistos].join(", ")}`);
+  }
+  // Pedir uno por su nombre no sortea: devuelve ése, sea cual sea.
+  for (const m of MAPAS_PORTADOS) assert.equal(mapaElegido(m), m);
   // Y un mapa que no está no cuelga el «Start»: cae en el primero de verdad.
-  assert.equal(mapaElegido("aluhandra2"), "gatecity");
+  assert.equal(mapaElegido("aluhandra2"), MAPAS_PORTADOS[0]);
 });
 
 test("sin ningún mapa de verdad, «Start» no promete nada", () => {

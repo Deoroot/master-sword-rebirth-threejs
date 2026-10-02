@@ -203,6 +203,55 @@ export class Vagabundo {
 
   /** Si el plazo de siete segundos ha vencido con el destino aún puesto. */
   get vencido() { return this.tieneDestino && this.t >= this.plazo; }
+
+  /**
+   * LOS DOS RELOJES, APLAZADOS — el 77.
+   *
+   *     pMonster->m_NextNodeTime = pMonster->m_NodeCancelTime
+   *         = gpGlobals->time + 2.0;                       npcact.cpp:234
+   *
+   * Lo hace `NPCScript::MoveThink` **cada 0,1 s mientras la escena corre**, y
+   * son los dos a la vez: el de elegir rumbo nuevo y el de tirar el destino por
+   * llevar mucho intentándolo. O sea que mientras un `ms_npcscript` lleva a un
+   * NPC de la mano, el NPC **no se va a pasear por su cuenta** y **tampoco se
+   * le vence el plazo de los siete segundos**, que es lo que de otro modo le
+   * soltaría el destino a mitad del camino si el sitio está lejos.
+   *
+   * ── Y AQUÍ NO SE PUEDE MEDIR, ASÍ QUE SE DICE ─────────────────────────
+   *
+   * Esto se rompió a propósito —dejar el método sin rearmar nada— y **las 26
+   * pruebas del 77 siguieron verdes**. No es que el control fuera flojo: es
+   * que en este puerto el efecto no existe.
+   *
+   * En el motor hay UNA casilla de destino y `SetWanderDest` se llama en todos
+   * los `MonsterThink`, también durante una escena (msmonsterserver.cpp:569-574):
+   * lo único que lo calla es este reloj. Aquí las casillas son dos y quien las
+   * ordena es el reparto de `Manada.pasear`, que con un destino mandado llama a
+   * `pasoMandado` y ni toca al vagabundo. O sea que el paseo ya está parado
+   * antes de llegar a este reloj, y aplazarlo no cambia nada observable.
+   *
+   * Se conserva igualmente porque es la línea del motor y porque el día que las
+   * dos casillas se fundan en una —que es lo que debería pasar— será lo único
+   * que impida que un NPC en escena se vaya a dar una vuelta. Lo que NO se hace
+   * es apuntarse un control verde por ella: lo que mide de verdad la prueba de
+   * al lado es **el reparto**, y eso sí se pone rojo al romperlo.
+   *
+   * EL RELOJ SIGUE CORRIENDO, y eso no es un adorno. En el motor
+   * `SetWanderDest` se llama en TODOS los `MonsterThink`, también durante una
+   * escena (`msmonsterserver.cpp:569-574`): lo que lo deja sin hacer nada es el
+   * reloj aplazado, no un `if` que se lo salte. Aquí, mientras una escena manda
+   * no se llama a `tic`, así que el `dt` entra por aquí — si no, al acabar la
+   * escena este objeto creería que no ha pasado el tiempo.
+   *
+   * @param segundos cuánto desde AHORA.
+   * @param dt       lo que ha avanzado el reloj en este paso.
+   */
+  aplazar(segundos, dt = 0) {
+    this.t += dt;
+    this.proximoNodo = this.t + segundos;
+    this.plazo = this.t + segundos;
+    return this;
+  }
 }
 
 /**

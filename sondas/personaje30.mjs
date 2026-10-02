@@ -22,7 +22,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5216;
@@ -46,18 +47,22 @@ try {
   const ANCHO = 1200, ALTO = 800;
   const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
   pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-  await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-  await esNuestro(pag, PORT);
+  // SE ENTRA POR EL MENÚ, como el jugador (59). Antes era `?map=gatecity`,
+  // que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+  // que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+  await entrarPorElMenu(pag, PORT);
   mkdirSync("build/gatecity/vistas", { recursive: true });
 
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   // Se borra lo que hubiera de otra vuelta: la sonda tiene que empezar sin
   // personajes, que es lo que ve alguien que entra por primera vez.
   await pag.evaluate(async () => {
     for (const c of await window.probe.sesion.listar()) await window.probe.sesion.borrar(c.id);
   });
-  await pag.reload({ waitUntil: "load" });
-  await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
+  // Y SE VUELVE A ENTRAR POR EL MENÚ, no con `reload()` (59). Un `reload`
+  // repetía la URL, y la URL era `?map=gatecity`: volvía al juego directo.
+  // Ahora la URL es `/`, así que recargar deja la sonda en el menú principal
+  // y los ocho controles de abajo miden una pantalla que no es la suya.
+  await entrarPorElMenu(pag, PORT);
   await new Promise((r) => setTimeout(r, 1200));
 
   // ── 1. ES LA PANTALLA DE ENTRADA ────────────────────────────────────────

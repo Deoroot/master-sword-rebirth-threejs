@@ -90,6 +90,51 @@ export function halo(lado = LADO) {
 }
 
 /**
+ * LA BENGALA, el segundo sustituto: `xflare1.spr`.
+ *
+ * Lo pide la lluvia de colores de subir de nivel —160 de éstos en cuatro
+ * segundos, `src/play/nivel.js`— y le pasa lo mismo que al halo: **tampoco está
+ * en `../MSC/`**. Los 118 sprites de la carpeta se listaron uno a uno y no está;
+ * es del Half-Life base, igual que la tercera parte de los sonidos. Y aquí no
+ * hay instalación de Half-Life al lado con la que comprobarlo, así que ni
+ * siquiera se ha podido mirar cómo es.
+ *
+ * Lo que se sabe de él es lo que dicen los guiones que lo usan, y es poco pero
+ * no es nada: `frames 20` y `framerate 30` (`player_conartist.script:135-136`)
+ * —o sea que el original está ANIMADO, veinte cuadros—, y que todos lo pintan en
+ * aditivo con `rendercolor` encima, así que su dibujo es blanco.
+ *
+ * Éste tiene **un cuadro y no veinte**, y eso es lo que se pierde: la bengala
+ * del juego palpita y ésta no. Se deja escrito aquí y en el documento en vez de
+ * fingir veinte cuadros iguales, que daría una animación que no anima y una
+ * medida que dice que sí está.
+ *
+ * El dibujo: un núcleo redondo con cuatro rayos en cruz, que es lo que es una
+ * bengala. Aritmética nuestra, como el halo.
+ */
+export function bengala(lado = 64) {
+  const rgba = new Uint8Array(lado * lado * 4);
+  const c = (lado - 1) / 2;
+  for (let y = 0; y < lado; y++) {
+    for (let x = 0; x < lado; x++) {
+      const dx = (x - c) / c, dy = (y - c) / c;
+      const r = Math.hypot(dx, dy);
+      // El núcleo: el mismo perfil del halo, más apretado.
+      const nucleo = r >= 1 ? 0 : Math.pow(Math.max(0, 1 - r), 3);
+      // Los cuatro rayos: finos, largos y en cruz. `Math.abs` de la coordenada
+      // corta contra la larga da una cuña; el `1 − r` la apaga hacia el borde.
+      const rayo = (a, b) => (r >= 1 ? 0 : Math.max(0, 1 - Math.abs(a) * 14) * Math.max(0, 1 - Math.abs(b)) * 0.55);
+      const v = Math.min(1, nucleo + rayo(dy, dx) + rayo(dx, dy));
+      const i = (y * lado + x) * 4;
+      // En aditivo aporta el COLOR, no el alfa. Misma razón que en `halo()`.
+      rgba[i] = rgba[i + 1] = rgba[i + 2] = Math.round(255 * v);
+      rgba[i + 3] = 255;
+    }
+  }
+  return { rgba, ancho: lado, alto: lado, cuadros: 1, anchoCuadro: lado, altoCuadro: lado };
+}
+
+/**
  * Los sustitutos que sabemos generar, por nombre de fichero `.spr`.
  *
  * Es una lista corta a propósito. Un `.spr` que falte y no esté aquí se sigue
@@ -107,5 +152,16 @@ export const SUSTITUTOS = {
     mezcla: "aditivo",
     orientacion: "paralelo",
     porque: "no está en ../MSC/ (es del Half-Life base); degradado radial nuestro",
+  },
+  "xflare1.spr": {
+    generar: bengala,
+    // 64 de lado, como el halo: los guiones que lo usan le ponen `scale` —0,25
+    // en el de subir de nivel—, así que el tamaño de partida sólo fija cuánto
+    // vale un 1,0 de escala. En GoldSrc eso es 1 px = 1 unidad.
+    ancho: 64,
+    alto: 64,
+    mezcla: "aditivo",
+    orientacion: "paralelo",
+    porque: "no está en ../MSC/ (es del Half-Life base); bengala nuestra, UN cuadro y no los 20 del original",
   },
 };

@@ -24,15 +24,14 @@
 // Regla del 02, igual que siempre: se escribe el lector, lo extraído va a
 // `build/`, y ni un byte pasa a `public/`.
 
-import { writeFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { writeFileSync, existsSync, mkdirSync } from "node:fs";
 
 import {
   leerBsp, leerModelos, leerTexinfo, leerEntidades, leerCaras, origen, aEscena,
   UNIDADES_POR_METRO as U,
 } from "../src/bsp/lector.js";
 import { leerFichaNpc, modeloYAnimaciones, leerRazas, relacionDeRazas, esEnemigo, RAZA_DEL_JUGADOR,
-  MUERTES_DE_REPUESTO, muerteQueExiste } from "../src/bsp/script.js";
+  MUERTES_DE_REPUESTO, muerteQueExiste, guionDeEntidad, atof } from "../src/bsp/script.js";
 import { sueloBajo, sePuedeEstar } from "../src/bsp/arbol.js";
 import { luzEnSuelo, colorDeAdorno } from "../src/bsp/luz.js";
 import { tablasDeGamma, AJUSTES } from "../src/bsp/gamma.js";
@@ -40,10 +39,12 @@ import { leerMdl, TAM } from "../src/bsp/mdl.js";
 import { extraerBicho, nombreArchivo } from "./bicho.mjs";
 import { ACT, animacionDeParado } from "../src/play/actividad.js";
 
-const RUTA = process.argv.find((a) => a.endsWith(".bsp")) ?? "../MSC/assets/msr/maps/gatecity.bsp";
+import { mapaDeArgv, bspDe, salidaDe } from "./mapa.mjs";
+const MAPA = mapaDeArgv();
+const RUTA = bspDe(MAPA);
 const SCRIPTS = "../MSC/MSCScripts/scripts";
 const MODELOS = "../MSC/assets/msr/models";
-const SALIDA = resolve("build/gatecity");
+const SALIDA = salidaDe(MAPA);
 const TABLA = tablasDeGamma(AJUSTES).luz;
 
 // Además de las que pida el script, estas por si acaso: son los nombres que usa
@@ -62,16 +63,60 @@ const carasDelMundo = leerCaras(bsp, modelos[0], texinfos);
 const razas = leerRazas(SCRIPTS);
 if (!razas) { console.error(`  FALLO: no se puede leer ${SCRIPTS}/races.script`); process.exit(1); }
 
-const ES_BICHO = /^(msmonster_|ms_npc$|msworlditem_)/;
+// LO QUE TAMBIÉN ES SUELO, y hasta hoy no lo era para este extractor.
+//
+// Tiene que ser **la misma lista que `SOLIDAS` de tools/gatecity.mjs**, la que
+// entra en la malla de colisión. Cuando no coinciden, el mundo donde se colocan
+// los bichos y el mundo donde caminan son dos mundos distintos: las cuatro
+// `msmonster_giantrat` acabaron veinte unidades dentro de su propia
+// `func_breakable` y no se movieron en cinco minutos, sin un solo error.
+const SOLIDAS = new Set(["func_wall", "func_breakable"]);
+const solidasConBrushes = entidades
+  .filter((e) => SOLIDAS.has(e.classname ?? "") && /^\*\d+$/.test(e.model ?? ""))
+  .map((e) => ({
+    modelo: Number(e.model.slice(1)),
+    origin: String(e.origin ?? "0 0 0").trim().split(/\s+/).map(Number),
+  }));
+
+// EL 63: `msnpc_` también, y no es un caso raro.
+//
+// Todos los `classname` de bicho del mod son la MISMA clase de C++:
+//
+//     LINK_ENTITY_TO_CLASS(ms_npc, CMSMonster);
+//     LINK_ENTITY_TO_CLASS(msnpc_human1, CMSMonster);
+//     LINK_ENTITY_TO_CLASS(msmonster_orcwarrior, CMSMonster);
+//                                        msmonsterserver.cpp:38-59
+//
+// así que dejar fuera una familia entera no da un error: da menos gente. Gate
+// City no tiene ni un `msnpc_*` y por eso nadie lo vio; **Edana tiene seis**, y
+// se veía como que al pueblo le faltaban vecinos. Cuarta vez seguida —50, 60,
+// 61, 63— que el fallo lo enseña el segundo mapa.
+const ES_BICHO = /^(msmonster_|msnpc_|ms_npc$|msworlditem_)/;
 const puestos = entidades.filter((e) => ES_BICHO.test(e.classname ?? ""));
 console.log(`\n  entidades       ${puestos.length} de bicho o NPC en ${bsp.nombre}.bsp`);
+
+// Y LO QUE SE DEJA FUERA SE DICE. Un filtro que descarta en silencio es un
+// sitio donde cabe un pueblo entero sin que salte nada: los seis
+// `msnpc_human1` de Edana estuvieron fuera del censo desde que se extrajo el
+// mapa. Esto no arregla el filtro —eso es la lista de arriba—, hace que la
+// próxima familia que falte se vea en la misma línea en que se hornea.
+const descartadas = new Map();
+for (const e of entidades) {
+  const c = e.classname ?? "";
+  if (ES_BICHO.test(c) || !/npc|monster/i.test(c)) continue;
+  descartadas.set(c, (descartadas.get(c) ?? 0) + 1);
+}
+if (descartadas.size) {
+  console.log(`  fuera del censo ${[...descartadas].map(([c, n]) => `${c} x${n}`).join(", ")}`);
+  console.log("                  (spawners y clips van aparte; si aquí sale un bicho, el filtro se quedó corto)");
+}
 
 // --- 1. resolver cada entidad a su ficha ------------------------------------
 const fichas = new Map();     // script -> ficha
 const sinScript = new Map();
 const sinModelo = new Map();
 for (const e of puestos) {
-  const s = e.defscriptfile ?? e.scriptfile;
+  const s = guionDeEntidad(e);
   if (!s) { sinScript.set(e.classname, (sinScript.get(e.classname) ?? 0) + 1); continue; }
   if (fichas.has(s)) continue;
   const f = leerFichaNpc(SCRIPTS, s);
@@ -80,7 +125,7 @@ for (const e of puestos) {
   if (!m) { sinModelo.set(s, (sinModelo.get(s) ?? 0) + 1); continue; }
   fichas.set(s, m);
 }
-console.log(`  scripts         ${fichas.size} resueltos de ${new Set(puestos.map((e) => e.defscriptfile ?? e.scriptfile).filter(Boolean)).size}`);
+console.log(`  scripts         ${fichas.size} resueltos de ${new Set(puestos.map(guionDeEntidad).filter(Boolean)).size}`);
 if (sinScript.size) console.log(`    sin fichero   ${[...sinScript].map(([k, n]) => `${n}× ${k}`).join(", ")}`);
 if (sinModelo.size) console.log(`    sin setmodel  ${[...sinModelo].map(([k, n]) => `${n}× ${k}`).join(", ")}`);
 
@@ -106,6 +151,37 @@ function cuerpoDe(rutaModelo, pares) {
   return cuerpo;
 }
 
+// --- 2b. LAS ANIMACIONES QUE PIDE EL MAPA, que no están en ninguna ficha ----
+//
+// Experimento 78. Un `ms_npcscript` nombra sus propias animaciones en el
+// `.bsp` —`actionanim` y `moveanim`— y el NPC al que se las pone no las
+// declara en su guion: son del MAPA, no de la criatura. Así que la lista
+// blanca de abajo, que sale de la ficha, **no las pedía nunca**, y ninguna
+// animación de escena del juego se había horneado jamás.
+//
+// No daba error porque el visor cae a la secuencia 0: el NPC «hace» la escena
+// quieto en su pose de reposo. Es el mismo caso que el goblin que atacaba sin
+// animación, comentado quince líneas más abajo, con la diferencia de que ahí
+// el nombre estaba en el guion y aquí está en el mapa, que es un sitio que
+// esta herramienta no miraba para esto.
+//
+// Y no se vio en el 77 **por casualidad**: las dos escenas que mueven a Edrin
+// piden `walk` y `run`, y su ficha ya nombraba las dos (`andando` y
+// `ia.corriendo`). El valor de reposo otra vez; lo enseña el tercer mapa.
+const animDeEscenas = new Map();   // script -> Set de nombres
+for (const e of entidades) {
+  if (e.classname !== "ms_npcscript" && e.classname !== "mstrig_act") continue;
+  if (!e.target) continue;
+  for (const p of puestos.filter((x) => x.targetname === e.target)) {
+    const s = guionDeEntidad(p);
+    if (!s || !fichas.has(s)) continue;
+    if (!animDeEscenas.has(s)) animDeEscenas.set(s, new Set());
+    for (const a of [e.actionanim, e.moveanim]) {
+      if (a) animDeEscenas.get(s).add(String(a).toLowerCase());
+    }
+  }
+}
+
 // --- 3. extraer cada (modelo, cuerpo) distinto ------------------------------
 const quiere = new Map();   // clave -> Set de secuencias pedidas
 const deClave = new Map();  // clave -> {modelo, cuerpo}
@@ -127,7 +203,19 @@ for (const [s, m] of fichas) {
   // Y los cinco nombres de repuesto de la muerte, porque el motor los prueba
   // (`base_npc.script:280`) y hay que tener horneado el que gane.
   for (const a of MUERTES_DE_REPUESTO) quiere.get(clave).add(a);
+  // Y las del mapa, de la vuelta de arriba.
+  for (const a of animDeEscenas.get(s) ?? []) quiere.get(clave).add(a);
   m.clave = clave;
+}
+
+// Un ajuste no puede quedarse callado (apartado 5 de CLAUDE.md): se dice qué
+// ha pedido el mapa y a quién, y se dice también cuando no pide nada.
+{
+  const pares = [...animDeEscenas].filter(([, v]) => v.size);
+  const cuantas = pares.reduce((a, [, v]) => a + v.size, 0);
+  console.log(`\n  del mapa        ${cuantas} animaciones pedidas por ms_npcscript en ${pares.length} guiones` +
+    (pares.length ? "" : " (ninguna: este mapa no tiene escenas con animación)"));
+  for (const [s, v] of pares) console.log(`    ${s.padEnd(26)} ${[...v].join(" ")}`);
 }
 
 console.log(`\n  modelos         ${quiere.size} distintos (modelo + bodypart)`);
@@ -137,6 +225,7 @@ for (const [clave, { modelo, cuerpo }] of deClave) {
   try {
     r = extraerBicho(modelo, {
       cuerpo, quiero: quiere.get(clave), callar: true,
+      salida: `${SALIDA}/bichos`, raizSalida: SALIDA,
       // ACT_IDLE va siempre, la nombre alguien o no: dieciséis de los sesenta
       // y nueve no la nombran y el motor la busca por aquí.
       actividades: [ACT.IDLE],
@@ -160,12 +249,12 @@ for (const [clave, { modelo, cuerpo }] of deClave) {
 // Para un bicho QUIETO eso es exacto; para uno que anda es el luxel de donde
 // nació, y **se dice**: lo correcto es volver a muestrear al moverse, y eso pide
 // el árbol BSP en el navegador, que hoy sólo está en Node.
-const colocados = [];
+let colocados = [];
 let conLuz = 0, caidos = 0, colgados = 0, dentroDeRoca = 0;
 const brillos = [];
 const caidas = [];
 for (const e of puestos) {
-  const s = e.defscriptfile ?? e.scriptfile;
+  const s = guionDeEntidad(e);
   const m = s ? fichas.get(s) : null;
   if (!m || !m.clave || !emitidos.has(m.clave)) continue;
   const o = origen(e);
@@ -174,14 +263,35 @@ for (const e of puestos) {
   // LOS PIES EN EL SUELO, preguntándoselo al árbol BSP.
   //
   // El `origin` de una entidad de monstruo es donde lo dejó el mapeador, no
-  // donde acaba: el motor le hace un `DROP_TO_FLOOR` al nacer. Sin esto, medido
-  // con el arnés de física, **22 de 69 no tenían suelo debajo y 15 flotaban o
-  // estaban hundidos** — y eso no da error, da bichos andando por el aire y
-  // medio metidos en el adoquín.
+  // donde acaba. Sin esto, medido con el arnés de física, **22 de 69 no tenían
+  // suelo debajo y 15 flotaban o estaban hundidos** — y eso no da error, da
+  // bichos andando por el aire y medio metidos en el adoquín.
+  //
+  // CORRECCIÓN DEL 84: la conclusión es correcta y la razón que había escrita
+  // aquí NO. Decía «el motor le hace un `DROP_TO_FLOOR` al nacer», y para un
+  // `ms_npc` eso es falso: `CMSMonster::Spawn` no lo llama, y los dos
+  // `DROP_TO_FLOOR` de `msmonsterserver.cpp` están en código de MOVIMIENTO
+  // (`:688` dentro de `CheckLocalMove`, `:847` dentro de `MoveExec`). Quien los
+  // baja es la gravedad: `pev->movetype = MOVETYPE_STEP` (`:170`).
+  //
+  // El resultado es el mismo y por eso la línea se queda, pero la razón importa,
+  // porque un `DROP_TO_FLOOR` y la gravedad **no caen igual** donde el camino
+  // está obstruido: el primero se rinde si tiene que bajar más de 256 unidades,
+  // y la segunda se para en lo primero sólido. Si algún día un NPC aparece donde
+  // no debe, el modelo a comparar es la gravedad y no un salto instantáneo.
+  //
+  // Y lo que da sentido a bajarlos a los PIES y no al centro: el casco de un
+  // `ms_npc` tiene `mins.z = 0` y `maxs.z = m_Height`
+  // —`UTIL_SetSize(pev, Vector(-(m_Width/2), -(m_Width/2), 0), ...)`,
+  // msmonsterserver.cpp:244—, o sea que **su `origin` ya son sus pies**. La
+  // misma función escribe `pev->view_ofs = Vector(0, 0, m_Height)` seis líneas
+  // después, que es el ojo que corrigió el 81.
   //
   // Es exactamente lo que ya costó una ronda con el punto de llegada del
   // jugador, cuyo `origin` está 54 unidades sobre el suelo.
-  const suelo = sueloBajo(bsp, o);
+  // Y con las entidades que TAMBIÉN chocan, que es lo que faltaba: ver `SOLIDAS`
+  // abajo. El árbol del mundo no sabe que hay una caja rompible ahí.
+  const suelo = sueloBajo(bsp, o, { extras: solidasConBrushes });
   const pies = suelo === null ? o : [o[0], o[1], suelo];
   if (suelo !== null && Math.abs(o[2] - suelo) > 1) { caidos++; caidas.push(o[2] - suelo); }
   if (suelo === null) colgados++;
@@ -190,6 +300,55 @@ for (const e of puestos) {
   if (luxel) { conLuz++; brillos.push(Math.max(...luxel)); }
   colocados.push({
     clase: e.classname,
+    // EL `targetname` DEL MAPA (el 67), que NO es el nombre que se lee en
+    // pantalla: `nombre` es lo que dice su guion («Priest of Urdual») y esto es
+    // con lo que el mapa le habla («priest»). Hacía falta porque los 18
+    // `ms_npcscript` de Edana nombran a su NPC por aquí, y sin esto la mitad de
+    // las misiones del pueblo no tenían a quién dirigirse.
+    objetivo: e.targetname ?? null,
+    // LOS CUATRO PARÁMETROS CON LOS QUE EL MAPA LE HABLA AL GUION (el 82).
+    //
+    // `params` no es una clave que el motor entienda por sí misma: es **el
+    // cuarto argumento de `game_postspawn`**, y lo interpreta el guion del
+    // propio NPC. Los cuatro salen de aquí, en este orden:
+    //
+    //     msstringlist Parameters;
+    //     Parameters.add(m_title);
+    //     Parameters.add(FloatToString(m_DMGMulti));
+    //     Parameters.add(FloatToString(m_HPMulti));
+    //     Parameters.add(m_addparams);
+    //     CallScriptEvent("game_postspawn", &Parameters);
+    //                                       msmonsterserver.cpp:284-290
+    //
+    // Y los dos valores de reposo son del motor y no nuestros, puestos justo
+    // encima de esas líneas (:273-280): un `title` vacío vale **`"default"`** y
+    // un `params` vacío vale **`"none"`**, que es la cadena que el guion
+    // compara (`if ( PARAM4 isnot 'none' )`, base_self_adjust.script:45). Si
+    // aquí se pusiera `null` o `""`, esa condición sería cierta y todos los
+    // bichos del juego entrarían en el reparto con una lista vacía.
+    //
+    // Los multiplicadores los filtra el propio `KeyValue` **y sólo los coge si
+    // son mayores que 1** (:396-406), con `atof`, que no es `Number` — ésa es
+    // la del 79, y por eso se usa el `atof` de `script.js` y no `parseFloat`
+    // suelto. Por debajo de 1 el motor ni los guarda, así que el valor que
+    // llega al evento es el 1 de `CMSMonster::PostSpawn` (:277-280).
+    //
+    // Y los CUATRO son **cadenas**, porque en este lenguaje un parámetro lo es
+    // siempre. Los dos números pasan por
+    //
+    //     #define FloatToString( a ) UTIL_VarArgs( "%.2f", a )
+    //                                            sharedutil.h:49
+    //
+    // así que lo que el guion lee no es `1` sino **`"1.00"`**. Da igual para
+    // `if ( L_IN_DMGMULTI > 1 )`, que compara números, y no da igual para
+    // cualquier `equals`: por eso se hornea con sus dos decimales y no se
+    // «limpia». Horneamos lo que el evento recibe, no lo que es cómodo leer.
+    postspawn: {
+      titulo: e.title || "default",
+      dmgmulti: (atof(e.dmgmulti) > 1 ? atof(e.dmgmulti) : 1).toFixed(2),
+      hpmulti: (atof(e.hpmulti) > 1 ? atof(e.hpmulti) : 1).toFixed(2),
+      params: e.params || "none",
+    },
     script: s,
     clave: m.clave,
     nombre: m.nombre,
@@ -223,7 +382,166 @@ for (const e of puestos) {
     ia: m.ia,
     relacion: relacionDeRazas(razas, m.ia?.raza, RAZA_DEL_JUGADOR),
     hostil: esEnemigo(relacionDeRazas(razas, m.ia?.raza, RAZA_DEL_JUGADOR)),
+    // EL APARECEDOR, y sin esto 38 de los 69 estaban mal desde el experimento 07.
+    //
+    // Una entidad de bicho con `spawnarea` **no es un monstruo**: es la ficha que
+    // usará su área, y el motor la borra en cuanto la registra:
+    //
+    //   CMSMonster::Spawn:     if (m_iszMonsterSpawnArea.len()) {
+    //                            SetBits(pev->effects, EF_NODRAW); return; }   :228
+    //   CMSMonster::Activate:  if (!m_fSpawnOnTrigger) SUB_Remove();           :129
+    //
+    // En Gate City son **38 de 69**, y son todos los hostiles: los 8 goblins, los
+    // 22 enanos zombi, las 3 arañas, el cofre y las 4 crías. Lo que el jugador ve
+    // no es un pueblo con monstruos de pie: es un pueblo donde a los **3
+    // segundos** aparecen (`nextthink = ltime + 3.0`, msmapents.cpp:744) y, al
+    // matarlos, **vuelven** — que es el «monster respawn» que el README lleva
+    // apuntado como pendiente desde el 28.
+    //
+    // El sitio NO se sortea: ninguna de las 16 áreas de Gate City pone
+    // `spawnloc 1`, y `SPAWNLOC_FIXED` es el cero por omisión, así que aparecen
+    // **en el origen de su propia plantilla** — o sea justo donde el censo ya los
+    // ponía. La posición estaba bien; lo que faltaba era el cuándo y el volver.
+    aparecedor: e.spawnarea ? {
+      area: e.spawnarea,
+      // `if (!m_Lives) m_Lives = -1; //zero == infinite lives` (:202-203). 16 de
+      // las 38 no dicen `lives` y por tanto vuelven para siempre.
+      vidas: e.lives === undefined ? -1 : (Number(e.lives) || -1),
+      // `RANDOM_FLOAT(delaylow, delayhigh)` al morir (msmapents.cpp:987). De 1-2 s
+      // en las bolsas de crías a 300-500 s en los goblins.
+      esperaMin: Number(e.delaylow ?? 0) || 0,
+      esperaMax: Number(e.delayhigh ?? 0) || 0,
+      // `if (!m_SpawnChance) m_SpawnChance = 100.0` (:204-205). Las 38 de Gate
+      // City dicen 100, así que este camino no se ejerce aquí — se porta con su
+      // cita y con una prueba que lo ejerce a mano, o sería código muerto sin
+      // comprobar.
+      probabilidad: e.spawnchance === undefined ? 100 : (Number(e.spawnchance) || 100),
+      // EL NOMBRE DE LA FICHA (el 68). `MSQuery` despierta UNA ficha, y la busca
+      // por la entidad de plantilla, o sea por su `targetname` (msmapents.cpp:
+      // 1302-1315). Sin esto no hay forma de decirle «tú, el jefe, sal ya».
+      nombre: e.targetname ?? null,
+      // `spawnstart` (el 68). **La clave hace lo CONTRARIO de lo que suena:**
+      //
+      //   else if (FStrEq(pkvd->szKeyName, "spawnstart"))
+      //     m_fSpawnOnTrigger = (atoi(pkvd->szValue)) ? true : false;   :827-844
+      //
+      // o sea `spawnstart 1` = «NO salgas hasta que te llamen», consumido en
+      //
+      //   if (spawnontrigger && !triggered && lives == livesleft) continue;  :1210
+      //
+      // Encima de esas líneas hay **cuatro intentos de Thothie de arreglar el
+      // nombre, comentados uno debajo de otro** («various attempts to force
+      // monster spawn to spawnstart 1 - fail»), así que el nombre al revés es
+      // deliberado a estas alturas: lo que se porta es lo que hace el código.
+      //
+      // Ojo a la condición de la tercera mitad: `lives == livesleft`, o sea que
+      // esto sólo frena la PRIMERA aparición. Una vez ha salido y ha muerto,
+      // vuelve por su cuenta sin que nadie la llame.
+      porDisparo: Boolean(Number(e.spawnstart ?? 0)),
+      // `perishtarget` (el 68), que este mismo archivo daba por NO portado —
+      // porque ninguna de las 38 plantillas de Gate City lo usa, y las de Edana
+      // sí. Sexta vez que el hueco lo enseña el segundo mapa.
+      //
+      //   else if (lives > 0 && !livesleft)
+      //     FireTargets(STRING(pMonsterData->perishtarget), ...);     :989-990
+      //
+      // Va en `RespawnMonster`, o sea en la rama de «no te repongo»: se dispara
+      // UNA vez, cuando muere la última vida. No confundir con `fireallperish`,
+      // que es del área entera y ya estaba.
+      alPerecer: e.perishtarget ?? null,
+    } : null,
+    // `killtarget` DEL MONSTRUO (el 68), que **no mata: dispara**.
+    //
+    //   //MAR2008b fire targets here instead of in death fade, in case gibs
+    //   if (m_iszKillTarget.len() > 0)
+    //     FireTargets(m_iszKillTarget, this, this, USE_TOGGLE, 0);   :2568-2569
+    //
+    // Es una clave de `CMSMonster` y NO la `killtarget` de `CBaseDelay`, que sí
+    // borra entidades (`SUB_UseTargets`, subs.cpp:289-302). Dos claves con el
+    // mismo nombre y efectos opuestos según en qué entidad estén; se llama
+    // `alMorir` aquí para que no se pueda confundir con `matar`, que es la otra.
+    //
+    // Se dispara en CADA muerte del bicho y no sólo en la última, porque está en
+    // el camino de la muerte y no en el del aparecedor. Con `lives 1` da igual;
+    // con vidas de sobra, no.
+    //
+    // En Edana es el jefe jabalí avisando a `boarsdead`, que es el `ms_npcscript`
+    // que le cuenta al viejo del huerto que ya está hecho.
+    alMorir: e.killtarget ?? null,
   });
+}
+// --- 2b. las áreas de aparición -------------------------------------------
+//
+// `spawnstart 1` es `bSpawnImmediately` y **ninguna de las 16 pone
+// `spawntrigger`**, así que las 16 arrancan activas: `m_fActive = true` y
+// `nextthink = ltime + 3.0` (msmapents.cpp:741-744). El primer bicho de cada área
+// sale a los 3 s y los siguientes cada 0,2 s (`flNextSpawnTime`, :1213).
+const ES_AREA = /^(msarea_monsterspawn|ms_monsterspawn)$/;
+const areas = entidades.filter((e) => ES_AREA.test(e.classname ?? "")).map((e) => {
+  const o = origen(e);
+  return {
+    nombre: e.targetname ?? null,
+    clase: e.classname,
+    // `spawnloc`: 0 fijo, 1 al azar dentro del volumen. Ninguna de Gate City lo
+    // dice, y el cero es el valor por omisión (`m_SpawnLoc` sin inicializar en
+    // una entidad que nace a ceros), así que las 16 son FIJAS. Se lee de todas
+    // formas: un mapa futuro sí puede decir 1, y entonces el volumen importa.
+    sorteaSitio: Number(e.spawnloc ?? 0) === 1,
+    // `spawnstart` -> `bSpawnImmediately`; `spawntrigger` -> `m_fSpawnOnTrigger`.
+    deGolpe: Number(e.spawnstart ?? 0) === 1,
+    porDisparo: Boolean(Number(e.spawntrigger ?? 0)),
+    // `fireallperish`: lo que se dispara cuando TODAS se quedan sin vidas.
+    alAcabarse: e.fireallperish ?? null,
+    unidades: o ?? null,
+    escena: o ? aEscena(o) : null,
+    modelo: /^\*\d+$/.test(e.model ?? "") ? Number(e.model.slice(1)) : null,
+  };
+});
+const porArea = new Map();
+for (const c of colocados) if (c.aparecedor) porArea.set(c.aparecedor.area, (porArea.get(c.aparecedor.area) ?? 0) + 1);
+const sinArea = [...porArea.keys()].filter((n) => !areas.some((a) => a.nombre === n));
+console.log(`\n  areas           ${areas.length} de aparición ` +
+  `(${areas.filter((a) => a.modelo !== null).length} de volumen, ${areas.filter((a) => a.modelo === null).length} de punto); ` +
+  `${areas.filter((a) => a.sorteaSitio).length} sortean el sitio`);
+console.log(`    plantillas    ${colocados.filter((c) => c.aparecedor).length} de ${colocados.length} bichos son FICHA de un área y no un monstruo de pie`);
+
+// UNA PLANTILLA SIN ÁREA: el motor avisa y SIGUE, y nosotros también.
+//
+// Hasta aquí esto paraba el horneado, con este motivo escrito al lado: «el
+// motor lo avisa por consola y sigue; aquí se para, porque un bicho que no
+// existe no se ve por ningún lado». El motivo era bueno y la regla, de un
+// solo mapa: en Gate City no pasa nunca, y en Edana hay una plantilla que
+// apunta a `patron9`, un área que el mapa no tiene. Con eso, la extracción de
+// los NPC de Edana no llegaba al final.
+//
+// Y lo que hace el motor está escrito, `msmonsterserver.cpp:106-130`:
+//
+//     while ((peSpawnArea = FIND_ENTITY_BY_TARGETNAME(peSpawnArea, m_iszMonsterSpawnArea)) ...)
+//     if (SpawnsFound) { ... } else
+//         ALERT(at_console, "ERROR: msarea_monsterspawn named %s NOT FOUND\n", ...);
+//     if (!m_fSpawnOnTrigger) SUB_Remove();
+//
+// Avisa, no aparece a nadie y **borra la plantilla**. O sea que el mapa se
+// juega con ese bicho ausente, y portarlo es dejarlo ausente — no pararse.
+//
+// El control que SÍ se queda es otro, y no es un umbral: si **ninguna**
+// plantilla encuentra su área, no es un mapa con una errata, es que estamos
+// leyendo mal los nombres. Eso sigue parando.
+const plantillas = colocados.filter((c) => c.aparecedor);
+const huerfanas = plantillas.filter((c) => sinArea.includes(c.aparecedor.area));
+if (sinArea.length) {
+  console.log(`    sin área      ${huerfanas.length} plantilla(s) apuntan a un área que no está ` +
+    `(${sinArea.join(", ")}): el motor las borra al cargar y aquí también`);
+}
+if (plantillas.length && huerfanas.length === plantillas.length) {
+  console.error(`  FALLO: NINGUNA de las ${plantillas.length} plantillas encuentra su área. ` +
+    `Eso no es una errata del mapa: es que los nombres se están leyendo mal.`);
+  process.exit(1);
+}
+// Se van de la lista, como las borra el motor. Contadas arriba, no en silencio.
+if (huerfanas.length) {
+  const fuera = new Set(huerfanas);
+  colocados = colocados.filter((c) => !fuera.has(c));
 }
 brillos.sort((a, b) => a - b);
 console.log(`\n  colocados       ${colocados.length} de ${puestos.length} entidades`);
@@ -305,9 +623,10 @@ console.log(`\n  parado          ` +
   `${deDonde["por actividad ACT_IDLE"]} por ACT_IDLE, ` +
   `${deDonde["no hay ACT_IDLE: la secuencia 0"]} caen a la secuencia 0`);
 
+mkdirSync(SALIDA, { recursive: true });
 writeFileSync(`${SALIDA}/bichos.json`, JSON.stringify({
   mapa: bsp.nombre,
-  procedencia: "derivado local de gatecity.bsp y de los .mdl y .script de Master Sword Rebirth. No redistribuible.",
+  procedencia: `derivado local de ${MAPA}.bsp y de los .mdl y .script de Master Sword Rebirth. No redistribuible.`,
   unidadesPorMetro: U,
   // LA TABLA DE RAZAS ENTERA, 26 razas y 3,3 KB. Hasta ahora sólo viajaba la
   // relación de cada bicho CON EL JUGADOR, y para avisar a los aliados hace
@@ -317,5 +636,11 @@ writeFileSync(`${SALIDA}/bichos.json`, JSON.stringify({
   razas: [...razas].map(([clave, r]) => [clave, r]),
   modelos: [...emitidos].map(([clave, r]) => ({ clave, ...r })),
   colocados,
+  // LAS 16 ÁREAS DE APARICIÓN: `CAreaMonsterSpawn`, msmapents.cpp:1320-1321, que
+  // es la misma clase para las dos clases de entidad (9 de volumen con brushes y
+  // 7 de punto). Se emiten aunque el sitio no se sortee, porque el área es quien
+  // lleva el reloj y quien se reinicia cuando algo la dispara — la bolsa rompible
+  // de las crías apunta a la suya con `target`.
+  areas,
 }, null, 1));
-console.log(`\n  escrito en      build/gatecity/bichos.json y build/gatecity/bichos/\n`);
+console.log(`\n  escrito en      ${SALIDA}/bichos.json y ${SALIDA}/bichos/\n`);

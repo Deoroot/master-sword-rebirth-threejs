@@ -320,7 +320,13 @@ export class PropertySheet {
     b.onclick = () => this.elegir(i);
     this.barra.appendChild(b);
     this.paginas.push({ titulo, contenido, boton: b, nodo: null });
-    if (i === 0) this.elegir(0);
+    // SE REPINTAN TODAS, no sólo la primera. Antes era `if (i === 0)`, y una
+    // pestaña que nadie hubiera pulsado nunca se quedaba **sin su color y sin su
+    // borde**: `elegir()` es el único sitio que se los pone, y sólo corría una
+    // vez. Con el gris del esquema casi no se veía; se destapó al poner la
+    // misma clase sobre pergamino, donde la pestaña sin pintar sale en blanco.
+    // Ver `src/vgui2/codice.js`.
+    this.elegir(this.activa);
     return this;
   }
 
@@ -544,6 +550,18 @@ export class ComboBox {
     }
     this.nodo.appendChild(lista);
     this.abierta = lista;
+    // CÓMO SE CIERRA ESTO DESDE FUERA, Y POR QUÉ HACE FALTA DECIRLO.
+    //
+    // La Escape la cierra el gestor de ventanas (`vgui2/montar.js`), que hasta
+    // el 50 hacía `lista.remove()`: se llevaba el `<div>` y dejaba al widget
+    // creyéndose abierto —`this.abierta` puesta y el oyente de «clic fuera»
+    // colgando—. El siguiente clic en el desplegable entraba por `alternar()`,
+    // veía `abierta` y llamaba a `cerrar()`: **el clic se perdía** y el
+    // jugador tenía que pulsar dos veces.
+    //
+    // No se veía porque la sonda del 36 pulsaba Escape y no volvía a abrir la
+    // lista; lo destapó el 50 al tener que elegir un mapa DESPUÉS de mirarla.
+    lista.cerrarDesplegable = () => this.cerrar();
     // Un clic fuera la cierra, y se escucha una sola vez para no dejar oyentes
     // colgando cada vez que alguien abre un desplegable.
     setTimeout(() => {

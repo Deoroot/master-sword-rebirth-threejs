@@ -1,4 +1,4 @@
-// Gate City como NIVEL: lo que el visor necesita para andarlo.
+// UN MAPA DE MASTER SWORD como NIVEL: lo que el visor necesita para andarlo.
 //
 // Misma forma que devuelven `loadLevel()` para un `.map`, `terrainLevel()` para
 // el valle y `jharroLevel()` para el jharro, así que el visor y el sacador de
@@ -6,7 +6,7 @@
 //
 // ── De dónde sale ───────────────────────────────────────────────────────────
 //
-// De `build/gatecity/`, que es lo que escribe `tools/gatecity.mjs`. **El navegador
+// De `build/<mapa>/`, que es lo que escribe `tools/gatecity.mjs`. **El navegador
 // NO lee el `.bsp`**, y no es por rendimiento: es la regla del 02. El `.bsp` se
 // queda en `../MSC/`, lo extraído vive en `build/` —que no se publica y está en
 // `.gitignore`— y nada pasa a `public/`. El servidor de desarrollo sirve `build/`
@@ -14,6 +14,8 @@
 // incluiría, y está bien: esto es un laboratorio.
 //
 // ── Lo que este nivel NO tiene ──────────────────────────────────────────────
+//
+// (Lo que sigue se midió sobre Gate City, que es el único horneado hoy.)
 //
 //   brushes      ninguno. `qbsp` no juzga nada aquí; el juez es el `.bsp` mismo,
 //                que está al lado y es la referencia perfecta de la sesión.
@@ -25,10 +27,18 @@
 //                y `.spr` que **no están dentro del `.bsp`**. Es el hueco conocido
 //                y es la mitad de lo que se ve a la altura de los ojos.
 
-const BASE = "build/gatecity";
+import { MAPA_POR_DEFECTO, baseDe } from "../play/mapa.js";
 
-/** Carga el manifiesto y el binario, y monta el nivel. */
-export async function gatecityLevel({ base = BASE, fetch: f = fetch } = {}) {
+/**
+ * Carga el manifiesto y el binario, y monta el nivel.
+ *
+ * El 47: se llamaba `gatecityLevel` y tenía `build/gatecity` dentro. Ahora el
+ * mapa entra por `mapa` o, si alguien prefiere darle la carpeta hecha, por
+ * `base`. El valor por omisión sigue siendo Gate City porque es el único
+ * horneado; quién decide cuál es, es `src/play/mapa.js`.
+ */
+export async function cargarNivel({ mapa = MAPA_POR_DEFECTO, base = null, fetch: f = fetch } = {}) {
+  base = base ?? baseDe(mapa);
   const manifiesto = await pedirJson(`${base}/malla.json`, f);
   const bin = await (await ok(f(`${base}/malla.bin`), `${base}/malla.bin`)).arrayBuffer();
 
@@ -69,6 +79,15 @@ export async function gatecityLevel({ base = BASE, fetch: f = fetch } = {}) {
         colocados: manifiesto.adornos.colocados,
         ficheros: manifiesto.adornos.ficheros,
         triangulos: manifiesto.adornos.triangulos,
+        // EL 73: los que tienen `targetname` NO van fundidos, porque un
+        // `env_render` puede cambiarles el aspecto y para esconder uno hay que
+        // saber qué geometría es suya. Vienen en sus propios tramos del mismo
+        // binario, con una malla por colocación.
+        nombrados: manifiesto.adornos.nombrados ?? [],
+        nomPositions: manifiesto.adornos.nombrados?.length ? vista("adornoNomPositions", Float32Array) : null,
+        nomNormals: manifiesto.adornos.nombrados?.length ? vista("adornoNomNormals", Float32Array) : null,
+        nomUvs: manifiesto.adornos.nombrados?.length ? vista("adornoNomUvs", Float32Array) : null,
+        nomUvs1: manifiesto.adornos.nombrados?.length ? vista("adornoNomUvs1", Float32Array) : null,
       }
     : null;
 
@@ -100,6 +119,9 @@ export async function gatecityLevel({ base = BASE, fetch: f = fetch } = {}) {
     mesh,
     adornos,
     colision,
+    // LA VALLA DE LOS BICHOS, aparte de `colision` a propósito: el jugador la
+    // atraviesa (`world.cpp:1196`). Ver src/bsp/clip.js y src/play/monsterclip.js.
+    monsterclip: manifiesto.monsterclip ?? [],
     skyFaces: 0,
     // Se guardan, apagadas. Ver el comentario de arriba.
     lights: [],
@@ -125,6 +147,18 @@ export async function gatecityLevel({ base = BASE, fetch: f = fetch } = {}) {
 
 async function pedirJson(ruta, f) {
   const r = await ok(f(ruta), ruta);
+  // **El servidor de desarrollo contesta el `index.html` a lo que no
+  // encuentra**, así que un mapa sin hornear llega con un 200 y `<!doctype`
+  // dentro. Lo destapó el 47 al dejar entrar `?map=<cualquier mapa>`: antes la
+  // carpeta siempre estaba. Sin esto, el error es «Unexpected token '<'» y no
+  // dice qué archivo falta.
+  const tipo = r.headers?.get?.("content-type") ?? "";
+  if (tipo && !tipo.includes("json")) {
+    throw new Error(
+      `${ruta} no es JSON: el servidor devolvió «${tipo}». Ese mapa no está extraído ` +
+        `en build/ — ver el README.`
+    );
+  }
   return r.json();
 }
 
@@ -132,8 +166,8 @@ async function ok(p, ruta) {
   const r = await p;
   if (!r.ok) {
     throw new Error(
-      `no se pudo leer ${ruta} (${r.status}). ¿Has ejecutado 'npm run gatecity'? ` +
-        `Lo extraído no está en el repositorio a propósito.`
+      `no se pudo leer ${ruta} (${r.status}). ¿Has ejecutado la extracción de ese mapa? ` +
+        `Lo extraído no está en el repositorio a propósito: ver el README.`
     );
   }
   return r;

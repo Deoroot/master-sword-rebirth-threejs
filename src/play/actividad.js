@@ -78,7 +78,26 @@ export const NO_HAY = -1;
  *
  * `azar(n)` tiene que devolver un entero de 0 a n−1, que es `RANDOM_LONG(0, n-1)`.
  */
-export function buscarActividad(secuencias, actividad, azar = (n) => Math.floor(Math.random() * n)) {
+// ── EL DADO ES EL DE LA CASA: `() => [0,1)`, COMO `Math.random` (59) ──────
+//
+// Esta función declaraba `azar = (n) => Math.floor(Math.random() * n)` —un
+// dado que toma el tope y devuelve un entero— y **es la única del proyecto que
+// lo hacía**. Todas las demás (`acierta`, `danoDe`, `danoDelGolpe`, la propia
+// `Manada`) usan `azar = Math.random`.
+//
+// Y `Manada` le pasaba el suyo: `azar(total)` era `Math.random()`, que ignora
+// el argumento y devuelve un decimal menor que uno. Como cualquier peso
+// declarado vale 1 o más, `Math.random() < peso` **es siempre cierto** y el
+// bucle se quedaba siempre con la última candidata.
+//
+// Lo que se veía: los doce aldeanos de Gate City, los doce en
+// `anim_xbow_aim_idle` —la última que declara `dwarf/male1.mdl` y la menos
+// pesada de las tres, 3 de 23— y ninguno cambiaba nunca. El sorteo del motor
+// no existía. No daba ningún error, y la prueba de reparto de
+// `test/juego_mundo.test.mjs:60` estaba en verde porque **se pasaba su propio
+// dado del tipo correcto**: medía que la función sabe sortear, no que alguien
+// la llame como es debido.
+export function buscarActividad(secuencias, actividad, azar = Math.random) {
   let total = 0;
   let cual = NO_HAY;
   for (const s of secuencias ?? []) {
@@ -88,7 +107,10 @@ export function buscarActividad(secuencias, actividad, azar = (n) => Math.floor(
     // El `!weighttotal` del motor va PRIMERO y en el mismo `if`: con todos los
     // pesos a cero gana la última, y sin esa rama `RANDOM_LONG(0, -1)` sería
     // una barbaridad.
-    if (!total || azar(total) < peso) cual = s.indice;
+    //
+    // `RANDOM_LONG(0, weighttotal - 1)` es un ENTERO de 0 a total-1, así que
+    // el decimal se convierte aquí y no en quien llama.
+    if (!total || Math.floor(azar() * total) < peso) cual = s.indice;
   }
   return cual;
 }

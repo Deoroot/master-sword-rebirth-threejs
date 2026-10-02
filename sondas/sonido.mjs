@@ -13,7 +13,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { readFileSync } from "node:fs";
 
 const PORT = 5198;
@@ -37,13 +38,23 @@ const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
 const fallos404 = [];
 pag.on("response", (r) => { if (r.status() === 404 && /\/snd\//.test(r.url())) fallos404.push(r.url().split("/snd/")[1]); });
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (59). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+// El estado del `AudioContext` se lee ANTES de pulsar nada: las pulsaciones
+// del menú son un gesto del usuario y despiertan el contexto, que es lo que
+// le pasa al jugador de verdad. Medirlo después diría «running» y tendría
+// razón — pero no sería la regla del navegador, sería el menú (59).
+let contextoAlCargar = null;
+await entrarPorElMenu(pag, PORT, {
+  antesDeTocarNada: async (p) => {
+    contextoAlCargar = await p.evaluate(() => window.probe.sonido.estado);
+  },
+});
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda"));
 await pag.waitForTimeout(400);
 
@@ -106,7 +117,13 @@ control("y los que están y no suenan", (antes.catalogo?.mudos ?? 0) === 4,
   `${antes.catalogo?.mudos} (pl_ladder*, 10 ms)`);
 
 // ── 2. EL GESTO, que es la regla del navegador y no del juego ──────────────
-control("el contexto NO está despierto al cargar", !antes.despierto, antes.contexto);
+control("el contexto NO está despierto al cargar, ANTES de tocar el menú",
+  contextoAlCargar && !contextoAlCargar.despierto, `${contextoAlCargar?.contexto} al cargar, ${antes.contexto} ya dentro`);
+// Y el positivo de la pareja: el gesto del menú SÍ lo despierta. Sin esto,
+// «no estaba despierto» sería verde también con un contexto que no despierta
+// nunca, que es el apartado 4 con el sonido puesto.
+control("y el propio menú lo despierta, que es lo que le pasa al jugador",
+  antes.despierto === true, `${contextoAlCargar?.contexto} -> ${antes.contexto}`);
 await pag.evaluate(() => window.probe.sonido.despertar());
 await pag.waitForTimeout(600);
 const desp = await pag.evaluate(() => window.probe.sonido.estado);

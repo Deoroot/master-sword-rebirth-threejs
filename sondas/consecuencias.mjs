@@ -17,7 +17,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, esperarApariciones } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5203;
@@ -34,14 +35,15 @@ const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
 await pag.waitForFunction(() => window.probe.golpe.estado.triangulos > 0, null, { timeout: 60000 })
   .catch(() => {});
@@ -52,6 +54,20 @@ await pag.waitForFunction(() => window.probe.golpe.estado.triangulos > 0, null, 
 // Con el pueblo andando, esos controles miden el dado y salen rojos una vez de
 // cada tres. Se apaga el `roam` y sólo el `roam`: la caza sigue encendida.
 await pag.evaluate(() => window.probe.vivo.congelarPaseo(true));
+
+// LOS TRES SEGUNDOS, antes de medir nada.
+//
+// 38 de los 69 bichos de Gate City son la ficha de un `msarea_monsterspawn` y no
+// están al entrar: aparecen a los 3 s (ver `esperarApariciones`). Todos los
+// hostiles son de ésos, y a un bicho dormido se le puede pegar —`herir` no mira si
+// está en el mundo— pero en cuanto su área lo saca, `revivir` le pone la vida
+// llena y le reinicia los relojes de la reacción. Sin esta espera, las tres
+// medidas del encogerse daban lo contrario de lo que dicen: el zombi se encogía
+// «dos veces seguidas» porque entre golpe y golpe había vuelto a nacer.
+const puestos = await esperarApariciones(pag);
+console.log(`
+  apariciones: ${puestos.enElMundo} de ${puestos.de} en el mundo, ` +
+  `${puestos.dormidos} dormidos, ${puestos.conCilindro} con cilindro`);
 
 const censo = await pag.evaluate(() => window.probe.reaccion.censo());
 const de = (script) => censo.filter((c) => c.script === script);
@@ -260,12 +276,45 @@ const encajonadas = await pag.evaluate((ns) => {
 }, ratas);
 console.log(`    las ${encajonadas.length} ratas: ${encajonadas.map((r) => `'${r.frenado}' ${r.paso.toFixed(2)} m, suelo a ${r.suelo}`).join(", ")}`);
 control("las ratas también entran en huida", encajonadas.every((r) => r.huyendo), "");
-control("pero ninguna se mueve, y no es la regla: están HUNDIDAS en el suelo",
-  encajonadas.every((r) => r.paso < 0.01 && /escalon/.test(r.frenado ?? "")),
-  encajonadas.map((r) => r.frenado).join(" · "));
-control("el suelo les queda por encima de los pies en las cuatro direcciones",
-  encajonadas.every((r) => r.suelo > 10),
-  `${encajonadas.map((r) => `${r.suelo.toFixed(1)} u`).join(", ")} — el horno las deja donde dice el árbol BSP y Rapier tiene piso más arriba`);
+// LO QUE ERAN LAS «RATAS HUNDIDAS», corregido en el 39 — y no eran ratas.
+//
+// Estos dos controles decían «ninguna se mueve, están HUNDIDAS» y estaban VERDES
+// afirmando un fallo nuestro. El fallo era real pero el diagnóstico estaba a medio
+// camino, y lo de abajo es lo que dice el `.bsp`:
+//
+//   "classname"     "msmonster_giantrat"
+//   "scriptfile"    "monsters/spider_mini"     <- lo que sale de verdad
+//   "spawnarea"     "spawn_babies1"            <- o sea que es una FICHA
+//   "lives" "1"  "delaylow" "1"  "delayhigh" "2"
+//
+// y al lado, una `func_breakable` por cada una, de z −791 a −771, con `health 1`,
+// `rendercolor 0 0 0` y `target spawn_babies1`. **Son bolsas de huevos**: cuatro
+// sacos negros que se rompen de un golpe y sueltan una araña pequeña.
+//
+// Dos cosas se arreglaron y una sigue:
+//
+//   arreglado  el censo las ponía a −791, o sea VEINTE unidades DENTRO del saco,
+//              porque `sueloBajo` caminaba sólo el árbol del mundo y los `func_*`
+//              con brushes viven cada uno en su propio modelo. Ahora cuenta los
+//              que también chocan (`solidoPara`, src/bsp/arbol.js).
+//   arreglado  no son monstruos de pie: aparecen a los 3 s como las otras 37.
+//   SIGUE      dos de las cuatro tienen su `origin` DENTRO del saco (−790, y el
+//              saco va de −791 a −771), así que salen encerradas: el techo del
+//              saco les queda a 18 unidades justas y `m_StepSize` son 18. Y eso
+//              **es correcto**: están dentro de un huevo. Lo que falta para que
+//              salgan es romper el saco, y `func_breakable` está horneado dentro
+//              de la malla de colisión y no se puede romper. Queda apuntado.
+control("las cuatro son FICHA de una bolsa de huevos, no monstruos de pie",
+  encajonadas.length === 4, `${encajonadas.length} de 4`);
+control("dos están libres encima de su saco y avanzan",
+  encajonadas.filter((r) => r.paso > 0.5 && r.frenado === "avanza").length === 2,
+  encajonadas.map((r) => `${r.frenado} ${r.paso.toFixed(2)} m`).join(" · "));
+control("y dos están DENTRO del saco, con el techo a 18 u justas y el paso es 18",
+  encajonadas.filter((r) => r.paso < 0.01 && /escalon de 18 u/.test(r.frenado ?? "")).length === 2,
+  `${encajonadas.map((r) => `${r.suelo.toFixed(1)} u`).join(", ")} — el saco va de −791 a −771 y su origin es −790`);
+control("ninguna sigue veinte unidades enterrada: eso era nuestro y está arreglado",
+  encajonadas.every((r) => r.suelo < 19),
+  `el peor tiene el suelo a ${Math.max(...encajonadas.map((r) => r.suelo)).toFixed(1)} u, y antes eran 20`);
 
 const goblinHuye = await pag.evaluate((n) => {
   const q = window.probe.reaccion.quien(n);

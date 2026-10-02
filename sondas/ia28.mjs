@@ -27,7 +27,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync, rmSync } from "node:fs";
 
 const PUERTO_WEB = 5213;
@@ -79,8 +79,12 @@ const abrir = async (quien) => {
     const traza = String(e.stack ?? "").split(/\r?\n/).slice(1, 4).join(" <- ");
     errores.push(`${quien}: ${String(e).slice(0, 160)} | ${traza.slice(0, 300)}`);
   });
-  await pag.goto(`http://localhost:${PUERTO_WEB}/?map=gatecity&red=ws://localhost:${PUERTO_PARTIDA}/juego`, { waitUntil: "load" });
-  await esNuestro(pag, PUERTO_WEB);
+  // SE ENTRA POR EL MENÚ, como el jugador (59). El `red=` se queda en la URL
+  // —el menú todavía no tiene su «Visit a Kingdom», y elegir el mapa por
+  // omisión no recarga— pero el camino hasta dentro es el del jugador.
+  await entrarPorElMenu(pag, PUERTO_WEB, {
+    extra: `red=ws://localhost:${PUERTO_PARTIDA}/juego`,
+  });
   await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
   return pag;
 };

@@ -1,3 +1,4 @@
+import { salidaComun, prepararComunes } from "./recursos.mjs";
 // EL ESQUEMA DE VGUI2: los colores, las letras y los bordes de las ventanas de
 // Valve —«Options», «Servers», «Create Server»—, y las cadenas que llevan dentro.
 //
@@ -62,10 +63,9 @@
 // `build/`, que está en `.gitignore`, y **no se mueve un byte a `public/`.**
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 const ASSETS = process.argv[2] ?? "../MSC/assets/msr";
-const SALIDA = resolve("build/gatecity");
+const SALIDA = salidaComun();
 
 const RUTA_ESQUEMA = `${ASSETS}/resource/TrackerScheme.res`;
 const RUTA_CADENAS = `${ASSETS}/resource/gameui_english.txt`;
@@ -298,6 +298,7 @@ function leerCadenas(ruta) {
 if (!ME_HAN_LLAMADO) {
   // Importado desde una prueba: aquí se acaba.
 } else {
+prepararComunes();
 if (!existsSync(RUTA_ESQUEMA)) {
   console.error(`No encuentro ${RUTA_ESQUEMA}. Pásame la carpeta del juego.`);
   process.exit(1);
@@ -341,7 +342,7 @@ console.log(`  cadenas        ${Object.keys(cadenas).length}${utf16 ? " (UTF-16,
 if (sinResolver.size) {
   console.log(`  sin resolver   ${[...sinResolver].join(", ")}`);
 }
-console.log(`\n  -> build/gatecity/vgui2.json`);
+console.log(`\n  -> build/msr/vgui2.json`);
 
 // ── LA PROCEDENCIA ──────────────────────────────────────────────────────────
 //
@@ -355,7 +356,7 @@ if (existsSync(PROC)) {
 
 ${marca}
 
-\`build/gatecity/vgui2.json\` sale de \`npm run vgui2\`, y de dos archivos del mod:
+\`build/msr/vgui2.json\` sale de \`npm run vgui2\`, y de dos archivos del mod:
 
 | de | qué sale |
 | --- | --- |

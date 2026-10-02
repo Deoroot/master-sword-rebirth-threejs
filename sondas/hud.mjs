@@ -26,7 +26,8 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto } from "./mismo.mjs";
+import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5207;
@@ -44,14 +45,15 @@ const ANCHO = 1200, ALTO = 800;
 const pag = await nav.newPage({ viewport: { width: ANCHO, height: ALTO } });
 const errores = [];
 pag.on("pageerror", (e) => errores.push(String(e).slice(0, 200)));
-await pag.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
-await esNuestro(pag, PORT);
+// SE ENTRA POR EL MENÚ, como el jugador (57). Antes era `?map=gatecity`,
+// que se salta el menú: carga el nivel y arranca la sesión de una pasada,
+// que es un montaje que el jugador no ve nunca. Ver `sondas/entrar.mjs`.
+await entrarPorElMenu(pag, PORT);
 mkdirSync("build/gatecity/vistas", { recursive: true });
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
-await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await pag.evaluate(() => window.probe.sesion.nuevo("Sonda", "swords_rsword"));
 // El mundo quieto: aquí se mide lo que pone la pantalla y un goblin mordiendo
 // por detrás cambia la vida a mitad de medida.
@@ -340,6 +342,44 @@ await pag.screenshot({
   path: "build/gatecity/vistas/hud_abajo.png",
   clip: { x: 0, y: ALTO - 220, width: ANCHO, height: 220 },
 });
+
+// ── 7b. EL AGUANTE SE GASTA CORRIENDO, Y NADIE LO MEDÍA ────────────────────
+//
+// La barra de arriba se mide donde está y de qué color es; que el NÚMERO que
+// pinta cambie no lo comprobaba ninguna sonda. Se vio rompiendo a propósito la
+// línea que lo gasta al correr: `sonda:hud`, `sonda:mundo` y `sonda:golpe`
+// siguieron las tres en verde con el aguante congelado.
+//
+// Y hay un verde vacío que dependía de esto: `sonda:escudo` afirma «levantar
+// el escudo es gratis aunque su ficha declare 15 de aguante» comparando el
+// aguante antes y después — con un aguante que no se mueve nunca, esa
+// igualdad se cumple sola.
+//
+// Se corre con las teclas de verdad, no llamando al módulo: es `CHudFatigue`
+// leyendo lo que el bucle calcula, y lo que hay que medir es ese camino.
+const fatiga = await pag.evaluate(() => window.probe.golpe.estado.aguante);
+await pag.keyboard.down("ShiftLeft");
+await pag.keyboard.down("KeyW");
+await pag.waitForTimeout(1800);
+const corriendo = await pag.evaluate(() => ({
+  aguante: window.probe.golpe.estado.aguante,
+  corriendo: window.probe.golpe.estado.corriendo ?? null,
+}));
+await pag.keyboard.up("KeyW");
+await pag.keyboard.up("ShiftLeft");
+await pag.waitForTimeout(2200);
+const parado = await pag.evaluate(() => window.probe.golpe.estado.aguante);
+console.log(`
+  aguante: ${fatiga.toFixed(1)} -> corriendo ${corriendo.aguante.toFixed(1)}` +
+  ` -> parado 2,2 s ${parado.toFixed(1)}`);
+control("correr GASTA aguante",
+  corriendo.aguante < fatiga - 0.5,
+  `${fatiga.toFixed(1)} -> ${corriendo.aguante.toFixed(1)}`);
+// El contrario, que es el que convierte lo de arriba en una medida: si sólo
+// bajara, un aguante que se desangra siempre también lo cumpliría.
+control("y parado SE RECUPERA, que no es lo mismo que bajar siempre",
+  parado > corriendo.aguante + 0.5,
+  `${corriendo.aguante.toFixed(1)} -> ${parado.toFixed(1)}`);
 
 // ── 8. NADA DE ESTO ROMPE EL MUNDO ─────────────────────────────────────────
 const final = await pag.evaluate(() => {

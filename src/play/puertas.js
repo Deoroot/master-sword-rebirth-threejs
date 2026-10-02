@@ -104,6 +104,38 @@ export function ladoDeApertura(ficha, desde, mirando) {
   return ficha.sentido * (cruz < 0 ? -1 : 1);
 }
 
+/**
+ * ¿SE ABRE AL TOCARLA? Y la respuesta no es sólo `SF_DOOR_USE_ONLY` (el 70).
+ *
+ * `CBaseDoor::DoorTouch` (doors.cpp:516-543) tiene una salida temprana que yo
+ * no había portado, con su comentario delante y todo:
+ *
+ *     // If door is somebody's target, then touching does nothing.
+ *     // You have to activate the owner (e.g. button).
+ *     if (!FStringNull(pev->targetname))
+ *     {
+ *         PlayLockSounds(pev, &m_ls, TRUE, FALSE);
+ *         return;
+ *     }                                             doors.cpp:531-538
+ *
+ * O sea: **tener nombre ya cierra la puerta al tacto**, traiga o no traiga la
+ * bandera. Y no es teórico: las dos hojas de `door2` de Edana —la casa del
+ * alcalde— tienen `targetname`, las abre un `trigger_once` desde dentro, y
+ * hasta el 70 se abrían solas al acercarse. Encima hay dos
+ * `trigger_changetarget` (`mayorsdoor` y `mayorsdoor2`) cuyo trabajo es
+ * enchufar y desenchufar ese disparador: una puerta que se abre al empujarla
+ * convierte esa pareja en adorno.
+ *
+ * Las otras cinco rotatorias no tienen nombre, así que para ellas esto no
+ * cambia nada — que es exactamente por qué sobrevivió desde el 48: **cinco de
+ * siete daban el mismo resultado con la regla mal**.
+ */
+export function seAbreAlTocar(ficha) {
+  if (ficha.soloUsar) return false;               // SF_DOOR_USE_ONLY
+  if (ficha.nombre) return false;                 // doors.cpp:533-538
+  return true;
+}
+
 /** A qué distancia se abre al acercarse, en unidades de GoldSrc. */
 //
 // El motor no usa una distancia: usa el `Touch` de la caja de la puerta contra
@@ -203,6 +235,18 @@ export function montarPuertas(manifiesto, bin, { materialDe, mundo = null, RAPIE
     triangulos: fichas.reduce((a, f) => a + f.triangulos, 0),
 
     /**
+     * Las asas de Rapier de sus colisionadores — el 75.
+     *
+     * Una `func_door_rotating` es `SOLID_BSP`, y un objeto que se queda encima
+     * de una hoja **no toca suelo** para el motor: `SV_PointContents` mira el
+     * hull del mundo y de las entidades sólo las `SOLID_NOT` (world.cpp:625-626
+     * y 695-709).
+     */
+    asas() {
+      return puertas.filter((p) => p.colisionador).map((p) => p.colisionador.handle);
+    },
+
+    /**
      * Empuja una puerta a abrirse. Devuelve si ha hecho algo.
      *
      * `desde` y `mirando` son del que abre, y son lo que decide el lado. Sin
@@ -241,9 +285,9 @@ export function montarPuertas(manifiesto, bin, { materialDe, mundo = null, RAPIE
       for (const p of puertas) {
         const tope = p.ficha.grados;
         const paso = p.ficha.velocidad * dt;
-        const tocando = cerca(p);
+        const tocando = cerca(p) && seAbreAlTocar(p.ficha);
         const estabaQuieta = p.estado === ESTADO.CERRADA || p.estado === ESTADO.ABIERTA;
-        if (tocando && !p.ficha.soloUsar) this.abrir(p, { desde, mirando });
+        if (tocando) this.abrir(p, { desde, mirando });
         // `noiseMoving` suena al ARRANCAR, en los dos sentidos, y una sola vez
         // por tramo. Dispararlo cada fotograma mientras gira daria noventa
         // chirridos superpuestos; dispararlo solo al abrir dejaria muda la
