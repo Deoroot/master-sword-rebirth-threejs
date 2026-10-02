@@ -36,6 +36,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync, append
 import { join } from "node:path";
 
 import { partirGuion, COMANDOS, GETTERS, PROPIEDADES, PROPIEDADES_VACIAS } from "../src/play/guion.js";
+import { comandosDelMod } from "./insignias.mjs";
 // El 64: cargar un script con sus `#include` es de `tools/scriptsmsr.mjs`,
 // para que un segundo extractor pueda usarlo sin ejecutar este censo entero.
 import { leerScript, cargarGuion } from "./scriptsmsr.mjs";
@@ -165,7 +166,15 @@ function todos(dir = ".") {
 }
 
 console.log(`\nlos guiones de los NPC — subconjunto del intérprete de Master Sword\n`);
-console.log(`  ${COMANDOS.size} comandos portados de los 223 de \`m_GlobalCmdHash\` (scriptcmds.cpp:41)`);
+// EL 87: aquí ponía «de los 223 de `m_GlobalCmdHash`», escrito a mano, y las dos
+// cifras estaban mal: 223 contaba dos comandos COMENTADOS (`else`, `moditem`), y
+// 23 de los nuestros no son de esa tabla sino de la de NPC o de objeto. Ahora se
+// cuenta la unión de las tres tablas, sin comentarios. Ver tools/insignias.mjs.
+const UNIVERSO = comandosDelMod();
+const DEL_MOD = UNIVERSO ? [...COMANDOS].filter((c) => UNIVERSO.has(c)).length : null;
+console.log(UNIVERSO
+  ? `  ${DEL_MOD} de los ${UNIVERSO.size} comandos que registra el mod (sus tres tablas, sin los comentados)`
+  : `  ${COMANDOS.size} comandos portados (falta ../MSC/MasterSwordRebirth-Xash3D para compararlos con el mod)`);
 console.log(`  ${GETTERS.size} getters y ${PROPIEDADES.size} propiedades de \`$get\`\n`);
 
 // ── 1. el censo sobre TODOS los scripts con menú ────────────────────────────
@@ -318,8 +327,8 @@ una opción que se puede elegir de principio a fin y ${caben.length} caben enter
 cuenta es el resultado del experimento 33; el porqué está en
 \`doc/MISIONES_33.md\`.
 
-No es el intérprete de Master Sword: son ${COMANDOS.size} comandos de los 223 de
-\`m_GlobalCmdHash\` (scriptcmds.cpp:41), listados en \`src/play/guion.js\`.
+No es el intérprete de Master Sword: son ${DEL_MOD ?? COMANDOS.size} de los ${UNIVERSO?.size ?? "?"} comandos
+que registra el mod en sus tres tablas, listados en \`src/play/guion.js\`.
 
 Vale lo de siempre: **está en \`build/\`, que está en \`.gitignore\`, y no se mueve
 un byte a \`public/\`.**

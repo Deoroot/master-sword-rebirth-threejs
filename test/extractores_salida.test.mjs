@@ -43,8 +43,8 @@ function sinComentarios(texto) {
 /**
  * Las herramientas que hornean **de un mapa** y aceptan `--mapa`.
  *
- * Las que faltan no se olvidan, se dicen: `gatecity_shot.mjs`, `juez_luz.mjs`,
- * `mirar.mjs` y `quecara.mjs` son de diagnóstico —sacan capturas y comparan
+ * Las que faltan no se olvidan, se dicen: `gatecity_shot.mjs`, `juez_luz.mjs`
+ * y `quecara.mjs` son de diagnóstico —sacan capturas y comparan
  * caras de Gate City— y siguen con el mapa a mano a propósito. Si algún día
  * se parametrizan, entran en esta lista y la prueba las cubre sin tocarla.
  *
@@ -57,10 +57,14 @@ function sinComentarios(texto) {
 const POR_MAPA = [
   "gatecity.mjs", "bichos.mjs", "bicho.mjs", "aparicion.mjs",
   "menus.mjs", "guiones.mjs", "mapainfo.mjs", "sonido.mjs",
+  // EL 87: `mirar.mjs` sale de las de diagnóstico y entra aquí. Hacía falta
+  // una vista de Edana para el README y la herramienta la daba de Gate City sin
+  // un error —el mapa estaba en tres sitios a mano—. Ahora usa `--mapa`.
+  "mirar.mjs",
 ];
 
 /** Las de diagnóstico, que NO se vigilan, y por qué. */
-const DE_DIAGNOSTICO = ["gatecity_shot.mjs", "juez_luz.mjs", "mirar.mjs", "quecara.mjs"];
+const DE_DIAGNOSTICO = ["gatecity_shot.mjs", "juez_luz.mjs", "quecara.mjs"];
 
 describe("los extractores por mapa derivan su salida, no la escriben", () => {
   test("CONTROL POSITIVO: hay herramientas que mirar y todas existen", () => {

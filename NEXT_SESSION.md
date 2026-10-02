@@ -1,5 +1,43 @@
 # Dónde se quedó esto
 
+> **EL 87 CIERRA LA TANDA DE EXPERIMENTOS, Y EL REPOSITORIO SE HACE PÚBLICO.**
+> Lo pidió el usuario: README sencillo, capturas de Edana y barras de progreso.
+>
+> **Las barras se calculan** (`npm run insignias`, `tools/insignias.mjs`) y
+> `test/insignias.test.mjs` se pone roja si el README dice otra cosa. Al
+> calcularlas salieron dos números falsos que llevaban tiempo circulando: el
+> «78 de 223 comandos» (35 %) contaba **dos comandos comentados** y comparaba
+> con la tabla equivocada — son **73 de 325, un 22 %**, contando las tres
+> tablas del mod—; y el horneado de guiones de Edana era **de otra lista de
+> comandos**, así que su «18 de 27» estaba viejo (hoy, 19). La herramienta se
+> niega a escribir si un horneado está desfasado, y eso lo sabe EXACTO porque
+> el horneado guarda la lista con la que se hizo.
+>
+> **`npm run hornear`** lo hornea todo en orden (18 pasos, 1,2 min). Hacían falta
+> veinte herramientas sin un orden escrito, y la guía se dejaba **tres que el
+> juego lee** (`jugador`, `objetos:guion`, `suelo`): nadie lo vio porque cada
+> sesión tenía su `build/` hecho a trozos. Comprobado como un desconocido: copia
+> limpia sin `build/`, hornear, `npm test` en verde y `sonda:red:edana` 21/21.
+>
+> **Las capturas** son la única excepción binaria (`doc/capturas/`, JPEG, con
+> tope de tamaño), y `test/procedencia.test.mjs` sigue cazando un `.jpg` fuera
+> de ahí o un `.png` dentro. Corregido «ni un binario» en `CLAUDE.md` y en
+> `CREDITOS.md`, ahí con la corrección al lado.
+>
+> **LO QUE QUEDA, por orden de lo que más pesa para un desconocido:**
+>
+> 1. **Sin el contenido del juego, `npm test` da unos 50 rojos.** Pruebas que
+>    leen un bicho del horneado, reciben `null` y revientan en vez de saltarse,
+>    como sí hacen otras 191. Por eso **no hay insignia de «Build»**: hoy sería
+>    roja, y escrita a mano sería mentira. Arreglarlo es poner la guarda
+>    `{ skip: !hay }` que ya usa el resto, y después un flujo de GitHub Actions.
+> 2. **No hay `LICENSE`.** Sin licencia, un repositorio público es «todos los
+>    derechos reservados». Es decisión del usuario.
+> 3. El HUD que se va 3,3 s en multijugador (abajo, sin diagnosticar), y
+>    `sonda:consecuencias` en 42 de 46 (el censo de criaturas).
+> 4. Las dos `msarea_transition` de Edana, que es lo único de juego que le falta.
+
+
 > **EL HUD SE VA 3,3 SEGUNDOS EN MULTIJUGADOR, Y NO ESTÁ DIAGNOSTICADO.**
 > Salió midiendo si la red aguanta Edana, porque el usuario quiere un servidor
 > público pequeño para un playtest. En **una pasada de cada tres**,

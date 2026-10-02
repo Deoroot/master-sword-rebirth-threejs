@@ -46,6 +46,29 @@ const EXTENSIONES = new Set([
 /** Archivos sueltos sin extensión que sí van. */
 const SIN_EXTENSION = new Set([".gitignore", "LICENSE", ".gitattributes"]);
 
+/**
+ * LA ÚNICA EXCEPCIÓN BINARIA, y la firma el usuario (el 87, al hacer público el
+ * repositorio): *«incluyamos algunas imágenes de edana en el repo»*.
+ *
+ * Son CAPTURAS DE PANTALLA de este port corriendo, no assets: ni una textura, ni
+ * un modelo, ni un sonido se puede sacar de un JPEG de 1200 píxeles de una
+ * escena ya pintada. Es lo que enseña cualquier port de un juego en su página.
+ * Pero dentro se ve el arte de MSR y de Valve, así que esto NO es «un `.png`
+ * nuestro» y no va por la lista de arriba: va por aquí, estrecho a propósito.
+ *
+ *   - **Sólo `.jpg`, y sólo en `doc/capturas/`.** Un `.jpg` en cualquier otro
+ *     sitio sigue siendo rojo, y un `.png` en esta carpeta también: el formato
+ *     con pérdida es la garantía de que lo que entra es una foto y no un
+ *     fichero de textura renombrado.
+ *   - **Con tope de tamaño**, por archivo y en total. La vacuna de esta prueba es
+ *     contra el descuido, y el descuido aquí sería que la carpeta creciera hasta
+ *     ser un almacén. Si hace falta más, se sube el tope y alguien lo firma.
+ */
+const CAPTURAS = { carpeta: "doc/capturas/", extension: ".jpg", porArchivo: 400 * 1024, total: 1536 * 1024 };
+const esCaptura = (ruta) =>
+  ruta.startsWith(CAPTURAS.carpeta) && !ruta.slice(CAPTURAS.carpeta.length).includes("/")
+  && extname(ruta).toLowerCase() === CAPTURAS.extension;
+
 /** Lo que no se recorre: no está versionado y pesa 190 MB. */
 // `empaquetado/` es la salida de electron-builder: el `.exe`, su runtime de
 // Chromium y los `.dll` de Electron. Nada de eso es nuestro ni del juego, y
@@ -73,7 +96,7 @@ function todos(dir = RAIZ, fuera = []) {
 
 const permitido = (ruta) => {
   const base = ruta.split("/").pop();
-  return SIN_EXTENSION.has(base) || EXTENSIONES.has(extname(base).toLowerCase());
+  return SIN_EXTENSION.has(base) || EXTENSIONES.has(extname(base).toLowerCase()) || esCaptura(ruta);
 };
 
 test("en el repositorio no hay un solo asset del juego", async (t) => {
@@ -87,6 +110,35 @@ test("en el repositorio no hay un solo asset del juego", async (t) => {
 
   await t.test("y ninguno tiene la forma de un asset de Half-Life o de MSR", () => {
     assert.deepEqual(archivos.filter((r) => DEL_JUEGO.test(r)), []);
+  });
+
+  await t.test("las capturas: sólo JPEG, sólo en su carpeta, y pequeñas", () => {
+    const capturas = archivos.filter(esCaptura);
+    const tam = capturas.map((r) => [r, statSync(join(RAIZ, r)).size]);
+    for (const [r, n] of tam) {
+      assert.ok(n <= CAPTURAS.porArchivo,
+        `${r} pesa ${Math.round(n / 1024)} KB y el tope es ${CAPTURAS.porArchivo / 1024}`);
+    }
+    const total = tam.reduce((s, [, n]) => s + n, 0);
+    assert.ok(total <= CAPTURAS.total,
+      `las capturas pesan ${Math.round(total / 1024)} KB y el tope es ${CAPTURAS.total / 1024}: ` +
+      "si de verdad hacen falta más, se sube el tope y alguien lo firma");
+  });
+
+  await t.test("y la excepción es estrecha: fuera de su sitio, una imagen se caza", () => {
+    // El control positivo de la excepción. Sin él, esta prueba pasaría igual con
+    // `esCaptura` devolviendo `true` para todo, y entonces la carpeta sería un
+    // agujero con forma de regla — el apartado 4 escrito en la propia vacuna.
+    assert.ok(esCaptura("doc/capturas/edana.jpg"));
+    for (const fuera of [
+      "doc/edana.jpg",                    // la extensión buena en otro sitio
+      "public/edana.jpg",                 // y en el sitio que un servidor publica
+      "doc/capturas/edana.png",           // el sitio bueno con otra extensión
+      "doc/capturas/sub/edana.jpg",       // una subcarpeta no es la carpeta
+      "src/doc/capturas/edana.jpg",       // ni un prefijo que se le parezca
+    ]) {
+      assert.ok(!permitido(fuera), `la excepción deja pasar ${fuera}`);
+    }
   });
 
   await t.test("`build/` no está versionado, que es donde vive lo extraído", () => {

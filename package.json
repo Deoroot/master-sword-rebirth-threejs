@@ -109,7 +109,9 @@
     "sonda:mordisco82": "node sondas/mordisco82.mjs",
     "sonda:botin82": "node sondas/botin82.mjs",
     "sonda:parpadeo82": "node sondas/parpadeo82.mjs",
-    "sonda:menujugador85": "node sondas/menujugador85.mjs"
+    "sonda:menujugador85": "node sondas/menujugador85.mjs",
+    "hornear": "node tools/hornear.mjs",
+    "insignias": "node tools/insignias.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

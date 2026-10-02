@@ -95,6 +95,15 @@ es lo de «ni un binario», y eso no depende de que alguien lo recuerde — lo
 comprueba [test/procedencia.test.mjs](test/procedencia.test.mjs) en cada
 `npm test`.
 
+> **Corrección del 87, al pasarlo a público.** «Ni un binario» dejó de ser
+> exacto por decisión del usuario: *«incluyamos algunas imágenes de edana en el
+> repo»*. Son **tres capturas de pantalla** de este port corriendo, en JPEG, en
+> `doc/capturas/` — no assets: de una escena ya pintada no se saca ni una textura
+> ni un modelo. La prueba de procedencia no se relajó: admite `.jpg` **sólo en esa
+> carpeta y con tope de tamaño** (400 KB cada una, 1,5 MB en total), y lo demás
+> sigue siendo rojo. Un `.jpg` en otro sitio, o un `.png` en ésa, se caza. Lo de
+> arriba se deja como estaba, porque era verdad del tag `v0.1.0-alpha`.
+
 Queda una tercera cosa que **no** está resuelta por esto y conviene no
 confundir: **servir el mapa horneado desde un servidor web sí es
 distribución**, y eso necesita permiso aparte — del equipo de MSR para sus

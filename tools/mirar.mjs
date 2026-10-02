@@ -20,9 +20,16 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { UNIDADES_POR_METRO } from "../src/bsp/lector.js";
 import { escribirPng } from "./png.mjs";
+import { mapaDeArgv } from "./mapa.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "build", "gatecity", "vistas");
+// EL 87: y de CUALQUIER mapa, no sólo de Gate City. Estaba clavado en tres
+// sitios —la comprobación del horneado, la carpeta de salida y la URL—, así que
+// pedir una vista de Edana daba una de Gate City sin un solo error: el valor de
+// reposo, en una herramienta. Usa la opción común `--mapa`, la misma del resto
+// de `tools/`.
+const MAPA = mapaDeArgv();
+const OUT = join(ROOT, "build", MAPA, "vistas");
 const PORT = 5199;
 const U = UNIDADES_POR_METRO;
 const OJOS = 1.7 * U;
@@ -52,8 +59,8 @@ const nombre = arg("--nombre", "mirar");
 const ancho = Number(arg("--ancho", "960"));
 const alto = Number(arg("--alto", "640"));
 
-if (!existsSync(join(ROOT, "build", "gatecity", "malla.json"))) {
-  console.error("falta build/gatecity/malla.json — ejecuta primero: npm run gatecity");
+if (!existsSync(join(ROOT, "build", MAPA, "malla.json"))) {
+  console.error(`falta build/${MAPA}/malla.json — hornéalo primero`);
   process.exit(2);
 }
 
@@ -82,7 +89,7 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: ancho, height: alto } });
 const errores = [];
 page.on("pageerror", (e) => errores.push(String(e?.message ?? e)));
-await page.goto(`http://localhost:${PORT}/?map=gatecity`, { waitUntil: "load" });
+await page.goto(`http://localhost:${PORT}/?map=${MAPA}`, { waitUntil: "load" });
 await page.waitForFunction(() => window.probe?.ready === true, null, { timeout: 240000 });
 await page.evaluate(() => window.probe.pause());
 

@@ -27,8 +27,11 @@ El plan y en qué orden: [PROYECTO_10.md](PROYECTO_10.md).
 ## 2. Dónde está el contenido del juego, y por qué no está aquí
 
 **Este repositorio no lleva ni un byte de contenido del juego.** Ni una textura,
-ni un modelo, ni un sonido: no hay un solo archivo binario, y
-[`test/procedencia.test.mjs`](test/procedencia.test.mjs) lo hace cumplir. Lo que
+ni un modelo, ni un sonido: el único binario son **tres capturas de pantalla**
+en `doc/capturas/`, que el usuario pidió para el README al hacerlo público (el
+87) — **no las borres creyendo que son un descuido**. Y
+[`test/procedencia.test.mjs`](test/procedencia.test.mjs) lo hace cumplir: admite
+`.jpg` sólo en esa carpeta y con tope de tamaño, y nada más. Lo que
 hay es un *lector* y un *juego*.
 
 El contenido vive **al lado**, en `../MSC/`, que no es nuestro y **no se toca**:
