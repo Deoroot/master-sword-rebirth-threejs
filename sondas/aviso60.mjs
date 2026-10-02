@@ -16,7 +16,7 @@
 //
 // Y este puerto mandaba los tres al primero. La presentación del mapa —«Gate
 // City», «Intended Difficulty», «WARNING»— y el anuncio de subir de nivel
-// salían entre los «3.4 damage to Goblin», juntando título y texto con un
+// salían entre los «Hit Goblin: 3.4 slash damage.» (el 86: entonces ese texto era «3.4 damage to Goblin», que resultó ser nuestro), juntando título y texto con un
 // guion. Se leía igual de bien, que es exactamente por qué aguantó: **un
 // mensaje en la esquina que no es no da ningún error**. Sólo se ve jugando.
 //
@@ -88,7 +88,7 @@ control("tiene tamaño: no es un div vacío",
 //
 // El control que da sentido a los de arriba. Se imprime un suceso para que la
 // consola exista y se miden las dos cajas de verdad, no las dos cuentas.
-await pag.evaluate(() => window.probe.hud.suceso("normal", "3.4 damage to Goblin"));
+await pag.evaluate(() => window.probe.hud.suceso("normal", "Hit Goblin: 3.4 slash damage.  "));
 const dos = await pag.evaluate(() => window.probe.aviso.esquinas());
 console.log(`  consola en (${dos.consola?.x}, ${dos.consola?.y}) de ${dos.consola?.ancho}x${dos.consola?.alto}`);
 control("la consola de sucesos también está en pantalla: si no, no hay con qué comparar",
@@ -182,7 +182,7 @@ await pag.evaluate(() => window.probe.aviso.paso(0.5));
 // y sin ella el control de abajo («no están en la consola») pasaría porque la
 // consola está vacía, que es el apartado 4 de CLAUDE.md al pie de la letra.
 // Se supo porque el positivo de al lado se puso rojo.
-await pag.evaluate(() => window.probe.hud.suceso("normal", "3.4 damage to Goblin"));
+await pag.evaluate(() => window.probe.hud.suceso("normal", "Hit Goblin: 3.4 slash damage.  "));
 const intro = await pag.evaluate(() => ({
   ventanas: window.probe.aviso.ventanas(),
   consola: window.probe.hud.estado().consola.lineas.map((l) => l.texto),

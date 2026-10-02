@@ -46,6 +46,8 @@
 import * as THREE from "three";
 import { Flecha, anguloDelTiro, danoDeFlecha, dadoDeFlecha } from "../play/proyectil.js";
 import { habilidadDeArma, propiedadesDe } from "./stats.js";
+// EL 86: el informe del golpe lo escribe el mod y no este archivo.
+import { golpeAsestado } from "../play/mensajesdecombate.js";
 
 /**
  * Monta el arco sobre el mundo que se le pasa.
@@ -188,7 +190,19 @@ export function montarArco({
         s.personaje.objetos = s.personaje.objetos.filter((o) => o !== gasta);
         // `HUDEVENT_UNABLE` es el gris de «no puedes hacer eso», y quedarte sin
         // flechas es exactamente eso.
-        suceso("nopuedes", `You are out of ${flecha.nombre ?? "ammo"}`);
+        //
+        // EL 86: y el texto es el del mod, no el nuestro. «You are out of X» no
+        // existe en ninguna parte de `../MSC/`; lo que el juego dice en ESTE
+        // mismo punto es
+        //
+        //     SendEventMsg(HUDEVENT_UNABLE, msstring("This is your last ") + pArrow->m_DisplayName)
+        //                                                     giattack.cpp:961
+        //
+        // y su condición es `pArrow->iQuantity <= 0` (`:950`), o sea la misma
+        // que esta de aquí: el momento ya era el correcto. Que la frase diga
+        // «ésta es tu última» cuando ya no queda ninguna es del mod, y se porta
+        // como está.
+        suceso("nopuedes", `This is your last ${flecha.nombre ?? "ammo"}`);
       }
     }
 
@@ -300,7 +314,12 @@ export function montarArco({
     });
     // Un escudo puede parar una flecha, y eso ya está portado en `herir`.
     if (golpe.parado) {
-      suceso("ataque", `Your arrow was ${golpe.mensaje ?? "parried!"}`);
+      // EL 86: «Your arrow was …» era nuestra. La frase del juego la dice el
+      // guion del bicho y no distingue con qué le pegaste:
+      // `playermessage $get(PARAM1,id) Your attack was PARRY_TYPE`
+      // (`monsters/base_monster_shared.script:474`). El `PARRY_TYPE` sí es suyo
+      // y es el que pone «dodged!» en las arañas (`spider_base.script:4`).
+      suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
       return null;
     }
     if (golpe.muerto) {
@@ -313,9 +332,14 @@ export function montarArco({
     // La misma forma que el golpe de cuerpo a cuerpo, y a propósito: el motor
     // no tiene dos formatos —los dos salen del mismo `fReportHit` de
     // `giattack.cpp`— y «Flecha: 0.5 a Commoner» era un apunte de trabajo.
-    suceso("ataque", `${dano.toFixed(1)} damage to ${i.ficha.nombre ?? "a monster"}` +
-      ` — ${Math.max(0, i.vida).toFixed(0)} of ${i.vidaMaxima} left` +
-      `${golpe.muerto ? " · dead!" : ""}`);
+    //
+    // EL 86: el razonamiento era correcto y el formato era el nuestro. El del
+    // motor es `"Hit %s: %s %s"` (giattack.cpp:1954), y ni dice la vida que
+    // queda ni pone « · dead!». El tipo de una flecha es `pierce` salvo que su
+    // guion diga otro, igual que en el resto de este archivo.
+    suceso("ataque", golpeAsestado({
+      nombre: i.ficha.nombre, dano, tipo: f.tipoDano ?? "pierce",
+    }));
     return golpe;
   }
 

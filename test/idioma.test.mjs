@@ -195,7 +195,9 @@ test("la interfaz habla inglés (los comentarios y la documentación, español)"
     for (const bueno of [
       "Character Sheet", "You have fallen", "press a key…", "Quickslot 3",
       "no servers yet", "Weight", "Stamina", "export all", "parried!",
-      "Move Forward", "Secondary Attack", "damage to",
+      // EL 86: era «damage to», que ya no sale en ningún sitio del juego. El
+      // informe del golpe es «Hit %s: %s %s» (giattack.cpp:1954).
+      "Move Forward", "Secondary Attack", "Hit Giant Rat: 3.4 slash damage.",
     ]) {
       assert.ok(!LETRAS.test(bueno) && !PALABRAS.test(bueno), `falso positivo: ${bueno}`);
     }

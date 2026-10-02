@@ -645,11 +645,17 @@ export class Partida {
     const techo = this._techoDeDano(c);
     const dano = Math.min(Math.max(0, Number(m.dano) || 0), techo);
     const pies = c.cuerpo.feet;
+    // EL 86: el tipo se saca a una variable porque ahora VUELVE en el suceso.
+    // El informe del golpe del mod lleva el elemento dentro —`"%.1f%s damage."`,
+    // giattack.cpp:1898, o sea «0.4 slash damage.»— y el cliente no puede
+    // ponerlo si no sabe con qué tipo acabó pegando el servidor. Es el mismo
+    // viaje que el daño: lo decide quien lleva la manada.
+    const tipo = typeof m.tipo === "string" ? m.tipo.slice(0, 32) : "";
     const r = this.fauna.pegar({
       id, dano,
       alcance: Math.max(0, Number(m.alcance) || 0),
       cubo: typeof m.cubo === "string" ? m.cubo.slice(0, 48) : null,
-      tipo: typeof m.tipo === "string" ? m.tipo.slice(0, 32) : "",
+      tipo,
       // Desde los PIES del jugador tal y como los tiene el servidor, no desde un
       // punto que mande el cliente: si el punto de salida viniera de fuera,
       // pegar desde el otro lado del mapa sería mandar otras coordenadas.
@@ -663,7 +669,7 @@ export class Partida {
       quien: c.id,
     });
     if (r.muerto) r.experiencia = this._experiencia(c, this.fauna.manada.de(id));
-    c.sucesosPendientes.push({ que: "tupegas", id, ...r, tope: dano >= techo ? techo : undefined });
+    c.sucesosPendientes.push({ que: "tupegas", id, ...r, tipo, tope: dano >= techo ? techo : undefined });
     return r;
   }
 

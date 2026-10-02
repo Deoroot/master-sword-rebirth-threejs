@@ -48,12 +48,19 @@ import { cargarArma } from "./render/arma.js";
 import { cargarMuneco } from "./render/muneco.js";
 import { cargarFlechas } from "./render/flechas.js";
 import { montarArco } from "./juego/arco.js";
-import { Brazo, elegirObjetivo, resolverGolpe, expDeLaMuerte, FASE, VozDeLaCarga } from "./play/golpe.js";
+import { Brazo, elegirObjetivo, resolverGolpe, expDeLaMuerte, FASE, VozDeLaCarga, CRITICO } from "./play/golpe.js";
 import { Flecha, anguloDelTiro, danoDeFlecha, dadoDeFlecha } from "./play/proyectil.js";
 import {
   Brazal, POSTURA, defensaDelJugador, dentroDelCono2D, puedeAtacar,
 } from "./play/escudo.js";
 import { valorDeParryDelJugador } from "./play/parry.js";
+// EL 86: las seis cadenas de la consola de sucesos, que eran NUESTRAS. El
+// usuario lo reportó («el event hud me parece todavía tiene texto inventado») y
+// lo era: ver la cabecera de ese archivo, que lleva la tabla de lo que decíamos
+// contra lo que dice el juego, con la línea de cada una.
+import {
+  golpeAsestado, falloAsestado, golpeRecibido, parryDelJugador,
+} from "./play/mensajesdecombate.js";
 import { cargarCuerpos } from "./render/cuerpo.js";
 import { montarPuertas } from "./play/puertas.js";
 import { montarRompibles } from "./render/rompibles.js";
@@ -4547,7 +4554,8 @@ async function arrancarJuego() {
       return null;
     }
 
-    const { dano, critico } = equipo.brazo.dano(ataque, {
+    // `tirada` es el `iAccuracyRoll` que el mod enseña dentro del «CRIT!».
+    const { dano, critico, tirada } = equipo.brazo.dano(ataque, {
       potencia: potenciaDe(ataque),
       sinNivel: destrezaDe(ataque) < (ataque.pideHabilidad ?? 0),
     });
@@ -4667,6 +4675,23 @@ async function arrancarJuego() {
       // ninguno: en el juego **no suenan** al recibir un golpe, y aquí tampoco.
       suena(suyos.recibir);
     }
+    // EL 86: EL INFORME DEL GOLPE, con el formato del juego y no con el nuestro.
+    //
+    // `"Hit %s: %s %s"`, y con crítico `"Hit %s: %s %s CRIT! (%i/%i)"`
+    // (giattack.cpp:1954 y :1952). El texto lo arma
+    // `src/play/mensajesdecombate.js`, que es donde están las citas y la tabla
+    // de lo que decíamos antes.
+    //
+    // Y va ANTES de la rama de la muerte, no dentro del `else`: el informe del
+    // mod sale de `DoDamage`, que corre con el golpe que mata igual que con los
+    // demás, así que el último espadazo también se anuncia. Hasta hoy el que
+    // mataba no decía el daño — decía «You killed X — N experience», y eso no
+    // existe en el mod: su línea de experiencia está COMENTADA por su autor
+    // (playerstats.cpp:208, «no workie»).
+    suceso("ataque", golpeAsestado({
+      nombre: i.ficha.nombre, dano, tipo: ataque.tipoDano,
+      critico, tirada, umbral: CRITICO.umbral,
+    }));
     if (muerto) {
       cuentas.muertes++;
       bichosSolidos?.quitar(i);
@@ -4694,11 +4719,14 @@ async function arrancarJuego() {
       if (avisados.length) cuentas.avisos += avisados.length;
     } else {
       if (golpe.encoge) cuentas.encogidas++;
-      if (golpe.huye) { cuentas.huidas++; suceso("normal", `${i.ficha.nombre ?? "The monster"} flees`); }
-      suceso("ataque", `${critico ? "CRITICAL! " : ""}${dano.toFixed(1)} damage to ` +
-        `${i.ficha.nombre ?? "a monster"} — ` +
-        `${Math.max(0, i.vida).toFixed(0)} of ${i.vidaMaxima} left` +
-        `${golpe.encoge ? " · it flinches" : ""}`);
+      // HUIR NO SE ANUNCIA, y el contador se queda. La cadena de huir del mod
+      // —`npcatk_run "flee"` y lo que la rodea,
+      // `monsters/base_npc_attack_new.script:787-869`— no tiene un solo
+      // `playermessage`: el jugador ve que el bicho se va, no se lo leen.
+      // «The monster flees» era nuestra, igual que el aviso a los aliados que el
+      // 83 quitó por lo mismo. Y «it flinches» y el «N of M left» del informe de
+      // arriba también: el mod no te dice la vida que le queda a nada.
+      if (golpe.huye) cuentas.huidas++;
     }
     return { objetivo: i, dano, critico, muerto, encoge: golpe.encoge, huye: golpe.huye };
   }
@@ -4833,13 +4861,15 @@ async function arrancarJuego() {
       vidaMaxima: i.vidaMaxima ?? 0,
       porCubo: i.recibido,
     });
-    let total = 0, entregado = 0, subidas = 0;
+    // Sólo `total`: los acumuladores de «cuánto se apuntó» y «cuántos puntos
+    // subieron» eran para la línea que el 86 quitó, y un acumulador que nadie
+    // lee es un sitio donde cabe una regla sin correr (el 62). Lo que se apunta
+    // y lo que se pierde se mide donde vive, en las pruebas de `entrenar`.
+    let total = 0;
     for (const [cubo, cantidad] of Object.entries(xp)) {
       if (!(cantidad > 0)) continue;
       total += cantidad;
       const r = entrenar(p, cubo, cantidad);
-      entregado += r.entregado ?? 0;
-      subidas += r.subidas;
       if (r.subidas > 0) celebrarSubida(r.donde);
       // `CallScriptEvent("game_learnskill", {stat, substat, valor})` —
       // playerstats.cpp:180-188. Y los nombres van COMO LOS MANDA EL MOTOR,
@@ -4849,20 +4879,30 @@ async function arrancarJuego() {
       if (r.subidas > 0) avisarDeHabilidad(p, r.donde);
     }
     if (total > 0) {
-      // Se dicen LOS DOS números, y no es redundante: el motor recorta el
-      // reparto a lo que falta para el siguiente punto y **tira el resto**
-      // (ver `aprender`), así que «25 de experiencia» y «12 apuntados» son
-      // distintos y la diferencia es la regla. Sin los dos, un jugador que
-      // mata algo enorme y no ve subir nada sólo puede pensar que está roto.
-      // `game_xpgain` — 1: cuánta. El guion contesta con el mensaje del juego,
-      // en verde: «* 25 XP Awarded» (`gplayermessage`, player_main.script).
-      // Va ADEMÁS del nuestro y no en su lugar: el nuestro dice cuánto se
-      // apuntó y cuánto se perdió, que es la regla del 41 y el juego no la
-      // cuenta.
+      // LA EXPERIENCIA LA DICE EL GUION, y SÓLO el guion.
+      //
+      // `game_xpgain` — 1: cuánta. Contesta con el mensaje del juego, en verde:
+      // «* 25 XP Awarded» (`gplayermessage`, player_main.script), portado en el
+      // 65 y con su prueba en `test/juego_efectos65.test.mjs`.
+      //
+      // EL 86: aquí había además una línea nuestra —«You killed X — N
+      // experience (12 recorded: the rest is lost), 1 skill point!»— y era
+      // invención entera. En el mod la consola de sucesos NO anuncia la
+      // experiencia: su línea está comentada por su autor,
+      //
+      //     //SendInfoMsg( "You gain %d XP", EnemySkillLevel ); //thothie - XP report - no workie
+      //                                                   playerstats.cpp:208
+      //
+      // o sea que el único anuncio del juego es el verde del guion, y el nuestro
+      // era un tercero que lo contradecía con otro número al lado.
+      //
+      // El recorte al techo del punto siguiente es REGLA de verdad y sigue
+      // corriendo —`aprender`, del 41, tira lo que sobra—; lo que se quita es
+      // decirlo con cara de mensaje del juego. Es exactamente lo que el 83 hizo
+      // con el aviso a los aliados: el mecanismo está bien portado y lo
+      // inventado era contarlo. Quien quiera los dos números los tiene en
+      // `probe.reaccion` y en las pruebas de `entrenar`, que es donde se miden.
       guionJugador?.llamar("game_xpgain", [String(total)]);
-      suceso("bueno", `You killed ${i.ficha.nombre ?? "a monster"} — ${total} experience` +
-        (entregado < total ? ` (${entregado} recorded: the rest is lost)` : "") +
-        (subidas ? `, ${subidas} skill point${subidas > 1 ? "s" : ""}!` : ""));
     }
   }
   // ── EL TIRO CON ARCO ──────────────────────────────────────────────────────
@@ -5136,15 +5176,31 @@ async function arrancarJuego() {
           String(Math.round(d.parry.tirada)), String(Math.abs(Math.round(d.parry.acc))),
           String(Math.round(d.parry.valor)),
         ]);
-        if (!dicho) suceso("atacado", "You parried the blow!");
+        // EL 86: y el respaldo ya no es la frase nuestra. El 65 descubrió que
+        // «You parried the blow!» era invención y arregló el camino del guion,
+        // pero dejó aquí la vieja para no quedarse mudo sin guion horneado —
+        // así que la frase inventada siguió veinte experimentos al lado de su
+        // propia corrección. Ahora el respaldo arma EL MISMO texto del guion,
+        // con las mismas dos tiradas: lo que cambia es quién lo escribe.
+        if (!dicho) {
+          suceso("atacado", parryDelJugador(d.parry.tirada, Math.abs(d.parry.acc)));
+        }
         return;
       }
       if (!(d.dano > 0)) return;
       // Y QUE TE PEGAN SE DICE, que hasta ahora no se decía en ningún sitio.
       // Es el `HUDEVENT_ATTACKED` del motor —rojo, (240,0,0)— y es el único
       // aviso que tiene el jugador de que la vida que baja tiene un culpable:
-      // `%s hits you: %s` (giattack.cpp:1993).
-      suceso("atacado", `${i.ficha.nombre ?? "A monster"} hits you: ${d.dano.toFixed(1)} damage`);
+      // `"%s hits you: %s %s"`, giattack.cpp:1994.
+      //
+      // EL 86: la cita estaba bien y el texto no. Poníamos «3.4 damage» y el mod
+      // pone `szDamage`, que es `"%.1f%s damage."` con el elemento y el punto
+      // (`:1898`), más un tercer hueco que es el corchete de resistencia. Lo
+      // arma `src/play/mensajesdecombate.js`, con el detalle de los dos
+      // espacios y de por qué el corchete todavía no puede salir.
+      suceso("atacado", golpeRecibido({
+        nombre: i.ficha.nombre, dano: d.dano, tipo: i.ficha?.ia?.tipoDano,
+      }));
       // `game_damaged` — 1: atacante 2: daño. El guion se apunta que te han
       // atacado (`PL_BEEN_ATTACKED`) y de quién, que es lo que leen después el
       // hechizo de rejuvenecer y la barra de vida.
@@ -5219,20 +5275,35 @@ async function arrancarJuego() {
           // se puede comprobar matando algo, y entonces el recorte se esconde
           // detrás de la vida del bicho — un control que pasa sin medir nada.
           ultimoGolpe = s;
-          if (s.lejos) { suceso("malo", `You missed: ${s.porque}`); break; }
+          // EL 86: «You missed: too far» era nuestra. El mod dice `"Missed %s."`
+          // y no dice por qué (giattack.cpp:1965); el motivo sigue viajando y se
+          // lee en `ultimoGolpe`, que es donde lo mira la sonda.
+          if (s.lejos) { suceso("malo", falloAsestado(i?.ficha.nombre)); break; }
           if (s.parado || !s.vale) break;          // el `para` ya lo ha dicho
-          // Con el golpe que mata NO se dice la vida que queda: la de abajo es
-          // la línea de «Has matado a», que es la que el motor da. Decir las dos
-          // deja un «0 de daño — le quedan 0 de 80» delante del anuncio.
-          if (!s.muerto) {
-            suceso("ataque", `${s.dano ?? 0} damage to ${i?.ficha.nombre ?? "a monster"}` +
-              ` — ${Math.max(0, Math.round(s.vida ?? 0))} of ${i?.vidaMaxima ?? "?"} left`);
-          }
+          // EL INFORME, ahora con el formato del juego y TAMBIÉN en el golpe que
+          // mata: el `DoDamage` del mod informa antes de morirse nadie, así que
+          // el último espadazo se anuncia igual. Antes aquí se callaba a propósito
+          // para dejar sitio a la línea de «You killed», que era nuestra.
+          //
+          // LO QUE NO VIAJA, declarado y no inventado: el crítico. El dado lo
+          // tira el cliente y el servidor sólo devuelve el daño recortado, así
+          // que por esta rama no hay `iAccuracyRoll` ni umbral que enseñar y el
+          // «CRIT! (n/m)» no sale. Mandarlo es trabajo de red, no de texto; con
+          // un número inventado el mensaje mentiría exactamente como mentía antes.
+          suceso("ataque", golpeAsestado({
+            nombre: i?.ficha.nombre, dano: s.dano ?? 0, tipo: s.tipo,
+          }));
           if (s.muerto && s.experiencia?.total > 0) {
             const x = s.experiencia;
-            suceso("bueno", `You killed ${i?.ficha.nombre ?? "a monster"} — ${x.total} experience` +
-              (x.entregado < x.total ? ` (${x.entregado} recorded: the rest is lost)` : "") +
-              (x.subidas ? ` · ${x.subidas} skill point${x.subidas > 1 ? "s" : ""}!` : ""));
+            // EL 86, Y ESTE NO ES UN CAMBIO DE TEXTO: con servidor, la
+            // experiencia NO SE ANUNCIABA. Quien lo dice en el juego es el guion
+            // del jugador —`game_xpgain` → «* 25 XP Awarded», en verde— y esta
+            // rama nunca lo llamaba: el único aviso era la línea nuestra de «You
+            // killed X — N experience», que es la que el 86 quita por no existir
+            // en el mod. Quitarla sin esta llamada dejaba el multijugador mudo,
+            // así que el hueco lo enseñó el arreglo. El 81 otra vez: *un arreglo
+            // puede dejar al descubierto lo que tapaba*.
+            guionJugador?.llamar("game_xpgain", [String(x.total)]);
             // Y con servidor la celebración también: el cartel, el sonido y los
             // colores. Quién ha subido lo dice él, que es quien lleva la hoja.
             for (const donde of x.dondes ?? []) celebrarSubida(donde);
@@ -5240,11 +5311,15 @@ async function arrancarJuego() {
           break;
         case "pega":
           // Un bicho ha acertado. Si el que lo recibe soy yo, se dice: es el
-          // `HUDEVENT_ATTACKED` del motor —`%s hits you: %s`, giattack.cpp:1993—
-          // y es el único aviso de que la vida que baja tiene un culpable.
+          // `HUDEVENT_ATTACKED` del motor —`"%s hits you: %s %s"`,
+          // giattack.cpp:1994— y es el único aviso de que la vida que baja tiene
+          // un culpable. EL 86: mismo arreglo que en la rama de un solo jugador,
+          // y el tipo del bicho sale de su ficha, que el cliente ya tiene.
           if (s.a === `j${red.yo}`) {
             cuentas.golpesRecibidos++;
-            suceso("atacado", `${i?.ficha.nombre ?? "A monster"} hits you: ${s.dano} damage`);
+            suceso("atacado", golpeRecibido({
+              nombre: i?.ficha.nombre, dano: s.dano, tipo: i?.ficha?.ia?.tipoDano,
+            }));
           }
           break;
         default: break;
