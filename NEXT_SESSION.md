@@ -1,5 +1,31 @@
 # Dónde se quedó esto
 
+> **EL HUD SE VA 3,3 SEGUNDOS EN MULTIJUGADOR, Y NO ESTÁ DIAGNOSTICADO.**
+> Salió midiendo si la red aguanta Edana, porque el usuario quiere un servidor
+> público pequeño para un playtest. En **una pasada de cada tres**,
+> `sonda:red:edana` encuentra el HUD escondido y tarda **3 287 ms** en volver,
+> con el jugador **VIVO** (`vida 10/15`). Las otras dos pasadas tardan 81 y
+> 85 ms. `vivo` sale de `sesion.estado === ESTADO.JUGANDO`
+> (`src/main.js:6029`), así que **algo saca la sesión de «jugando» con red
+> puesta** — y las otras tres razones de `seVeElHud` (`src/play/hud.js:367`)
+> son panel abierto, escondido y sin cargar. No se adivina cuál: el control ya
+> imprime la cifra de vida y la espera para que la próxima pasada lo diga.
+>
+> Esto importa más de lo que parece: es lo primero que reportaría un
+> playtester, y en una partida de un solo jugador no se ve.
+>
+> **Y un 18 de 21 en Gate City que no se ha vuelto a reproducir** en cuatro
+> pasadas posteriores. No sé qué tres controles cayeron porque el `grep` de esa
+> pasada no pedía las líneas rojas — error mío de instrumento, no del juego.
+> Queda dicho porque **la fiabilidad de la sonda de red no está caracterizada**
+> y eso es justo lo que hace falta antes de abrir un servidor a gente.
+>
+> Lo que sí quedó arreglado en esa sonda (`cd7cdd2`): el control del HUD era
+> ruido con forma de rojo —leía una vez y medía su propia latencia, el 76— y el
+> marcador no podía bajar —«X de `controles.length`», el 65—. Seis pasadas
+> seguidas en verde tras el arreglo, 3 de Gate City y 3 de Edana.
+
+
 > **EL HUD DE EVENTOS DECÍA OCHO FRASES QUE EL JUEGO NO DICE (86).**
 > Reportado por el usuario: «el event hud me parece todavia tiene texto
 > inventado». Y las tenía. Medido buscando cada cadena en `../MSC/` y no
