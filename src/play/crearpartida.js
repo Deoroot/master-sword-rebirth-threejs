@@ -71,6 +71,15 @@
 // Para que no vuelva a pasar, un ajuste encendido tiene que decir DÓNDE se
 // aplica, en `aplica`, y hay una prueba que exige una de las dos cosas: o
 // `porQueNo`, o `aplica`. Un ajuste no puede estar callado.
+//
+// EL 85 LE AÑADIÓ LA SEGUNDA MITAD, y la enseñó el 84 en la otra tabla: una
+// frase que dice dónde se aplica **no dice que el valor llegue**, y además
+// envejece sola en cuanto alguien renombra la línea que nombra. Así que
+// `aplica` es ahora un objeto con `donde` (la prosa), `codigo` (pares
+// `[archivo, trozo]` que la prueba busca en el archivo de verdad) y `llega`
+// (el control que lo mide, en el estado en que el jugador mueve el ajuste) o
+// `pendiente` si nadie lo mide todavía. La forma entera está razonada en la
+// cabecera de `src/play/ajustes.js`, que es donde dolió.
 import { MAPAS_PORTADOS } from "./mapa.js";
 
 
@@ -113,7 +122,21 @@ export const AJUSTES = [
     // hace el original, así que se queda; lo que no puede quedarse es una
     // sonda que exija un nombre concreto después de no elegir ninguno, y
     // `sonda:arranque36` elegía. Ahora elige a mano antes de «Start».
-    aplica: "src/main.js, el «Start» de alEmpezar: mapaElegido(valores.mapa)",
+    // EL 85: `aplica` pasa de ser una frase a tener piezas que una prueba puede
+    // comprobar, y es el mismo motivo por el que el campo existe. Una frase
+    // envejece sola —basta que alguien renombre la línea— y «dice dónde se
+    // aplica» no es «el valor llega». Ver la cabecera de `src/play/ajustes.js`.
+    aplica: {
+      donde: "src/main.js:2674, el «Start» de `alEmpezar`: `mapaElegido(valores.mapa)`",
+      codigo: [["src/main.js", "mapaElegido(valores.mapa)"]],
+      // Y el control que vale es el de LO APLICADO, con su positivo al lado:
+      // con un mapa portado el valor correcto y el de reposo eran el mismo
+      // string, así que hace falta el caso en que nadie resuelve la fila.
+      llega: [
+        ["sondas/arranque36.mjs", "«Start» entra con el mapa que resuelve la fila"],
+        ["sondas/arranque36.mjs", "sin pasar por la ventana no hay mapa resuelto"],
+      ],
+    },
   },
 
   // ── NUESTRA, y se declara ───────────────────────────────────────────────
@@ -153,8 +176,20 @@ export const AJUSTES = [
     // el navegador sólo concede dentro del clic. Se avisa por consola y se
     // entra sin ella. Entrar al mapa que ya está cargado no recarga y sí la
     // consigue.
-    aplica: "src/main.js, el «Start» de alEmpezar: atraparTeclado(document.documentElement)" +
-      " — salvo si «Start» cambia de mapa, que recarga y pierde el gesto",
+    aplica: {
+      donde: "src/main.js:2654, el «Start» de `alEmpezar`: " +
+        "`atraparTeclado(document.documentElement)` — salvo si «Start» cambia de " +
+        "mapa, que recarga y pierde el gesto.",
+      codigo: [["src/main.js", "atraparTeclado(document.documentElement)"]],
+      // `sondas/pantalla38.mjs` mide la pantalla completa y el teclado
+      // atrapado de punta a punta, pero por la **B**, que es el otro camino
+      // (`src/main.js:3227`). Esta fila es la casilla de «Start», y la casilla
+      // no la toca ninguna sonda: `sondas/arranque36.mjs` pulsa «Start» con lo
+      // que la ventana trae puesto y no lee si se entró en pantalla completa.
+      pendiente: "ninguna sonda desmarca la casilla y comprueba la diferencia. Lo " +
+        "que `sondas/pantalla38.mjs` mide es el MISMO efecto por el otro camino, la " +
+        "tecla B (src/main.js:3227), que no pasa por esta fila.",
+    },
   },
 
   // ── Game ────────────────────────────────────────────────────────────────
@@ -281,7 +316,13 @@ export function porDefecto() {
  */
 export function cuenta() {
   const vivos = AJUSTES.filter((a) => !a.porQueNo);
-  return { total: AJUSTES.length, vivos: vivos.length, apagados: AJUSTES.length - vivos.length };
+  return {
+    total: AJUSTES.length, vivos: vivos.length, apagados: AJUSTES.length - vivos.length,
+    // Igual que en `ajustes.js`: «vivo» y «medido» son dos números distintos y
+    // van separados para que nadie lea uno creyendo el otro.
+    medidos: vivos.filter((a) => a.aplica?.llega?.length).length,
+    pendientes: vivos.filter((a) => !a.aplica?.llega?.length).map((a) => a.clave),
+  };
 }
 
 /**

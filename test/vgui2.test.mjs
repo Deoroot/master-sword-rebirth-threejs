@@ -373,16 +373,113 @@ test("cada ajuste apagado dice POR QUÉ, y ninguno se calla", () => {
 // de los retratos: **el valor de reposo pasando la prueba**. Aquí el reposo era
 // «no pone `porQueNo`».
 
-test("en «Create Server» todo ajuste o dice por qué no, o dice dónde se aplica", () => {
-  for (const a of AJUSTES_CS) {
-    const callado = !a.porQueNo && !a.aplica;
-    assert.ok(!callado,
-      `«${a.clave}» no dice ni por qué no hace nada ni dónde se aplica: ` +
-      `o se le pone \`porQueNo\`, o se le pone \`aplica\` y se enchufa de verdad`);
-    // Y ninguno de los dos vale como coartada si no dice nada.
-    if (a.aplica) assert.ok(a.aplica.length > 20, `el \`aplica\` de ${a.clave} no dice dónde`);
-    if (a.porQueNo) assert.ok(a.porQueNo.length > 20, `el motivo de ${a.clave} no explica nada`);
-  }
+// LAS DOS TABLAS, CON LA MISMA REGLA — el 85.
+//
+// `src/play/ajustes.js` tenía 21 filas con `porQueNo` y **cero** con `aplica`:
+// o sea que el lado que dice «esto hace algo» seguía siendo un campo vacío,
+// que es exactamente lo que esta prueba vino a cerrar en la otra tabla. Y el
+// 84 enseñó que la frase no basta: `aplicarAjustes` nace `null` y lo escribe
+// el armado del mundo, así que mover el volumen en el menú principal no hacía
+// nada mientras la función que lo reparte existía, se llamaba y funcionaba —en
+// el único estado en el que el jugador no estaba. Un `aplica` que sólo nombre
+// una función no puede ver eso.
+//
+// Así que se comprueban las tres piezas: que la línea citada EXISTE en el
+// archivo que dice (si alguien la renombra, esto se pone rojo en vez de
+// envejecer), que el control citado existe en la sonda que dice, y que un
+// ajuste vivo sin control lo declare `pendiente` en vez de contarse entre los
+// verdes, que es lo que pide el apartado 4 de CLAUDE.md.
+const TABLAS = [["Options", AJUSTES.filter((a) => a.tipo !== "nota")], ["Create Server", AJUSTES_CS]];
+
+for (const [nombre, filas] of TABLAS) {
+  test(`en «${nombre}» todo ajuste o dice por qué no, o dice dónde se aplica`, () => {
+    for (const a of filas) {
+      const callado = !a.porQueNo && !a.aplica;
+      assert.ok(!callado,
+        `«${a.clave}» no dice ni por qué no hace nada ni dónde se aplica: ` +
+        `o se le pone \`porQueNo\`, o se le pone \`aplica\` y se enchufa de verdad`);
+      assert.ok(!(a.porQueNo && a.aplica),
+        `«${a.clave}» dice las dos cosas a la vez: o no hace nada, o se aplica`);
+      if (a.porQueNo) assert.ok(a.porQueNo.length > 20, `el motivo de ${a.clave} no explica nada`);
+      if (!a.aplica) continue;
+      assert.ok(a.aplica.donde?.length > 20, `el \`aplica\` de ${a.clave} no dice dónde`);
+      assert.ok(a.aplica.codigo?.length, `el \`aplica\` de ${a.clave} no cita ninguna línea`);
+      // O lo mide alguien, o se declara pendiente. Las dos cosas a la vez no:
+      // «hay un control» y «no hay ninguno» no pueden ser verdad del mismo.
+      const medido = Boolean(a.aplica.llega?.length);
+      assert.ok(medido !== Boolean(a.aplica.pendiente),
+        `«${a.clave}»: o \`llega\` con el control que lo mide, o \`pendiente\` con por qué no`);
+      if (!medido) {
+        assert.ok(a.aplica.pendiente.length > 40,
+          `el \`pendiente\` de ${a.clave} no dice qué falta por medir`);
+      }
+    }
+  });
+
+  test(`y en «${nombre}» la línea que aplica cada ajuste SIGUE ESTANDO`, () => {
+    // Ésta es la que no envejece sola. Un `aplica` en prosa se queda escrito
+    // igual de bonito el día que alguien renombre `raton.poner` o se lleve la
+    // línea del menú, y entonces vuelve a ser un campo que dice «esto
+    // funciona» sin que nadie lo haya comprobado — el 84 otra vez.
+    const leido = new Map();
+    const lee = (ruta) => {
+      if (!leido.has(ruta)) leido.set(ruta, existsSync(ruta) ? readFileSync(ruta, "utf8") : null);
+      return leido.get(ruta);
+    };
+    const faltan = [];
+    for (const a of filas) {
+      for (const [ruta, trozo] of a.aplica?.codigo ?? []) {
+        const src = lee(ruta);
+        if (src === null) { faltan.push(`${a.clave}: no está el archivo ${ruta}`); continue; }
+        if (!src.includes(trozo)) faltan.push(`${a.clave}: ${ruta} ya no lleva «${trozo}»`);
+      }
+      for (const [ruta, queDice] of a.aplica?.llega ?? []) {
+        const src = lee(ruta);
+        if (src === null) { faltan.push(`${a.clave}: no está la sonda ${ruta}`); continue; }
+        if (!src.includes(queDice)) faltan.push(`${a.clave}: ${ruta} ya no tiene el control «${queDice}»`);
+      }
+    }
+    assert.deepEqual(faltan, [], `citas que ya no valen:\n  ${faltan.join("\n  ")}`);
+  });
+}
+
+test("y los ajustes vivos SIN control de llegada son exactamente éstos", () => {
+  // Escrita a mano a propósito, como la de «Create Server» de más abajo y por
+  // lo mismo: una lista calculada volvería a estar de acuerdo consigo misma.
+  // Quien mida uno de éstos tiene que venir aquí a borrarlo de la lista, y
+  // quien encienda un ajuste nuevo sin medirlo tiene que venir a ponerlo.
+  //
+  // Los cuatro, con su motivo en la tabla:
+  //
+  //   `filtro`      nadie pulsa la casilla, y su reposo es `true`
+  //   `volumenMp3`  nadie arrastra el deslizador de la música: los dos
+  //                 controles que la nombran comprueban que sigue en su 0,2
+  //   `gamma`       el deslizador que se arrastra en Video es el del brillo
+  //   `teclas`      se reasigna por la API y no pulsando la tabla
+  assert.deepEqual(cuenta().pendientes.sort(),
+    ["filtro", "gamma", "teclas", "volumenMp3"]);
+  assert.equal(cuenta().medidos + cuenta().pendientes.length, cuenta().vivos);
+  // Y en «Create Server», la casilla de pantalla completa: lo que `pantalla38`
+  // mide es el mismo efecto por la tecla B, que no pasa por esa fila.
+  assert.deepEqual(cuentaCS().pendientes, ["pantallaCompleta"]);
+});
+
+test("el volumen declara LOS DOS caminos, que es el fallo del 84", () => {
+  // No es un ajuste cualquiera: es el que demuestra que «dónde se aplica» no
+  // es una línea. El deslizador del volumen sale por dos sitios —los `Audio`
+  // del menú y el nodo de Web Audio— y el jugador lo mueve primero en el
+  // estado donde sólo existe el primero. Si alguien deja esto en un camino,
+  // el otro se queda sin decir y vuelve a poderse romper en silencio.
+  const a = ajuste("volumen").aplica;
+  const rutas = a.codigo.map(([r]) => r);
+  assert.ok(rutas.includes("src/juego/menums.js"),
+    "falta el camino del menú: el volumen de los `Audio` del DOM");
+  assert.ok(a.codigo.some(([, t]) => t.includes("ponVolumen")),
+    "falta la línea que reparte el volumen cuando todavía no hay mapa");
+  // Y el control que lo mide SIN MAPA, que es la mitad que no puede dar el
+  // resto de la sonda: `sondas/ajustes37.mjs` entra en la partida para medir.
+  assert.ok(a.llega.some(([r]) => r === "sondas/menu52.mjs"),
+    "nadie lo mide en el menú principal, que es donde estaba el fallo");
 });
 
 test("y los que dicen estar vivos son EXACTAMENTE los que están enchufados", () => {

@@ -166,6 +166,10 @@ De los 30 controles de la ventana, **9 vivos y 21 apagados**, cada uno con su
 razón escrita. La cuenta la calcula `cuenta()`, así que no se puede quedar
 vieja.
 
+> **Corrección del 85:** «cada uno con su razón escrita» valía para los 21
+> apagados. Los **9 vivos no tenían nada**, y al rellenarlo salió que sólo 5 de
+> los 9 los mide alguien. Ver el apartado 10.
+
 ---
 
 ## 7. Lo que separa esta sonda de las pruebas
@@ -266,3 +270,125 @@ el cabeceo. Corridas: `sonda:mundo` **40/40** y `sonda:golpe` **25/25**.
 npm test                   # 1 000 pruebas
 npm run sonda:ajustes37    # 14 controles, con un Chromium de verdad
 ```
+
+---
+
+## 10. El 85: la tabla tenía 21 motivos y ningún `aplica`
+
+Esto se añade al lado y no reescribe nada de arriba: lo de arriba se midió y es
+cierto. Lo que envejeció es **la mitad de la tabla que nadie pedía**.
+
+El apartado 6 dice «9 vivos y 21 apagados, cada uno con su razón escrita», y era
+verdad a medias: los 21 apagados tenían su `porQueNo` y los **9 vivos no tenían
+nada**. «Vivo» era un campo vacío — exactamente la forma que `crearpartida.js`
+aprendió a base de golpes en el 36, donde `mapa` y `nombre` pasaron por vivos sin
+llegar al juego y la cuenta decía tres. Esa tabla pide `porQueNo` o `aplica` desde
+entonces, con una prueba que lo exige; ésta se quedó con medio contrato durante
+cuarenta y ocho experimentos.
+
+### Por qué una frase no bastaba, y lo dice el 84
+
+Si en el 37 se hubiera escrito `aplica: "lo reparte aplicarAjustes"`, habría
+estado en verde todo el tiempo y el fallo del 84 habría pasado por debajo igual:
+`aplicarAjustes` nace `null` (`src/main.js:442`) y lo escribe el armado del
+mundo, así que **en el menú principal no había nadie a quien decírselo**. La
+función existía, se llamaba y hacía su trabajo — en el único estado en el que el
+jugador no estaba cuando mueve el deslizador. Lo reportó el usuario jugando:
+«*de hecho parece que no funciona para nada*».
+
+Así que `aplica` lleva tres piezas, y las tres las comprueba
+`test/vgui2.test.mjs`:
+
+| pieza | qué es | qué fallo caza |
+| --- | --- | --- |
+| `donde` | la prosa, con archivo y línea | nada por sí sola: es para leerla |
+| `codigo` | pares `[archivo, trozo literal]` | que alguien renombre o se lleve la línea que aplica el ajuste. La prueba abre el archivo y busca el trozo |
+| `llega` | pares `[archivo, texto del control]` | que **nadie mida que el valor llega**, y en el estado en que el jugador lo mueve |
+| `pendiente` | en vez de `llega` | que un ajuste sin control se cuente entre los verdes |
+
+### Lo que salió al rellenarla: cuatro de los nueve no los mide nadie
+
+La cuenta se calcula (`cuenta().medidos` y `cuenta().pendientes`), y **«vivo» y
+«medido» resultaron ser dos números distintos**: 9 vivos, **5 medidos y 4
+pendientes**. Los cuatro, con lo que tiene cada uno de interesante:
+
+- **`m_filter`** — el instrumento ya existe (`probe.ajustes.gradosPorCuenta()`
+  devuelve `filtro`, `src/dev/sonda.js:934`); lo que no hay es quien pulse la
+  casilla. Y su reposo es `true`, o sea que un control que leyera el estado
+  inicial estaría en verde con la casilla desconectada.
+- **`MP3Volume`** — aquí había un verde con forma de medida. Los dos controles
+  que nombran la música comprueban que sigue valiendo **0,2** mientras se mueve
+  el deslizador de EFECTOS: 0,2 es el valor del `config.cfg`, o sea el de
+  reposo. Son buenos controles de que los dos canales están separados y no son
+  ninguna medida de esta fila; **siguen verdes con el deslizador de la música
+  desconectado**, porque ninguno lo toca. Apuntarlos como `llega` habría sido
+  escribir el apartado 4 a mano.
+- **`gamma`** — comparte la línea de aplicación con el brillo, y aun así va
+  aparte por el 50: el deslizador que se arrastra en la pestaña Video es el del
+  brillo, así que apoyarse en su control sería contar el verde de la fila de al
+  lado.
+- **las teclas** — `sondas/fisica.mjs:181` reasigna y mide el efecto, pero
+  llamando a `probe.teclas.asignar` **a mano**: es el 59 otra vez, mide que
+  `Teclas` sabe reasignar y no que la tabla de la ventana llegue hasta ella.
+
+En «Create Server» pasa lo mismo con uno: `pantallaCompleta`. Lo que
+`sondas/pantalla38.mjs` mide es el mismo efecto **por el otro camino**, la tecla
+B (`src/main.js:3227`), que no pasa por esa casilla.
+
+### El control que faltaba, y la rotura que demuestra que hacía falta
+
+El volumen tiene **dos caminos** y el que el jugador usa primero es el que no
+estaba medido: los `Audio` del DOM del menú (`src/main.js:690` →
+`menums.js:333`) y el nodo de Web Audio (`src/main.js:1753`), que no existe
+hasta que hay mapa. `sondas/ajustes37.mjs` mide los dos, pero **entra en la
+partida para medirlos**; `sondas/menu52.mjs` es la sonda que está en el menú sin
+mapa, y lo único que medía allí era el volumen **con el que nace** el menú, que
+lo pone `montarMenu({ volumen })` y no lo ha movido nadie.
+
+Así que el control nuevo abre «Options» **pulsando la entrada del menú** —no
+`abrirOpciones()`, que es la forma de salir verde sin probar el camino—,
+arrastra el deslizador y lee el `volume` de los `Audio`:
+
+```
+    volumen sonidos 0.12 (config.cfg: 0.12 · un Audio nuevo: 1)
+    tras moverlo    0.7 (pedido 0.7)
+    ok   movido EN EL MENÚ y sin mapa, el volumen LLEGA a los sonidos del menú
+```
+
+Y nació verde, que no vale de nada: la lección del 79 es que **un control recién
+escrito no es más fiable que uno viejo**. Roto a propósito con la forma exacta
+del 84 —`ponVolumen` aplica la primera vez y las siguientes no, o sea el valor de
+partida llega y el movido no—, el resultado es el que dice si el control añade
+algo:
+
+| control | con el fallo puesto |
+| --- | --- |
+| «los sonidos del menú suenan al volumen del `config.cfg`» | **verde** (0,12) |
+| «CONTROL POSITIVO: hay sonidos montados y NO están al 1» | **verde** (0,12) |
+| «movido EN EL MENÚ y sin mapa, el volumen LLEGA» | **ROJO**: la ventana pide 0,70 y los `Audio` suenan a 0,12 |
+
+O sea que los dos que ya había no podían ver el fallo del 84 después de
+arreglado, y el nuevo sí. `sonda:menu52` pasa de 22 a **23 controles**.
+
+Las dos pruebas nuevas se rompieron también, y por separado: cambiando el trozo
+citado (`raton.poner({ sensibilidad` → `sensitivity`) sale
+*«src/main.js ya no lleva…»*, y dándole a `filtro` un `llega` y un `pendiente` a
+la vez saltan dos rojas, la del contrato y la lista escrita a mano. Las roturas
+se comprobaron con un `assert` que falla si el patrón no casa y con un `grep`
+después — el 80, que costó media hora de medir un fallo que no estaba puesto.
+
+### Dónde se puede haber medido mal esto
+
+- **`codigo` comprueba que el trozo está en el archivo, no que se ejecute.**
+  Alguien puede dejar la línea viva dentro de una rama muerta y la prueba
+  seguirá verde. Lo que cubre eso es `llega`, y es la razón de que `llega` no
+  sea opcional sin decirlo.
+- **La lista de pendientes está escrita a mano**, y eso es a propósito (el 50),
+  pero significa que su valor depende de que quien encienda un ajuste venga
+  aquí. La prueba obliga a pasar por ella: añadir un vivo sin `llega` la pone
+  roja.
+- **El control nuevo mide el volumen del menú, no lo que se oye.** Lee el
+  `volume` de los tres `Audio`, que es donde estaba el fallo; que el navegador
+  los mezcle a ese nivel no lo mide nadie.
+- **`gamma` sigue sin medirse**, y no se ha tapado con el control del brillo a
+  pesar de que comparten línea. Está declarado, no resuelto.

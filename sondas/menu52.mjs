@@ -120,6 +120,59 @@ control("los sonidos del menú suenan al volumen del `config.cfg`, no a 1",
 control("CONTROL POSITIVO: hay sonidos montados y NO están al 1 de reposo",
   volMenu !== null && volMenu !== 1,
   `${volMenu}; el fallo del 84 daba exactamente 1`);
+
+// ── Y MOVER EL DESLIZADOR AQUÍ, QUE ES LA OTRA MITAD — el 85 ──────────────
+//
+// Lo de arriba mide el volumen CON EL QUE NACE el menú, que es media medida:
+// pasa igual con el deslizador desconectado, porque ese número lo pone
+// `montarMenu({ volumen })` al arrancar (`src/main.js:2577`) y no lo ha movido
+// nadie. La otra mitad —la que el usuario reportó— es **moverlo estando aquí**,
+// en el menú principal y sin mapa cargado, que es el estado en el que
+// `aplicarAjustes` todavía es `null` (`src/main.js:442`).
+//
+// Se entra por donde entra el jugador: se pulsa la entrada «Options» del menú,
+// que es la que lleva a `hacer({ que: "opciones" })` (`src/main.js:2586`). No se
+// llama a `abrirOpciones()`, que es la forma de que esto salga verde sin probar
+// el camino.
+//
+// Y lo que se lee es el `volume` de los `Audio`, no el valor de la ventana: es
+// el apartado 3 de CLAUDE.md —se mide el efecto, no el valor de la ventana— y
+// es justo la diferencia que tenía el fallo.
+let volMovido = null, pedido = null, comoFue = "no se llegó a abrir Options";
+try {
+  await pag.click('.ms-menu-op[data-que="opciones"]');
+  await pag.waitForSelector(".v2-pestana", { timeout: 5000 });
+  await pag.click(".v2-pestana:nth-child(4)");            // Audio
+  await pag.waitForTimeout(200);
+  const caja = await (await pag.$(".v2-deslizador")).boundingBox();
+  await pag.mouse.click(caja.x + caja.width * 0.7, caja.y + caja.height / 2);
+  await pag.waitForTimeout(150);
+  pedido = await pag.evaluate(() => window.probe.vgui2.estado().opciones.valores.volumen);
+  // Con el aspecto «códice» no hay «Apply»: lo que se toca entra al tocarlo.
+  // Son dos contratos distintos y el control mide el que esté puesto, como ya
+  // hace `sondas/ajustes37.mjs`.
+  for (const b of await pag.$$(".v2-boton")) {
+    if ((await b.textContent()) === "Apply") { await b.click(); break; }
+  }
+  await pag.waitForTimeout(300);
+  volMovido = await pag.evaluate(() => window.probe.menu.volumen());
+  comoFue = `la ventana pide ${pedido?.toFixed?.(2)}, los Audio del menú suenan a ${volMovido}`;
+} catch (e) {
+  comoFue = `no se pudo mover: ${String(e).slice(0, 120)}`;
+}
+console.log(`    tras moverlo    ${volMovido} (pedido ${pedido})`);
+// Las tres condiciones, y ninguna sobra: que llegue AL NÚMERO QUE PIDE LA
+// VENTANA (sin esto, un «ya no vale 0,12» lo cumple cualquier número), que haya
+// CAMBIADO respecto del de partida (sin esto, el verde sale de la coincidencia
+// y no del viaje) y que el deslizador se haya movido de verdad.
+control("movido EN EL MENÚ y sin mapa, el volumen LLEGA a los sonidos del menú",
+  volMovido !== null && pedido !== null && Math.abs(volMovido - pedido) < 1e-6
+    && Math.abs(volMovido - volMenu) > 1e-6 && pedido > 0.12,
+  comoFue);
+// Y se deja el menú como estaba: lo que viene detrás mide el fondo y los
+// miradores, y una ventana de VGUI2 delante los tapa (`tapado`).
+await pag.keyboard.press("Escape");
+await pag.waitForTimeout(300);
 // ── EL 72 DIO LA VUELTA A ESTAS DOS ───────────────────────────────────────
 //
 // Hasta el 71 aquí se exigía `fondoVivo === true`: la primera pantalla era la

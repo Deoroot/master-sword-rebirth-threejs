@@ -24,6 +24,40 @@
 //
 // Cada ajuste lleva `porQueNo` cuando no se puede cumplir. Que ese campo esté
 // vacío es lo que significa «esto funciona».
+//
+// ── Y «esto funciona» NO PUEDE SER UN CAMPO VACÍO ─────────────────────────
+//
+// Es el apartado 5 de CLAUDE.md y es la vacuna contra el 4: **un ajuste no
+// puede quedarse callado**. `crearpartida.js` lo aprendió a base de golpes —
+// `mapa` y `nombre` estaban los dos sin `porQueNo` y ninguno de los dos llegaba
+// al juego— y desde entonces esa tabla pide `porQueNo` o `aplica`. Esta otra
+// tenía 21 filas con `porQueNo` y **ninguna** con `aplica`: o sea que el lado
+// que dice «esto hace algo» era otra vez un campo vacío, aquí dentro.
+//
+// El fallo que obliga a que `aplica` sea más que un nombre de función es el del
+// 84, que lo reportó el usuario jugando: `aplicarAjustes` nace `null` en
+// `src/main.js:442` y lo escribe el armado del mundo, así que **antes de cargar
+// un mapa el `?.` no llamaba a nadie** y mover el volumen en el menú principal
+// no hacía nada. Un `aplica: "lo reparte aplicarAjustes"` habría estado en
+// verde todo ese tiempo: la función existía, se llamaba y hacía su trabajo —
+// en el único estado en el que el jugador no estaba.
+//
+// Así que `aplica` lleva tres cosas, y las tres se comprueban en
+// `test/vgui2.test.mjs`:
+//
+//   `donde`      la prosa, con archivo y línea.
+//   `codigo`     pares `[archivo, trozo literal]`. La prueba abre el archivo y
+//                busca el trozo: si alguien renombra la línea que aplica el
+//                ajuste, esto se pone rojo en vez de envejecer en silencio.
+//   `llega`      pares `[archivo, texto del control]` del control que mide que
+//                el valor LLEGA, y **en el estado en que el jugador lo mueve**.
+//                Es lo único que distingue «la línea está escrita» de «el
+//                número llega»: ver el volumen, que tiene dos caminos y por eso
+//                dos controles.
+//   `pendiente`  en vez de `llega`, cuando NADIE lo mide todavía. Dicho, no
+//                tapado: el apartado 4 pide que un control que no existe se
+//                declare pendiente en vez de contarse entre los verdes, y
+//                cuatro de los nueve vivos de aquí están así.
 
 /** Los tipos de control, que son los que hay en las capturas. */
 export const TIPOS = {
@@ -53,6 +87,8 @@ export const PESTANAS = ["Multiplayer", "Keyboard", "Mouse", "Audio", "Video", "
  *   `etiqueta` la clave de `gameui_english.txt`, o el texto si el juego lo
  *              escribe a pelo. Lo resuelve `texto()` de `src/vgui2/esquema.js`.
  *   `porQueNo` vacío si el ajuste hace algo; si no, por qué no puede.
+ *   `aplica`   dónde se aplica y quién mide que llega. **Uno de los dos, nunca
+ *              ninguno**: ver la cabecera.
  */
 export const AJUSTES = [
   // ── Multiplayer ─────────────────────────────────────────────────────────
@@ -73,6 +109,17 @@ export const AJUSTES = [
     //
     // — o sea que este cuadro es el nombre que te PROPONE el juego cuando creas
     // un personaje, y lo que escribas ahí es lo que sale escrito allí.
+    aplica: {
+      donde: "src/main.js:1755, dentro de `aplicarAjustes`: se lo pasa al panel " +
+        "`newchar` de VGUI, que es quien escribe el cuadro de crear personaje.",
+      codigo: [["src/main.js", 'vgui?.buscar("newchar")?.proponerNombre']],
+      // Y el control vale porque el valor de reposo NO es éste: el cuadro
+      // arrancaba VACÍO, así que «dice Adventurer» no se cumple sin que el
+      // ajuste haya viajado. Lo que este control no mide es un nombre
+      // CAMBIADO —la sonda no escribe en la caja de «Player name»—, y eso se
+      // dice aquí en vez de dejarlo entendido.
+      llega: [["sondas/ajustes37.mjs", "la pantalla de personajes PROPONE el nombre del cvar"]],
+    },
   },
   {
     pestana: "Multiplayer", clave: "spray", cvar: "cl_logofile", tipo: TIPOS.DESPLEGABLE,
@@ -95,7 +142,26 @@ export const AJUSTES = [
   // La única pestaña que ya estaba hecha, y la única que se mueve entera: las
   // teclas son `src/juego/teclas.js` desde el experimento 24 y salen del mismo
   // `config.cfg`.
-  { pestana: "Keyboard", clave: "teclas", tipo: TIPOS.TECLAS, etiqueta: "Master Sword Commands" },
+  {
+    pestana: "Keyboard", clave: "teclas", tipo: TIPOS.TECLAS, etiqueta: "Master Sword Commands",
+    aplica: {
+      // Esta fila no pasa por `aplicarAjustes` ni por «Apply»: la tabla escribe
+      // directamente en el `Teclas` vivo que le pasa `main.js`, así que una
+      // reasignación entra en el acto. Por eso su `codigo` está en la ventana y
+      // no en el reparto.
+      donde: "src/vgui2/opciones.js:323, la tabla de teclas escribe en el `Teclas` " +
+        "vivo (`src/juego/teclas.js`) sin pasar por «Apply»: entra en el acto.",
+      codigo: [["src/vgui2/opciones.js", "this.teclas?.asignar(esperando, e.code)"]],
+      // `sondas/fisica.mjs:181` reasigna y mide el efecto, pero llama a
+      // `probe.teclas.asignar` A MANO: es el 59 —la prueba construye lo que el
+      // llamador se equivoca al pasar—, así que mide que `Teclas` sabe
+      // reasignar y no que la tabla de la ventana llegue hasta ella. Ninguna
+      // sonda pulsa una fila de la pestaña Keyboard.
+      pendiente: "ninguna sonda reasigna desde la VENTANA: `sondas/fisica.mjs:181` " +
+        "llama a `probe.teclas.asignar` a mano, que es el camino de la API y no el " +
+        "del jugador. Lo que falta es pulsar una fila de la pestaña Keyboard.",
+    },
+  },
 
   // ── Mouse ───────────────────────────────────────────────────────────────
   {
@@ -105,6 +171,14 @@ export const AJUSTES = [
     // En el motor no es una casilla: es el SIGNO de `m_pitch`. Negativo es
     // invertido. La casilla de la ventana escribe el signo, y por eso el valor
     // por defecto sale de que `m_pitch` es positivo en el `config.cfg`.
+    aplica: {
+      donde: "src/main.js:1752, `aplicarAjustes` → `raton.poner({ invertido })` " +
+        "→ `Raton` de src/play/aplicar.js, que es quien pone el signo.",
+      codigo: [["src/main.js", "raton.poner({ sensibilidad: v.sensibilidad, invertido: v.ratonInvertido"]],
+      // El control mide los dos lados, que es lo que hace que no sea un «se
+      // movió»: el cabeceo cambia de signo Y el giro no se entera.
+      llega: [["sondas/ajustes37.mjs", "cambia el SIGNO del cabeceo y no toca el giro"]],
+    },
   },
   {
     pestana: "Mouse", clave: "mirarConRaton", cvar: "lookspring", tipo: TIPOS.CASILLA,
@@ -115,6 +189,20 @@ export const AJUSTES = [
     pestana: "Mouse", clave: "filtro", cvar: "m_filter", tipo: TIPOS.CASILLA,
     etiqueta: "#GameUI_MouseFilter", descripcion: "#GameUI_MouseFilterLabel",
     pordefecto: true, cfg: 'm_filter "1"',
+    aplica: {
+      donde: "src/main.js:1752, `aplicarAjustes` → `raton.poner({ filtro })`: la " +
+        "media de dos muestras de `inputw32.cpp:527-535`, en src/play/aplicar.js:100.",
+      codigo: [["src/main.js", "filtro: v.filtro"], ["src/play/aplicar.js", "if (this.filtro)"]],
+      // El valor SE PUEDE leer —`probe.ajustes.gradosPorCuenta()` devuelve
+      // `filtro` (src/dev/sonda.js:934)—, así que lo que falta no es el
+      // instrumento: es que nadie pulse la casilla y lo lea. Y aquí el reposo
+      // es `true`, o sea que un control que mirara sólo el estado inicial
+      // estaría en verde con la casilla desconectada: el apartado 4 entero.
+      pendiente: "ninguna sonda pulsa «Mouse filter». Las pruebas de Node miden la " +
+        "fórmula del filtro (`test/juego_ajustes.test.mjs`) construyendo el `Raton` " +
+        "ellas, que es el 59; y el reposo de la casilla es `true`, así que leer el " +
+        "estado inicial pasaría igual con la casilla sin enchufar.",
+    },
   },
   {
     pestana: "Mouse", clave: "joystick", cvar: "joystick", tipo: TIPOS.CASILLA,
@@ -143,6 +231,15 @@ export const AJUSTES = [
     decimales: 1, cfg: 'sensitivity "10"',
     // Las puntas 0.20 y 20.00 están medidas de la captura; el 10 sale del
     // archivo. Que coincidan es la comprobación de que la escala es ésta.
+    aplica: {
+      donde: "src/main.js:1752, `aplicarAjustes` → `raton.poner({ sensibilidad })`: " +
+        "multiplica las dos cuentas en src/play/aplicar.js (`inputw32.cpp:452`).",
+      codigo: [["src/main.js", "raton.poner({ sensibilidad: v.sensibilidad"]],
+      // Y el control no dice «ya no vale 0,22»: dice que gira **lo que pide la
+      // ventana × m_yaw**, que es lo único que no se cumple con un número
+      // cualquiera. El deslizador se arrastra con el ratón, no se escribe.
+      llega: [["sondas/ajustes37.mjs", "gira lo que dice la ventana"]],
+    },
   },
 
   // ── Audio ───────────────────────────────────────────────────────────────
@@ -150,6 +247,33 @@ export const AJUSTES = [
     pestana: "Audio", clave: "volumen", cvar: "volume", tipo: TIPOS.DESLIZADOR,
     etiqueta: "#GameUI_SoundEffectVolume", min: 0, max: 1, pordefecto: 0.12,
     decimales: 2, cfg: 'volume "0.120000"',
+    // ESTE ES EL AJUSTE QUE OBLIGA A QUE `aplica` SEA ASÍ, y el fallo es el 84.
+    //
+    // Tiene DOS caminos, y el que se había escrito no era el que el jugador
+    // usa primero: el deslizador se mueve en el menú principal, donde no hay
+    // mapa, y ahí `aplicarAjustes` todavía es `null`.
+    aplica: {
+      donde: "dos caminos, y hacen falta los dos. (1) src/main.js:690, en " +
+        "`alAplicar` y DELANTE del `aplicarAjustes?.(…)`, porque el menú es " +
+        "justo donde el otro no existe: `menuMs.ponVolumen` (src/juego/menums.js:333) " +
+        "pone el `volume` de los tres `Audio` del DOM. (2) src/main.js:1753, " +
+        "`audio.volumenes({ efectos })`, el nodo de ganancia de Web Audio, que no " +
+        "existe hasta que hay mapa.",
+      codigo: [
+        ["src/main.js", "menuMs?.ponVolumen?.(valores.volumen)"],
+        ["src/main.js", "audio.volumenes({ efectos: v.volumen"],
+        ["src/juego/menums.js", "const ponVolumen = (v) =>"],
+      ],
+      // Tres controles y ninguno sobra: el primero mide el nodo de Web Audio
+      // —que estaba en verde con el menú sonando a 1—, el segundo que llega a
+      // los `Audio` del DOM, y el tercero es el único que lo mide **en el menú
+      // y sin mapa cargado**, que es el estado del fallo.
+      llega: [
+        ["sondas/ajustes37.mjs", "lo sube en el nodo de Web Audio, no en un campo"],
+        ["sondas/ajustes37.mjs", "LLEGA A LOS SONIDOS DEL MENÚ"],
+        ["sondas/menu52.mjs", "movido EN EL MENÚ y sin mapa"],
+      ],
+    },
   },
   {
     pestana: "Audio", clave: "volumenMp3", cvar: "MP3Volume", tipo: TIPOS.DESLIZADOR,
@@ -160,6 +284,23 @@ export const AJUSTES = [
     // las cambia por zona (`src/main.js`, `audio.musica(zona.musica)`). El
     // ajuste estaba apagado por una frase que ya no era verdad, no por un
     // límite. Es el canal de música, aparte del de efectos, como en el motor.
+    aplica: {
+      donde: "src/main.js:1753, `audio.volumenes({ musica })`: el canal de música, " +
+        "aparte del de efectos, que es lo que hace el motor.",
+      codigo: [["src/main.js", "musica: v.volumenMp3"]],
+      // OJO CON LOS DOS CONTROLES QUE YA HAY: «la música va por su canal, con
+      // su propio 0,2» y «la música NO se mueve con ella» miden los dos que
+      // `musica` vale **0,2**, que es el valor por defecto del `config.cfg`.
+      // O sea el valor de reposo: los dos siguen verdes con este deslizador
+      // desconectado, porque ninguno lo toca. Son buenos controles de la
+      // separación de canales y no son ninguna medida de que este ajuste
+      // llegue; apuntarlos aquí como `llega` sería el apartado 4 escrito a
+      // mano. Ningún camino arrastra el deslizador de «MP3 volume».
+      pendiente: "ninguna sonda arrastra el deslizador de la música. Los dos " +
+        "controles que la nombran en `sondas/ajustes37.mjs` comprueban que sigue " +
+        "en el 0,2 del `config.cfg` —el valor de reposo— mientras se mueve el OTRO " +
+        "deslizador: miden la separación de canales, no esta fila.",
+    },
   },
   {
     pestana: "Audio", clave: "calidad", cvar: "s_a3d", tipo: TIPOS.DESPLEGABLE,
@@ -196,11 +337,40 @@ export const AJUSTES = [
     // El brillo y la gamma de GoldSrc no son un filtro encima: entran en la
     // rampa con la que se decodifica el mapa de luz. Aquí eso es
     // `src/bsp/gamma.js`, que ya existe desde el experimento 08.
+    aplica: {
+      donde: "src/main.js:1757, `aplicarAjustes` → `rehacerMapaDeLuz`, que es lo " +
+        "único que hace el motor al mover la gamma (`R_GammaChanged` → " +
+        "`GL_RebuildLightmaps`). La gamma de partida la dice el MANIFIESTO del " +
+        "horneado, no una constante.",
+      codigo: [["src/main.js", "validarGamma({ gamma: v.gamma, brillo: v.brillo }"]],
+      // Dos controles porque hacen falta dos: que los 25 atlas se rehagan, y
+      // que el mapa se oscurezca DE VERDAD —el píxel medio baja—, porque
+      // «rehizo el atlas» se cumple también dejándolo igual. Y al lado está el
+      // control positivo: aplicar lo mismo no puede mover un byte.
+      llega: [
+        ["sondas/ajustes37.mjs", "rehace los 25 atlas del mapa de luz"],
+        ["sondas/ajustes37.mjs", "el píxel medio del atlas baja"],
+      ],
+    },
   },
   {
     pestana: "Video", clave: "gamma", cvar: "gamma", tipo: TIPOS.DESLIZADOR,
     etiqueta: "#GameUI_Gamma", min: 1.8, max: 3, pordefecto: 3, decimales: 1,
     cfg: 'gamma "3"',
+    aplica: {
+      donde: "la misma línea que el brillo: src/main.js:1757-1758, dentro del " +
+        "`validarGamma({ gamma, brillo })` que alimenta a `rehacerMapaDeLuz`.",
+      codigo: [["src/main.js", "validarGamma({ gamma: v.gamma, brillo: v.brillo }"]],
+      // Comparte línea con el brillo y aun así va aparte, por el 50: cuando
+      // sólo se mide un caso, el valor correcto y el de reposo pueden ser el
+      // mismo. El brillo se arrastra y se mide; la gamma no se arrastra nunca,
+      // así que apoyarse en el control del brillo sería contar un verde de la
+      // fila de al lado. Las pruebas de Node miden la TABLA con gammas
+      // distintas, que es la regla, no el viaje del deslizador.
+      pendiente: "ninguna sonda arrastra el deslizador de gamma: el de la pestaña " +
+        "Video que se mueve es el del brillo. Comparte la línea de aplicación con " +
+        "él, pero el 50 dice que un caso único no demuestra el otro.",
+    },
   },
   {
     pestana: "Video", clave: "ventana", tipo: TIPOS.CASILLA,
@@ -298,6 +468,12 @@ export function cuenta() {
     total: controles.length,
     vivos: vivos.length,
     apagados: controles.length - vivos.length,
+    // Y la cuenta que el 84 obliga a tener separada: de los vivos, cuántos
+    // tienen un control que mide que el valor LLEGA. «Vivo» y «medido» no son
+    // lo mismo, y mientras fueran el mismo número nadie tendría que mirar cuál
+    // de los dos está leyendo. Se calcula, como todo lo de aquí.
+    medidos: vivos.filter((a) => a.aplica?.llega?.length).length,
+    pendientes: vivos.filter((a) => !a.aplica?.llega?.length).map((a) => a.clave),
     porPestana: Object.fromEntries(PESTANAS.map((p) => {
       const c = controles.filter((a) => a.pestana === p);
       return [p, { total: c.length, vivos: c.filter((a) => !a.porQueNo).length }];
