@@ -146,7 +146,7 @@ control("y en seco SÍ mata", enSeco.despues < enSeco.antes, `${enSeco.antes} �
 // ── 3. LAS ESCALERAS ───────────────────────────────────────────────────────
 //
 // «Y SE SUBE POR ELLA» ESTUVO EN ROJO DESDE EL EXPERIMENTO 21, Y ERA DE ESTA
-// SONDA. Medido con un `git worktree` en `a2a430c` —la mudanza, el primer commit
+// SONDA. Medido con un `git worktree` en `99fb5e3` —la mudanza, el primer commit
 // del repositorio—: el rojo se hereda de la época del laboratorio, así que no lo
 // rompió nadie, nació roto.
 //

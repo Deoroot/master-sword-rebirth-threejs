@@ -1,5 +1,27 @@
 # Dónde se quedó esto
 
+> **EL HISTORIAL SE REESCRIBIÓ ANTES DE PUBLICARLO (87), Y LOS HASHES DE ANTES
+> YA NO EXISTEN.** Lo eligió el usuario: 18 commits llevaban su correo de
+> trabajo y 4 otro personal, y un repositorio público los enseña. Ahora los 22
+> van con `87036389+Deoroot@users.noreply.github.com`, nombres y fechas
+> intactos, y el tag `v0.1.0-alpha` rehecho con su mismo mensaje y su misma
+> fecha. **El contenido no cambió ni un byte**: el árbol del último commit es
+> idéntico antes y después (`aa1263b`). Las seis citas de hashes viejos que
+> había en los documentos se cambiaron por las nuevas.
+>
+> **Y no bastó con reescribir**, y eso se midió: tras el push forzado, GitHub
+> **seguía sirviendo los commits huérfanos** con el correo dentro (probado con
+> tres por la API). Así que el repositorio viejo se renombró a
+> `master-sword-rebirth-threejs-privado` y se quedó privado, y el público es
+> uno nuevo con el nombre de siempre, que nunca tuvo esos objetos. *Reescribir
+> el historial no borra lo que el servidor ya tenía*: hay que comprobarlo en el
+> servidor, no en la copia local.
+>
+> **Este repositorio commitea ya con la dirección noreply** (`git config
+> user.email`, local al repo). La global sigue siendo la de trabajo: si se clona
+> en otro sitio, hay que volver a ponerla.
+
+
 > **EL 87 CIERRA LA TANDA DE EXPERIMENTOS, Y EL REPOSITORIO SE HACE PÚBLICO.**
 > Lo pidió el usuario: README sencillo, capturas de Edana y barras de progreso.
 >
@@ -58,7 +80,7 @@
 > Queda dicho porque **la fiabilidad de la sonda de red no está caracterizada**
 > y eso es justo lo que hace falta antes de abrir un servidor a gente.
 >
-> Lo que sí quedó arreglado en esa sonda (`cd7cdd2`): el control del HUD era
+> Lo que sí quedó arreglado en esa sonda (`e8d951f`): el control del HUD era
 > ruido con forma de rojo —leía una vez y medía su propia latencia, el 76— y el
 > marcador no podía bajar —«X de `controles.length`», el 65—. Seis pasadas
 > seguidas en verde tras el arreglo, 3 de Gate City y 3 de Edana.
@@ -97,7 +119,7 @@
 > **PENDIENTE QUE NO ES DE ESTE EXPERIMENTO Y HAY QUE DIAGNOSTICAR:**
 > `sonda:consecuencias` está en **42 de 46**. Los cuatro rojos son bolsas de
 > huevos (`msarea_monsterspawn`) y el aviso a los aliados al morir, y **nadie
-> ha tocado `src/play/manada.js` ni el horneado** desde el commit `6dae71d`:
+> ha tocado `src/play/manada.js` ni el horneado** desde el commit `a0049b3`:
 > comprobado con `git status`, no supuesto. Lo que sí pasó es que
 > `build/*/bichos.json` de los dos mapas se rehorneó a las 08:25, DESPUÉS de
 > `guiones.json` y de `malla.json` — el horneado parcial del 81, *una medida

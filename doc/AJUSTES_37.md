@@ -206,7 +206,7 @@ aquí». Pero un stash sólo descarta el 37: el árbol lleva treinta y siete
 experimentos sin commitear, así que eso no distinguía entre «viene del 36» y
 «viene de siempre». La otra sesión lo hizo bien —un `git worktree` aparte, con
 junctions a `build/` y `node_modules/`, sin tocar el árbol compartido— y salen
-idénticos en `HEAD` **y en `a2a430c`, la mudanza**. Vienen del laboratorio, de
+idénticos en `HEAD` **y en `99fb5e3`, la mudanza**. Vienen del laboratorio, de
 antes de que este repositorio existiera.
 
 Y el diagnóstico es peor que «hay tres reds», porque **dos de los tres son la

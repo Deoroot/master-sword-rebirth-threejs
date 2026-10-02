@@ -222,7 +222,7 @@ se colaban entre los golpes. Actualizada al texto de verdad.
 - **`sonda:consecuencias` está en 42 de 46**, y **no es de este experimento**:
   los cuatro rojos son tres bolsas de huevos (`msarea_monsterspawn`, que es
   horneado) y el aviso a los aliados al morir, y ni `manada.js` ni el horneado
-  los ha tocado nadie desde el commit `6dae71d`. Lo que sí pasó: `bichos.json`
+  los ha tocado nadie desde el commit `a0049b3`. Lo que sí pasó: `bichos.json`
   de los dos mapas se rehorneó hoy a las **08:25**, después de `guiones.json` y
   de `malla.json`. El 81 ya avisó de esto —*un horneado parcial es una medida
   vieja con cara de nueva*— y el 82 de que `mapa:bichos` sin `--mapa` sólo hace

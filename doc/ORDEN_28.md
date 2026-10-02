@@ -16,7 +16,7 @@ pendiente desde hace tiempo, y mientras eso fuera verdad un refactor mecánico d
 dos mil líneas no se podía deshacer. Así que antes de mover una coma:
 
 ```
-git init · 296 archivos · fc50259 «experimento 28: los bichos pasan al servidor»
+git init · 296 archivos · b7b8bad «experimento 28: los bichos pasan al servidor»
 ```
 
 `build/`, `node_modules/` y `dist/` fuera, como ya decía `.gitignore`. Los tres
