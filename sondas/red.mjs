@@ -107,6 +107,18 @@ await new Promise((r) => setTimeout(r, 9000));   // vite y el mapa del servidor
 const nav = await chromium.launch();
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
+
+// EL 86: EL MARCADOR NO PODÍA BAJAR. Era «X de controles.length», con el
+// denominador calculado al final, que es el fallo del 65: los controles que no
+// llegan a correr no están en la lista, así que una caída a mitad remataba con
+// «12 de 12 en verde». El `catch` del final empuja una roja —eso sí estaba—,
+// pero el número que se lee de un vistazo seguía siendo una mentira tranquila.
+//
+// Va aquí arriba y no junto al marcador porque el `process.exit` lo lee DESPUÉS
+// del `finally`, o sea fuera del `try`: declarado ahí dentro, la última línea de
+// la sonda petaba con un `ReferenceError` justo en la pasada que viniera a
+// cazar algo.
+const DECLARADOS = 21;
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 // `errores` FUERA del `try`, y no es estilo: la última línea del archivo —la
 // que decide el código de salida— está fuera del bloque, así que con el `const`
@@ -353,16 +365,50 @@ control("y el servidor no ha escupido ningún error",
 
 // ── 6. Y NADA DE ESTO ROMPE LA PÁGINA ──────────────────────────────────────
 console.log(`\n  EL MUNDO SIGUE EN PIE`);
-const mundo = await ana.evaluate(() => ({
-  triangulos: window.probe.level?.mesh?.triangleCount ?? 0,
-  hud: window.probe.hud?.estado()?.visible ?? null,
-  bichos: window.probe.bichos?.cuantos?.() ?? null,
-}));
+// EL 86: ESTE CONTROL ERA RUIDO CON FORMA DE ROJO.
+//
+// Leía el HUD UNA VEZ, justo después de cerrarse la pestaña del segundo
+// jugador. En Gate City salía verde siempre y **en Edana una pasada de cada
+// dos**: con el mismo código, dos pasadas seguidas dieron `hud:false` y
+// `hud:true`. O sea que no medía si el HUD está en pie, medía si había llegado
+// ya — y Edana tarda más en estar lista (48 bichos, 27 guiones corriendo,
+// contra los de Gate City).
+//
+// Es el 76 en la pieza de al lado: *un control sobre un estado inicial mide tu
+// latencia si algo lo cambia solo*, y *un control que falla sin que nada esté
+// roto es ruido con forma de rojo, y gasta la sesión siguiente*. Gastó ésta.
+//
+// El remedio es el del 76 también: se le dan vueltas hasta que sale y SE DICE
+// EN CUÁNTAS. Con tope, para que un HUD que de verdad no vuelve siga siendo
+// rojo. Y si vence el plazo, el detalle dice CUÁL de las cuatro razones de
+// `seVeElHud` lo esconde (`src/play/hud.js:367`): la cifra de vida distingue
+// «Ana se ha muerto» —en Edana hay jabalíes que pegan desde el 67— de «el panel
+// está abierto» o «todavía no ha cargado», que son otra cosa y otro arreglo.
+const PLAZO_HUD = 5000;
+const leerMundo = () => ana.evaluate(() => {
+  const e = window.probe.hud?.estado() ?? null;
+  return {
+    triangulos: window.probe.level?.mesh?.triangleCount ?? 0,
+    hud: e?.visible ?? null,
+    vida: e?.barras?.vida?.cifra ?? null,
+    bichos: window.probe.bichos?.cuantos?.() ?? null,
+  };
+});
+const t0Hud = Date.now();
+let mundo = await leerMundo();
+while (mundo.hud === false && Date.now() - t0Hud < PLAZO_HUD) {
+  await ana.waitForTimeout(100);
+  mundo = await leerMundo();
+}
+const esperaHud = Date.now() - t0Hud;
 control("el mapa sigue dibujado y el HUD en pie con la red puesta",
   trianguloAlEntrar > 0 && mundo.triangulos === trianguloAlEntrar && mundo.hud !== false,
-  JSON.stringify({ ...mundo, alEntrar: trianguloAlEntrar }));
+  JSON.stringify({ ...mundo, alEntrar: trianguloAlEntrar, esperaHud: `${esperaHud} ms` }));
 
-console.log(`\n  ── ${controles.filter((c) => c.bien).length} de ${controles.length} controles ──`);
+const faltan = DECLARADOS - controles.length;
+console.log(`\n  ── ${controles.filter((c) => c.bien).length} de ${DECLARADOS} controles ──`);
+if (faltan > 0) console.log(`  ${faltan} control(es) no llegaron a correr`);
+if (faltan < 0) console.log(`  hay ${-faltan} control(es) MÁS que los declarados: sube DECLARADOS`);
 for (const c of controles) console.log(`  ${c.bien ? "sí" : "NO"}  ${c.que}${c.detalle ? `  [${c.detalle}]` : ""}`);
 console.log(`\n  errores de página: ${errores.length ? errores.join(" · ") : "ninguno"}`);
 console.log(`  el servidor dijo:\n${salidaDelServidor.join("").split("\n").map((l) => `    ${l}`).join("\n")}`);
@@ -377,4 +423,7 @@ console.log(`  el servidor dijo:\n${salidaDelServidor.join("").split("\n").map((
   matar(partida);
   matar(dev);
 }
-process.exit(controles.length && controles.every((c) => c.bien) && !errores.length ? 0 : 1);
+// Y la salida pide los 21, no «los que haya»: si faltan, es que la sonda se fue
+// por el `catch` y eso es rojo aunque todos los que corrieron estén verdes.
+process.exit(controles.length === DECLARADOS
+  && controles.every((c) => c.bien) && !errores.length ? 0 : 1);
