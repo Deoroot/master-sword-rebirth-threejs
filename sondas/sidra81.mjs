@@ -6,6 +6,41 @@
 // Bryan **se lo cuenta a ella por su cuenta**. Tres NPC hablando entre sí sin
 // que el jugador lleve nada en la mochila: la misión es el estado que se pasan.
 //
+// ── LOS NUEVE PASOS, Y HASTA EL 85 ESTO MEDÍA TRES ───────────────────────
+//
+// La cadena entera se midió en el 83 tecleando en el chat en una partida de
+// verdad, y son **nueve pasos y no cuatro**. La tabla es del §11 de
+// `doc/GUIONES_82.md` y se copia de ahí, no se deduce:
+//
+//   | paso | quién | qué queda |
+//   | 1  | `job` a Sylphiel   | `cider_1 0 → 0`, llama a `cider` de Bryan |
+//   | 2  | `cider` a Bryan    | `cider_1 2`, `cider_2 1` |
+//   | 3  | `cider` a Sylphiel | «Thanks for the help», y a los 5 s `say_reward3` |
+//   | 3b | (sola)             | `cider_1 3`, `cider_2 2`, **oro 10 → 15** |
+//   | 4  | `cider` a Sylphiel | «I still haven't gotten that cider shipment» · `cider_1 1` |
+//   | 5  | `cider` a Bryan    | «head over to Krythos» · **`CIDER` de Krythos 0 → 1** |
+//   | 6  | `cider` a Krythos  | explica, y a los 3 s su `say_cider2` |
+//   | 6b | (solo)             | `CIDER 99`, y su `callexternal wench ciderreward` |
+//   | 7  | (Sylphiel)         | **`cider_1 4`, `cider_2 3`** — la misión cerrada |
+//
+// Hasta el 85 esto era **una medida y no un control**: la sonda paraba en el
+// tercero y los seis últimos estaban declarados pendientes. Ahora los nueve
+// tienen control, y por eso el oro y los contadores de los tres NPC se leen
+// aquí en vez de creerse.
+//
+// Lo que el 83 dejó escrito y aquí se respeta, para no volver a pagarlo:
+//
+//   - **El pago llega tarde.** Son dos relojes encadenados, no uno: al `+5 s`
+//     de `say_reward3` le sigue un `callevent 2 cider3`, así que `cider_1 3`
+//     tarda unos SIETE segundos. Por eso no se espera un tiempo: se espera a
+//     que la lectura cumpla. Ver `esperarA`.
+//   - **El `CIDER` de Bryan no se queda quieto**: un segundo después de
+//     mandarte a Krythos, su `callevent 1 say_cider_2` lo pone a 3. Así que su
+//     2 se comprueba en el paso 4 y en el 5 se mira a Krythos.
+//   - **Krythos abre el menú con DOS botones** y los otros con cuatro. No es
+//     una anomalía y no se persigue: no declara `game_menu_getoptions` propio
+//     y hereda los de `base_chat`.
+//
 // ── POR QUÉ HACÍA FALTA UNA SONDA Y NO BASTA `test/sidra81.test.mjs` ─────
 //
 // Las pruebas de Node ya demuestran que la cadena corre cuando se la llama a
@@ -92,6 +127,17 @@ await pag.addInitScript(() => {
   };
 });
 
+// ── EL MARCADOR SE DECLARA ANTES DE EMPEZAR ──────────────────────────────
+//
+// El 65, y hasta el 85 esta sonda no lo cumplía: el recuento era
+// `${bien} de ${controles.length}`, o sea **con el denominador calculado al
+// final**. Apuntar una roja en el `catch` no lo arregla — los controles que no
+// llegaron a correr no están en la lista, así que una caída en el tercero de
+// veinticinco imprimía «2 de 4» y eso se lee como «casi todo bien».
+//
+// *Un «X de Y» donde Y se calcula al final no puede bajar nunca.* Aquí Y está
+// escrito, y lo que no corra cuenta como rojo con su motivo.
+const DECLARADOS = 25;
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });
 
@@ -159,6 +205,44 @@ async function decirPorElChat(texto) {
 
 /** Lo que dice UN NPC concreto, descartando el eco del propio jugador. */
 const loDicho = (lineas, quien) => lineas.filter((l) => new RegExp(`^${quien}`, "i").test(l));
+
+/**
+ * ESPERAR A QUE EL JUEGO LLEGUE, Y DECIR CUÁNTO HA TARDADO.
+ *
+ * La mitad de esta misión la sirven relojes del mod, no el jugador: `say_job`
+ * arma un `calleventtimed 4 reset`, `say_reward` encadena
+ * `+2 s say_reward2 → +3 s say_reward3 → +2 s cider3`, y Krythos un
+ * `calleventtimed 3 say_cider2`. O sea que **entre teclear y el efecto pasan
+ * segundos**, y con un `waitForTimeout` fijo el control mide mi espera y no la
+ * regla: el 75 —«cuando lo que mides va con retraso, el umbral mide tu
+ * espera»— y es la trampa que ya se pagó una vez aquí leyendo «oro 10» a los
+ * 3 s cuando el pago entra a los 5.
+ *
+ * Así que no se espera un tiempo: se espera **a que la lectura cumpla**, con
+ * un tope, y se devuelve el tiempo que tardó para que salga impreso. Si un día
+ * tarda 14 s, se verá en el informe en vez de salir rojo sin motivo.
+ *
+ * Leer es pasivo —son variables del guion— así que preguntar muchas veces no
+ * cambia lo que se mide. *Acercarse a medir puede cambiar lo que se mide* (el
+ * 78), y aquí no: no se mueve al jugador ni se teclea nada.
+ */
+async function esperarA(leer, cumple, { tope = 20000, cada = 400 } = {}) {
+  const t0 = Date.now();
+  let valor = null;
+  for (;;) {
+    valor = await leer();
+    if (cumple(valor)) return { ok: true, ms: Date.now() - t0, valor };
+    if (Date.now() - t0 >= tope) return { ok: false, ms: Date.now() - t0, valor };
+    await pag.waitForTimeout(cada);
+  }
+}
+
+/** Las variables de un NPC, en bruto. */
+const varsDe = (id, claves) => pag.evaluate(
+  (a) => window.probe.mundo.variablesDeNpc(a.id, a.claves), { id, claves });
+
+/** El oro del personaje, que es lo que un pago tiene que mover. */
+const oro = () => pag.evaluate(() => window.probe.misiones.bolsa().oro);
 
 /**
  * **LA CONSOLA PARTE LAS LÍNEAS LARGAS**, y eso puso dos controles en rojo con
@@ -309,8 +393,16 @@ try {
     estadoSyl.cider1 === "2" && estadoSyl.cider2 === "1",
     `cider_1 = ${estadoSyl.cider1}, cider_2 = ${estadoSyl.cider2}`);
 
-  // ── 7. ELLA LO SABE SIN QUE SE LO CUENTES ─────────────────────────────
-  console.log(`\n  SYLPHIEL OTRA VEZ: «cider»`);
+  // ── PASO 3. ELLA LO SABE SIN QUE SE LO CUENTES, Y TE DA LAS GRACIAS ───
+  //
+  // Con `cider_1` a 2, los dos `say_cider` con guarda abandonan —el de
+  // `equals 1` y el de `equals 3`— y corre el tercero, que **no tiene guarda**
+  // y hace `callevent say_reward` (barwench.script:186-190). De ahí sale
+  // «Thanks for the help.» y, con ella, la cadena de relojes del pago.
+  //
+  // EL ORO SE LEE AQUÍ, ANTES, porque es la referencia del paso 3b.
+  const oroAntes = await oro();
+  console.log(`\n  SYLPHIEL OTRA VEZ: «cider»   (oro de salida: ${oroAntes})`);
   await plantarseDelante(sylphiel.id);
   const trasVuelta = await decirPorElChat("cider");
   for (const l of trasVuelta) console.log(`    ${l}`);
@@ -318,6 +410,143 @@ try {
   control("Y ELLA YA LO SABE: no te vuelve a mandar a Bryan",
     dijoSyl2.length > 0 && !dijoSyl2.some((l) => /Didn't I ask you/i.test(l)),
     dijoSyl2.join(" / ").slice(0, 120) || "no contesta");
+  // Y la frase afirmativa, que es la que distingue «no me riñe» de «me da las
+  // gracias»: sin ésta, un NPC mudo pasaría el control de arriba.
+  control("PASO 3 · te da las gracias: su `say_reward` entra por el bloque sin guarda",
+    /Thanks for the help/i.test(elBloque(trasVuelta)) && dijoSyl2.length > 0,
+    dijoSyl2.join(" / ").slice(0, 120) || "no contesta");
+
+  // ── PASO 3b. EL PAGO, QUE LLEGA SOLO Y TARDE ──────────────────────────
+  //
+  // Nadie teclea nada aquí: es la cadena de relojes de ella.
+  //
+  //     say_reward   →  calleventtimed 2 say_reward2      :205-214
+  //     say_reward2  →  callevent 3 say_reward3           :215-219
+  //     say_reward3  →  offer gold 5, cider_1 99, cider_2 2
+  //                     y callevent 2 cider3              :220-230
+  //     cider3       →  setvar cider_1 3                  :170-173
+  //
+  // O sea **siete segundos** desde «Thanks for the help» hasta que `cider_1`
+  // vale 3, y no cinco: el §11 de `doc/GUIONES_82.md` apunta el estado final
+  // —`cider_1 3`— junto al plazo de `say_reward3`, que es el del PAGO. Son dos
+  // relojes encadenados y el segundo no estaba contado. Se espera a la lectura
+  // y no al reloj, así que da igual.
+  const llegoElPago = await esperarA(
+    () => varsDe(sylphiel.id, ["cider_1", "cider_2"]),
+    (v) => v?.cider_1 === "3" && v?.cider_2 === "2");
+  const oroDespues = await oro();
+  console.log(`\n  EL PAGO (nadie teclea): cider_1 = ${llegoElPago.valor?.cider_1}, ` +
+    `cider_2 = ${llegoElPago.valor?.cider_2}, oro ${oroAntes} → ${oroDespues}   (${llegoElPago.ms} ms)`);
+  control("PASO 3b · el pago cierra su tramo solo: `cider_1 3` y `cider_2 2`",
+    llegoElPago.ok,
+    `cider_1 = ${llegoElPago.valor?.cider_1}, cider_2 = ${llegoElPago.valor?.cider_2} tras ${llegoElPago.ms} ms`);
+  // `offer ent_lastspoke gold 5` (:227). Cinco monedas exactas, no «más»: un
+  // umbral de «>» lo pasaría igual otro pago, y en esta misión hay un segundo
+  // (`gold 7`, :252) que sólo entra por la otra rama.
+  control("PASO 3b · y paga CINCO monedas, las de su `offer gold 5`",
+    oroAntes !== null && oroDespues === oroAntes + 5,
+    `oro ${oroAntes} → ${oroDespues}`);
+
+  // ── PASO 4. LA SEGUNDA VUELTA: «no me ha llegado» ─────────────────────
+  //
+  // Ahora `cider_1` vale 3, así que el `say_cider` de `equals 3` sí corre
+  // (:175-185): te manda otra vez a Bryan, se pone `cider_1 1` y le avisa a él
+  // con `callexternal $get_by_name(bryan) cider3`, que en Bryan es
+  // `setvar CIDER 2` (bryan.script:252-254).
+  const cidBryanAntes = (await varsDe(bryan.id, ["CIDER"]))?.CIDER ?? null;
+  console.log(`\n  SYLPHIEL, TERCERA VEZ: «cider»   (CIDER de Bryan antes: ${cidBryanAntes})`);
+  await plantarseDelante(sylphiel.id);
+  const trasQueja = await decirPorElChat("cider");
+  for (const l of trasQueja) console.log(`    ${l}`);
+  const dijoQueja = loDicho(trasQueja, "Sylphiel");
+  control("PASO 4 · se queja de que la sidra no ha llegado y te manda otra vez a Bryan",
+    /still haven.t gotten that cider shipment/i.test(elBloque(trasQueja)) && dijoQueja.length > 0,
+    dijoQueja.join(" / ").slice(0, 120) || "no contesta");
+  // Y el `callexternal` de ida, que es lo que el jugador NO lleva encima.
+  const trasQuejaVars = await esperarA(
+    () => Promise.all([varsDe(sylphiel.id, ["cider_1"]), varsDe(bryan.id, ["CIDER"])]),
+    ([s, b]) => s?.cider_1 === "1" && b?.CIDER === "2");
+  console.log(`    cider_1 de ella = ${trasQuejaVars.valor?.[0]?.cider_1}, ` +
+    `CIDER de Bryan = ${trasQuejaVars.valor?.[1]?.CIDER}   (${trasQuejaVars.ms} ms)`);
+  control("PASO 4 · y se lo dice a Bryan: `cider_1 1` en ella y `CIDER 2` en él",
+    trasQuejaVars.ok,
+    `cider_1 = ${trasQuejaVars.valor?.[0]?.cider_1}, CIDER = ${trasQuejaVars.valor?.[1]?.CIDER}` +
+    ` (antes ${cidBryanAntes}) tras ${trasQuejaVars.ms} ms`);
+
+  // ── PASO 5. BRYAN TE MANDA A KRYTHOS ──────────────────────────────────
+  //
+  // Con `CIDER` a 2 entra el segundo `say_cider` de Bryan (:256-262) y pasa el
+  // recado al tercer NPC: `callexternal $get_by_name(krythos) cider4`, que es
+  // `setvar CIDER 1` en Krythos (weaponsmith.script:132-135).
+  //
+  // Ojo con el `callevent 1 say_cider_2` de la línea 261: un segundo después
+  // Bryan se pone `CIDER 3`, así que su valor 2 **no se queda quieto**. Por eso
+  // lo de Bryan se comprobó arriba y aquí se mira a Krythos.
+  console.log(`\n  BRYAN, SEGUNDA VEZ: «cider»`);
+  await plantarseDelante(bryan.id);
+  const trasKrythos = await decirPorElChat("cider");
+  for (const l of trasKrythos) console.log(`    ${l}`);
+  const dijoBryan2 = loDicho(trasKrythos, "Bryan");
+  control("PASO 5 · Bryan te manda a Krythos a la Plaza de los Mercaderes",
+    /head over to Krythos/i.test(elBloque(trasKrythos)) && dijoBryan2.length > 0,
+    dijoBryan2.join(" / ").slice(0, 120) || "no contesta");
+  if (!krythos) {
+    // Declarado en rojo y no saltado en silencio: un paso que no corre tiene
+    // que verse. Los tres de Krythos caen aquí con su motivo.
+    control("PASO 5 · el recado llega a Krythos: su `CIDER` pasa a 1", false, "Krythos no está montado");
+    control("PASO 6 · Krythos explica lo del envío", false, "Krythos no está montado");
+    control("PASO 6b · su `say_cider2` cierra con `CIDER 99`", false, "Krythos no está montado");
+    control("PASO 7 · LA MISIÓN QUEDA CERRADA: `cider_1 4` y `cider_2 3`", false, "Krythos no está montado");
+  } else {
+    const llegoAKrythos = await esperarA(
+      () => varsDe(krythos.id, ["CIDER"]), (v) => v?.CIDER === "1");
+    console.log(`    CIDER de Krythos = ${llegoAKrythos.valor?.CIDER}   (${llegoAKrythos.ms} ms)`);
+    control("PASO 5 · el recado llega a Krythos: su `CIDER` pasa a 1",
+      llegoAKrythos.ok, `CIDER = ${llegoAKrythos.valor?.CIDER} tras ${llegoAKrythos.ms} ms`);
+
+    // ── PASO 6. KRYTHOS EXPLICA ─────────────────────────────────────────
+    //
+    // Y con DOS botones en el menú y no cuatro, que parece una anomalía y no lo
+    // es: Krythos **no declara `game_menu_getoptions` propio** y hereda los de
+    // `base_chat`. Está dicho en el §11 para que no se persiga.
+    console.log(`\n  KRYTHOS: «cider»`);
+    await plantarseDelante(krythos.id);
+    const trasExplica = await decirPorElChat("cider");
+    for (const l of trasExplica) console.log(`    ${l}`);
+    const dijoKry = loDicho(trasExplica, "Krythos");
+    control("PASO 6 · Krythos explica lo del envío",
+      /shipment was waylaid/i.test(elBloque(trasExplica)) && dijoKry.length > 0,
+      dijoKry.join(" / ").slice(0, 120) || "no contesta");
+
+    // ── PASO 6b. SU RELOJ, Y EL `callexternal` QUE CIERRA LA MISIÓN ─────
+    //
+    //     say_cider   →  calleventtimed 3 say_cider2     weaponsmith.script:141
+    //     say_cider2  →  CIDER 99
+    //                    callexternal $get_by_name(wench) ciderreward     :147
+    //     ciderreward →  cider_2 3, cider_1 4            barwench.script:192-199
+    //
+    // Nadie teclea: es el tercer NPC avisando a la primera por su cuenta, tres
+    // segundos después, con el jugador plantado delante de un herrero.
+    const cerro = await esperarA(
+      () => varsDe(krythos.id, ["CIDER"]), (v) => v?.CIDER === "99");
+    console.log(`\n  SU RELOJ: CIDER de Krythos = ${cerro.valor?.CIDER}   (${cerro.ms} ms)`);
+    control("PASO 6b · su `say_cider2` cierra con `CIDER 99`",
+      cerro.ok, `CIDER = ${cerro.valor?.CIDER} tras ${cerro.ms} ms`);
+
+    // ── PASO 7. LA MISIÓN, CERRADA EN EL ESTADO DE ELLA ────────────────
+    //
+    // Es el final de la cadena y el control que da nombre al experimento: dos
+    // números en el guion de Sylphiel puestos por un NPC que está al otro lado
+    // del pueblo, sin que el jugador haya llevado nada ni hablado con ella.
+    const cerrada = await esperarA(
+      () => varsDe(sylphiel.id, ["cider_1", "cider_2"]),
+      (v) => v?.cider_1 === "4" && v?.cider_2 === "3");
+    console.log(`\n  LA MISIÓN: cider_1 = ${cerrada.valor?.cider_1}, ` +
+      `cider_2 = ${cerrada.valor?.cider_2}   (${cerrada.ms} ms)`);
+    control("PASO 7 · LA MISIÓN QUEDA CERRADA: `cider_1 4` y `cider_2 3`",
+      cerrada.ok,
+      `cider_1 = ${cerrada.valor?.cider_1}, cider_2 = ${cerrada.valor?.cider_2} tras ${cerrada.ms} ms`);
+  }
 
   // ── 8. CONTROL DE INSTRUMENTO ─────────────────────────────────────────
   //
@@ -364,10 +593,16 @@ try {
 } finally {
   console.log("");
   for (const c of controles) console.log(`  ${c.bien ? "ok  " : "FALLA"} ${c.que}${c.detalle ? `  — ${c.detalle}` : ""}`);
+  // El denominador es el DECLARADO. Lo que no llegó a correr se cuenta y se
+  // dice, que es la única forma de que el marcador pueda bajar.
+  const faltan = DECLARADOS - controles.length;
+  if (faltan > 0) console.log(`  FALLA ${faltan} control(es) no llegaron a correr`);
+  if (faltan < 0) console.log(`  FALLA hay ${-faltan} control(es) más que los ${DECLARADOS} declarados: actualiza DECLARADOS`);
   const bien = controles.filter((c) => c.bien).length;
-  console.log(`\n  ${bien} de ${controles.length} en verde`);
+  const mal = (controles.length - bien) + Math.abs(faltan);
+  console.log(`\n  ${DECLARADOS - mal} de ${DECLARADOS} en verde`);
   console.log(`  errores de página: ${errores.length ? errores.join(" | ") : "ninguno"}`);
-  if (bien !== controles.length || errores.length) process.exitCode = 1;
+  if (mal || errores.length) process.exitCode = 1;
   // El cierre va en el `finally` y cierra LAS DOS cosas: navegador y servidor.
   // Una sonda que se va por un `catch` sin esto deja un Chromium y un vite
   // vivos, y cuatro sesiones a la vez los acumulan.

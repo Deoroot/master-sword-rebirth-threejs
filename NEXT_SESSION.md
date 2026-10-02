@@ -1,15 +1,70 @@
 # Dónde se quedó esto
 
-> **LA COLUMNA `aplica` ESTÁ VACÍA, Y ES LA VACUNA (84-85).** Lo más grande que
-> queda abierto de esta tanda, y no es una opinión: `CLAUDE.md` pone esa columna
-> como «la vacuna contra el apartado 4», y hoy `src/play/ajustes.js` tiene
+> **EL HUD DE EVENTOS DECÍA OCHO FRASES QUE EL JUEGO NO DICE (86).**
+> Reportado por el usuario: «el event hud me parece todavia tiene texto
+> inventado». Y las tenía. Medido buscando cada cadena en `../MSC/` y no
+> encontrándola: «3.4 damage to X — 17 of 20 left» es
+> `Hit X: 3.4 slash damage.  ` con sus dos espacios (giattack.cpp:1954),
+> «CRITICAL! » va DETRÁS y es `CRIT! (97/95)`, «You missed: too far» es
+> `Missed X.`, y **«You killed X — N experience» no existe**: su línea está
+> comentada por su autor («no workie», playerstats.cpp:208) y quien anuncia la
+> experiencia es el guion del jugador, en verde. «X flees», «it flinches» y la
+> vida que le queda al bicho tampoco existen. **Tercera vez en esta misma
+> esquina**: el 65 y el 83 fueron las otras dos, y las seis de hoy convivían
+> con las dos correcciones, al lado, sin que nada se pusiera rojo.
+>
+> **Y EL ARREGLO DESTAPÓ DOS HUECOS.** Con servidor la experiencia **no se
+> anunciaba en absoluto** —la rama de red nunca llamaba a `game_xpgain`, así
+> que el único aviso era el inventado, y quitarlo sin más dejaba el
+> multijugador mudo— y el informe del golpe **no salía en el espadazo que
+> mata**, porque estaba dentro del `else` de la muerte para dejarle sitio. El
+> 81: *un arreglo puede dejar al descubierto lo que tapaba*.
+>
+> **LA TRAMPA DEL DÍA, y es nueva: casi cito una línea que está dentro de un
+> comentario.** `giattack.cpp:1433` tiene otro formato, es código de verdad
+> —ni `#if 0` ni `//` delante, con su sangrado y sus llaves— y el comentario de
+> bloque que lo envuelve cierra **96 líneas más abajo**, con un `}*/` pegado al
+> margen. El vivo es el de `:1657`. Es el `NPC_NO_DROPS` del 82 en C++ y sin
+> horneado de por medio. Todo en [doc/EVENTOS_86.md](doc/EVENTOS_86.md).
+>
+> `npm test` **2 199 de 2 199**, `npx vite build` limpio, `sonda:aviso60`
+> 22/22, `sonda:golpe` 26/26, `sonda:arco` 40/40, `sonda:mordisco82` 14/14.
+>
+> **PENDIENTE QUE NO ES DE ESTE EXPERIMENTO Y HAY QUE DIAGNOSTICAR:**
+> `sonda:consecuencias` está en **42 de 46**. Los cuatro rojos son bolsas de
+> huevos (`msarea_monsterspawn`) y el aviso a los aliados al morir, y **nadie
+> ha tocado `src/play/manada.js` ni el horneado** desde el commit `6dae71d`:
+> comprobado con `git status`, no supuesto. Lo que sí pasó es que
+> `build/*/bichos.json` de los dos mapas se rehorneó a las 08:25, DESPUÉS de
+> `guiones.json` y de `malla.json` — el horneado parcial del 81, *una medida
+> vieja con cara de nueva*. Pasado a la sesión que lleva el censo.
+
+
+> **LA COLUMNA `aplica`: YA ESTÁ PUESTA.** Las nueve filas vivas de
+> `src/play/ajustes.js` la llevan, con la línea citada y el control que mide que
+> el valor LLEGA; `crearpartida.js` pasa a la misma forma. Y al rellenarla salió
+> lo que no se sabía: **de los 9 vivos sólo 5 los mide alguien** — `m_filter`,
+> `MP3Volume`, `gamma` y las teclas quedan declarados pendientes en vez de
+> contarse entre los verdes, cada uno con lo que falta por medir. Los dos
+> controles de la música son el caso que más engaña: comprueban que sigue en su
+> 0,2 —el valor de reposo— mientras se mueve el OTRO deslizador, así que siguen
+> verdes con el de la música desconectado. Hay un control nuevo en
+> `sonda:menu52` (**23 de 23**) que mueve el volumen **en el menú y sin mapa**,
+> que es el estado del fallo del 84, y con el fallo puesto a propósito es el
+> único de los tres que se pone rojo. Todo en
+> [doc/AJUSTES_37.md](doc/AJUSTES_37.md) §10, con su fila de §4 redactada en
+> [doc/GAUNTLET_83.md](doc/GAUNTLET_83.md) §6 **y sin escribir en `CLAUDE.md`**.
+> Lo que sigue abierto es medir los cuatro pendientes. El diagnóstico que lo
+> motivó, que es lo que no se puede volver a deducir del código:
+>
+> `CLAUDE.md` pone esa columna
+> como «la vacuna contra el apartado 4», y `src/play/ajustes.js` llegó al 85 con
 > **21 filas con `porQueNo` y 0 con `aplica`**. O sea que **un ajuste que se
 > guarda y no se reparte no lo ve ninguna prueba** — y eso no es hipotético: es
 > exactamente el fallo que el usuario reportó en el 73 y que se arregló en el 85.
 > Mover el volumen en el menú principal no hacía nada porque quien reparte
 > (`aplicarAjustes`, src/main.js) **nace `null` y lo escribe el armado del
 > mundo**, así que antes de cargar un mapa el `?.` se lo tragaba en silencio.
-> Pide decisión del usuario: es más trabajo que el arreglo.
 >
 > **EL SONIDO DEL MENÚ (85).** Dos fallos a la vez, los dos del reporte del
 > usuario («de hecho parece que no funciona para nada»): un `new Audio()` nace
@@ -19,7 +74,9 @@
 > menú sonando a 1**, porque esos `Audio` del DOM no pasan por Web Audio: dos
 > caminos para un deslizador, la costura del 63 en el audio. `sonda:menu52`
 > **22 de 22** (el volumen de partida, sin mapa cargado) y `sonda:ajustes37`
-> **16 de 16** (que el deslizador llega, por el camino del jugador).
+> **16 de 16** (que el deslizador llega, por el camino del jugador). *Son 23 en
+> `menu52` desde el control de arriba: el 85 medía el volumen con el que NACE el
+> menú, que pasa igual con el deslizador desconectado.*
 >
 > **EL CIELO SE MOVÍA AL SALTAR (84).** `RI.cullorigin = RI.vieworg`
 > (gl_rmain.c:359) y `v[j] += RI.cullorigin[j]` (gl_warp.c:243): el cielo se
@@ -323,9 +380,14 @@
 > > **Medido en el 83 (la corrección va al lado, §7): el cuarto tramo
 > > FUNCIONA.** Nueve pasos tecleando en el chat, de `job` a `cider_1 4`,
 > > con el oro llegando a los 5 s (10 → 15) y el `CIDER` de Krythos a 99.
-> > **Sigue sin ser un control**: `sondas/sidra81.mjs` mide tres tramos y
-> > queda declarado pendiente. La tabla entera, en
-> > [doc/GUIONES_82.md](doc/GUIONES_82.md) §11.
+> > ~~**Sigue sin ser un control**: `sondas/sidra81.mjs` mide tres tramos y
+> > queda declarado pendiente.~~ **CERRADO EN EL 86**: los nueve pasos tienen
+> > control, `sonda:sidra81` **25 de 25** (eran 15), con `DECLARADOS = 25` para
+> > que el marcador pueda bajar. La rotura que lo valida: anulando sólo el
+> > `callexternal ciderreward` se pone rojo **el paso 7 y sólo el 7**. Y dos
+> > plazos que la tabla no decía — el 3b son DOS relojes encadenados (~7 s, no
+> > 5) y el `CIDER` de Bryan pasa a 3 un segundo después de mandarte a Krythos.
+> > La tabla entera, en [doc/GUIONES_82.md](doc/GUIONES_82.md) §11.
 
 > **QUE UN VECINO SE GIRE AL HABLARLE (81).** El gancho `irA` de `entornoDe` era
 > un `=> {}` **desde el experimento 43**, con cuatro pruebas verdes que le

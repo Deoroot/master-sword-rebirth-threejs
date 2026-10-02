@@ -271,6 +271,9 @@ npm test                      # 2 033, de las que 32 son de este experimento
 npm run sonda:sidra81         # 15 de 15, por el chat y con el teclado
 ```
 
+> El 15 es lo que se midió en el 82 y se deja escrito. **Desde el 85 son 25**,
+> con los nueve pasos de la cadena; ver la corrección del §11.
+
 **Seis roturas deliberadas contra las pruebas y tres contra la sonda viva, las
 nueve rojas.** La comprobación de que la rotura estaba puesta cazó dos que no
 casaban.
@@ -313,6 +316,34 @@ Los controles que importan, porque son los que distinguen «funciona» de
   > **Esto es una medida, no un control**: `sondas/sidra81.mjs` sigue midiendo
   > hasta el tercero. Se declara pendiente en vez de contarse entre los verdes,
   > que es lo que pide el apartado 4.
+  >
+  > > **CERRADO EN EL 85, y la corrección va al lado y no encima** (§7). Los
+  > > **nueve pasos tienen control**: `sondas/sidra81.mjs` pasa de 15 a **25 de
+  > > 25**, con el oro y los contadores de los tres NPC leídos de la partida.
+  > > Así que el párrafo de arriba ya no vale, y lo que lo mantenía vivo era que
+  > > nadie volviera a leerlo — el `catchspeech` del 79 otra vez, dentro de este
+  > > mismo documento.
+  > >
+  > > Y **la tabla tiene un plazo de menos**, que es lo único que no se deducía
+  > > de ella: el paso 3b son **dos relojes encadenados y no uno**. A
+  > > `say_reward3` —el del pago, a los 5 s— le sigue un `callevent 2 cider3`
+  > > (barwench.script:228), y es ÉSE el que pone `cider_1 3`. O sea que el
+  > > estado de la fila tarda unos **siete** segundos y no cinco. Medido: 3 935
+  > > ms desde que la sonda deja de teclear, porque sus propias esperas ya se
+  > > comen parte. Por eso el control no espera un tiempo sino **a que la
+  > > lectura cumpla**, y de paso imprime cuánto ha tardado.
+  > >
+  > > Lo mismo con el `CIDER` de Bryan en el paso 5: su `callevent 1
+  > > say_cider_2` (bryan.script:261) lo pasa a 3 un segundo después, así que su
+  > > 2 **no se queda quieto** y se comprueba en el paso 4, no en el 5.
+  > >
+  > > Y la rotura que lo valida, que es la que pedía el apartado 4: anulando
+  > > sólo el `callexternal ciderreward` en `npcguion.js`, **el paso 7 se pone
+  > > rojo y los ocho anteriores siguen verdes** (`cider_1 1, cider_2 2` tras
+  > > agotar los 20 s). Y rompiendo el marcador a propósito —una caída tras el
+  > > primer control— sale **1 de 25** con «23 control(es) no llegaron a
+  > > correr», donde antes habría salido «1 de 2»: el 65, que esta sonda no
+  > > cumplía hasta hoy.
   >
   > Y dos trampas del instrumento, las dos mías y las dos de la casa:
   > **el oro se lee a los 3 s y `say_reward3` dispara a los 5**, así que la
