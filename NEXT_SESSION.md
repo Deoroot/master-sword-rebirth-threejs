@@ -1,5 +1,63 @@
 # Dónde se quedó esto
 
+> **EL 94: EL VELO ROJO COMO EN EL MOTOR, LOS GUARDIAS DEFIENDEN A LOS
+> ALDEANOS, Y LOS CINCO PENDIENTES DEL 93**, por mí y cinco agentes.
+> (Yo) el velo de la muerte son **15 s a 128 y luego 0,2 de bajada**
+> (`V_FadeAlpha`, cl_game.c:472-505), no un fogonazo: el 41 lo tenía al revés
+> y su prueba afirmaba el fallo. Lo quita el fundido de alfa 0 de `Spawn`
+> (player.cpp:2784), y cada golpe tiñe y empuja la vista (`TakeDamageEffect`,
+> player.cpp:537-550). Todo por un `clgame.fade` ([doc/VELO_94.md](doc/VELO_94.md),
+> `sondas/muerte41.mjs` 41/41). (A) cada bicho piensa con el ciclo de SU base:
+> 2,8 la vieja, 2,0 la nueva, 0,1 los invocados ([doc/CICLO_94.md](doc/CICLO_94.md)).
+> (B) `setmovedest`/`$cansee` del servidor resuelven el jugador del guion y no
+> al último que habló ([doc/RED_94.md](doc/RED_94.md)). (C) `playanim once` no
+> se corta: el bicho **se para** (el paso sale de la secuencia puesta), `once`
+> ≠ `critical`, y `setanim.framerate` llega al dibujo y a la red
+> ([doc/ANIMACION_94.md](doc/ANIMACION_94.md), `sondas/animacion94.mjs`).
+> (D) **matar a un aldeano NO resta experiencia**: da cero (playerstats.cpp:83);
+> la premisa del 93 no tenía cita ([doc/EXPERIENCIA_94.md](doc/EXPERIENCIA_94.md)).
+> (E) pegar a un aldeano: grita, `callexternal all civilian_attacked`, y un
+> guardia a ≤1 024 u del agresor te persigue y te lo dice — cuatro costuras
+> rotas ([doc/GUARDIAS_94.md](doc/GUARDIAS_94.md), `sondas/guardias94.mjs`).
+> Y `salto93` era inestable (8/15 una de cada tres) **por el instrumento**,
+> tras tres diagnósticos falsos: te plantaba siempre a −X de la araña (pared
+> adentro: te perdía de vista y la IA no te volvía a fijar) y, ya arreglado
+> eso, el rayo del suelo te dejaba DE PIE ENCIMA del cilindro de la cría.
+> `probe.costura.sitioALaVista`; 8/8 pasadas en 15/15
+> ([doc/VELO_94.md](doc/VELO_94.md) §salto93).
+> **Pendiente:** `Effects_GetFade` borra las banderas del fundido cada
+> fotograma (hudscript.cpp:253): un `fadeout`/`perm` de guion las pierde en
+> MSR; `suceso`/`ventanaDeAviso`/`saytext` del servidor aún van a
+> `_aQuienHabla()`, y `saytextrange` sin portar; el primer pensamiento al nacer
+> (0,75 s la nueva, 2,8 la vieja); `playanim move/hold`, `movespeed` y
+> `m_Framerate_Modifier`; el aldeano huye dos veces (guion + IA) y `avisar`
+> avisa aliados al morir un civil (el motor no: `if HAS_AI`); `effect
+> screenshake`, `hud.addimgicon`, el brillo en el modelo de otros.
+
+> **EL 93: LA ARAÑA SALTA Y TE ENVENENA, Y EL VENENO SE VE**, por siete
+> agentes en dos tandas. (A) el salto de `monsters/spider`: `repeatdelay`
+> armado en los bichos, `$relvel`, `setfollow`, gravedad, `setanim.framerate`
+> ([doc/SALTO_93.md](doc/SALTO_93.md), `sondas/salto93.mjs`). (B+G) `effect
+> screenfade`/`glow` y `hud.*` en el intérprete, con icono de estado y fundido
+> en pantalla, en un jugador y con servidor, sólo al afectado
+> ([doc/EFECTOS_RED_93.md](doc/EFECTOS_RED_93.md), `sondas/efectosred93.mjs`);
+> G llevó el salto al servidor (`enSuelo`, `animar`, y el asa del jugador en
+> vez de «el último que abrió un menú»). (C) las 23 variables mezcladas de
+> `iaDe` se leen al nacer con un intérprete de condiciones
+> ([doc/FICHAS_93.md](doc/FICHAS_93.md)): los zombis enanos pegan 55/40, el
+> jabalí jefe huye, jefes seguros 63 → 20. (E) el horneado trae las secuencias
+> que pide el guion (`playanim`, `setidleanim`…): +77 en Edana
+> ([doc/HORNEADO_93.md](doc/HORNEADO_93.md)). (F) las dos rojas de
+> `consecuencias` eran la ventana de la sonda: el ciclo ocioso
+> ([doc/CONSECUENCIAS_92.md](doc/CONSECUENCIAS_92.md) §93).
+> **Pendiente:** la IA vieja piensa cada 2,8 s sin objetivo y aquí 2,0;
+> `mandarADestino`/`lineaDeVision` del servidor aún preguntan a
+> `_aQuienHabla()`; `setanim.framerate` no llega al dibujo; con `repeatdelay`
+> armados la rata se estira y el jabalí come hierba andando (`playanim once`);
+> la curva del velo de la muerte (`muerte.js`, ~15 s según el motor, decisión
+> del usuario); matar un aldeano resta experiencia en el motor. *(El 94: todo
+> hecho, y lo último era falso — da cero, ver EXPERIENCIA_94.)*
+
 > **EL 92: EL MORDISCO SALE DE LA ANIMACIÓN, LA COSTURA CORRE CON SERVIDOR, Y
 > UN GOBLIN QUE NO AVISABA A NADIE DESDE EL 53**, por cuatro agentes.
 > (A) el daño de un bicho sale del evento 500/600 de su modelo → evento del

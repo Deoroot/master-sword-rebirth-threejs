@@ -248,6 +248,14 @@ export class Fauna {
             ancho: 0,
             // LA RELACIÓN ES DE CADA BICHO, no una sola para todos.
             relacion: i?.ficha?.relacion ?? 0,
+            // EL 93 (pieza G): `FL_ONGROUND` de ESTE jugador, que la araña
+            // mira antes de saltarle encima (`$get(HUNT_LASTTARGET,onground)`,
+            // spider.script:104; `FBitSet(pev->flags, FL_ONGROUND)`,
+            // scriptcmds.cpp:1055). Es la línea gemela de `src/main.js`; sin
+            // ella `Manada.cuerpoDe().objetivoEnSuelo` contestaba `null`, el
+            // guion lo apuntaba «sin física» y con servidor la araña no saltaba
+            // nunca (doc/SALTO_93.md §5.2).
+            enSuelo: Boolean(j.cuerpo.grounded),
           });
         }
         return fuera;
@@ -325,6 +333,16 @@ export class Fauna {
        * Quien sabe a quién se le está hablando es `src/red/partida.js`
        * (`_aQuienHabla()`), así que el cuerpo se le pide a él y aquí no se
        * adivina. Sin cuerpo se devuelve `null` y el gancho lo APUNTA.
+       *
+       * ── CORRECCIÓN DEL 94 ─────────────────────────────────────────────────
+       *
+       * «Quien sabe a quién se le está hablando» era la mitad buena; la mala
+       * era `_aQuienHabla()`, que es el último jugador que abrió un menú en
+       * TODO el servidor. Desde el 94 `partida.js` pasa el cuerpo del jugador
+       * que nombra `ref` (`_cuerpoDeRef`, con el `RetrieveEntity` del motor,
+       * global.cpp:382-398), y `null` si `ref` no es un jugador — así que el
+       * `if` de abajo ya no convierte en el jugador cualquier nombre que
+       * llegue con un cuerpo al lado.
        */
       entidadDeGuion: (ref, suya, cuerpoDelJugador = null) => {
         const r = String(ref ?? "");

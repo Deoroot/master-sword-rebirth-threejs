@@ -36,7 +36,7 @@ import { sueloBajo, sePuedeEstar } from "../src/bsp/arbol.js";
 import { luzEnSuelo, colorDeAdorno } from "../src/bsp/luz.js";
 import { tablasDeGamma, AJUSTES } from "../src/bsp/gamma.js";
 import { leerMdl, TAM } from "../src/bsp/mdl.js";
-import { extraerBicho, nombreArchivo } from "./bicho.mjs";
+import { extraerBicho, nombreArchivo, animacionesDelGuion } from "./bicho.mjs";
 import { ACT, animacionDeParado } from "../src/play/actividad.js";
 
 import { mapaDeArgv, bspDe, salidaDe } from "./mapa.mjs";
@@ -119,7 +119,11 @@ for (const e of puestos) {
   const s = guionDeEntidad(e);
   if (!s) { sinScript.set(e.classname, (sinScript.get(e.classname) ?? 0) + 1); continue; }
   if (fichas.has(s)) continue;
-  const f = leerFichaNpc(SCRIPTS, s);
+  // Con el MAPA (el 93): `game.map.name` decide de verdad en unos cuantos
+  // guiones —el jefe goblin sólo es jefe en `goblintown`
+  // (monsters/goblinchief.script:5-19)—, y sin decírselo esas fichas salen
+  // con lo que dependa de él declarado dudoso.
+  const f = leerFichaNpc(SCRIPTS, s, { mapa: MAPA });
   const m = modeloYAnimaciones(f);
   if (!f) { sinScript.set(s, (sinScript.get(s) ?? 0) + 1); continue; }
   if (!m) { sinModelo.set(s, (sinModelo.get(s) ?? 0) + 1); continue; }
@@ -182,8 +186,45 @@ for (const e of entidades) {
   }
 }
 
+// --- 2c. LAS ANIMACIONES QUE PIDE EL GUION, y no la ficha -------------------
+//
+// Experimento 93 (doc/HORNEADO_93.md). La lista blanca de abajo salía de la
+// FICHA —`setidleanim`, `setmoveanim` del nacimiento y las `ANIM_*` que `iaDe`
+// sabe leer— y un guion pide muchas más con `playanim`: la araña de Gate City
+// salta con `playanim critical ANIM_LATCH_ATTACK` y
+// `const ANIM_LATCH_ATTACK jumpmiss` (spider.script:80-83, :106), y `jumpmiss`
+// no estaba en ninguna lista. El visor caía a la secuencia 0, el evento 600 del
+// fotograma 22 —`frame_jump`— no salía nunca y la araña se quedaba congelada
+// a medio salto con `CAN_HUNT 0`. Es el 78 con otra ropa: *una lista blanca
+// sólo mira donde sabe mirar*, y el nombre estaba en otro evento.
+//
+// Los tres comandos que ponen una secuencia por NOMBRE en un monstruo
+// (npcscript.cpp:1458-1555): `setidleanim <anim>`, `setmoveanim <anim>` y
+// `playanim <tipo> <anim>` —el nombre es el SEGUNDO parámetro; con uno solo,
+// `playanim break`, no hay nombre (:1491-1498)—. `setactionanim` está comentado
+// en el motor (:58, :1480-1485) y no se mira.
+//
+// Se recorren TODOS los bloques del guion y de sus `#include` (los de
+// `[client]` no, igual que `partirScript`), no sólo los del nacimiento: un
+// `playanim` vive en el evento que lo usa. Y el parámetro se resuelve contra
+// TODAS las asignaciones de la variable (`const`/`setvar`/`setvard`/`setvarg`/
+// `local`), no sólo la primera, porque aquí la pregunta es «qué nombres puede
+// llegar a pedir», no «cuál tiene al nacer». Lo que no se resuelve a un nombre
+// —un `$función(...)`, un número— se cuenta y se dice.
+//
+// Pedir de más no rompe nada: `extraerBicho` sólo emite las que el MODELO trae
+// (tools/bicho.mjs:259-274). Lo que cuesta es tamaño, y se mide.
+const sinResolver = new Map();      // script -> Set de parámetros que no son nombre
+const animDelGuion = new Map();     // script -> Set de nombres
+for (const s of fichas.keys()) {
+  const r = animacionesDelGuion(SCRIPTS, s);
+  animDelGuion.set(s, r.nombres);
+  if (r.sinResolver.size) sinResolver.set(s, r.sinResolver);
+}
+
 // --- 3. extraer cada (modelo, cuerpo) distinto ------------------------------
 const quiere = new Map();   // clave -> Set de secuencias pedidas
+const soloGuion = new Map(); // clave -> Set de las que SÓLO pide el guion (para medir)
 const deClave = new Map();  // clave -> {modelo, cuerpo}
 for (const [s, m] of fichas) {
   const cuerpo = cuerpoDe(m.modelo, m.cuerpos);
@@ -207,6 +248,20 @@ for (const [s, m] of fichas) {
   for (const a of animDeEscenas.get(s) ?? []) quiere.get(clave).add(a);
   m.clave = clave;
 }
+// Y las del guion, al final y aparte, para poder decir cuántas pone SÓLO él.
+for (const [s, m] of fichas) {
+  const q = quiere.get(m.clave);
+  if (!soloGuion.has(m.clave)) soloGuion.set(m.clave, new Set());
+  for (const a of animDelGuion.get(s) ?? []) if (!q.has(a)) { q.add(a); soloGuion.get(m.clave).add(a); }
+}
+// (Este bucle va DESPUÉS del de las fichas a propósito: si otra ficha con el
+// mismo modelo ya nombraba la secuencia, no cuenta como «sólo del guion».)
+{
+  const n = [...animDelGuion.values()].reduce((a, v) => a + v.size, 0);
+  const sr = [...sinResolver.values()].reduce((a, v) => a + v.size, 0);
+  console.log(`\n  del guion       ${n} nombres de animación en ${animDelGuion.size} guiones ` +
+    `(playanim/setidleanim/setmoveanim); ${sr} parámetros que no son un nombre`);
+}
 
 // Un ajuste no puede quedarse callado (apartado 5 de CLAUDE.md): se dice qué
 // ha pedido el mapa y a quién, y se dice también cuando no pide nada.
@@ -218,6 +273,11 @@ for (const [s, m] of fichas) {
   for (const [s, v] of pares) console.log(`    ${s.padEnd(26)} ${[...v].join(" ")}`);
 }
 
+// Las que entran SÓLO porque las pide el guion: ni la 0 ni las de ACT_IDLE,
+// que `extraerBicho` emite siempre (tools/bicho.mjs:272-274).
+const nuevasDelGuion = (clave, r) => (r.detalleSecuencias ?? [])
+  .filter((x) => x.indice !== 0 && x.actividad !== ACT.IDLE && soloGuion.get(clave)?.has(x.nombre.toLowerCase()))
+  .map((x) => x.nombre);
 console.log(`\n  modelos         ${quiere.size} distintos (modelo + bodypart)`);
 const emitidos = new Map();
 for (const [clave, { modelo, cuerpo }] of deClave) {
@@ -239,6 +299,18 @@ for (const [clave, { modelo, cuerpo }] of deClave) {
   console.log(`    ${modelo.padEnd(26)} ${String(r.triangulos).padStart(5)} tri, ${String(r.huesos).padStart(3)} huesos, ` +
     `${String(r.secuencias.length).padStart(2)} sec emitidas, ${(r.bytes / 1024).toFixed(0).padStart(5)} KB · ` +
     `oráculo ${r.oraculo.caben}/${r.oraculo.de}, el peor a ${r.oraculo.peor.toFixed(1)} u`);
+  const nuevas = nuevasDelGuion(clave, r);
+  if (nuevas.length) console.log(`      + del guion  ${nuevas.join(" ")}`);
+}
+{
+  let sec = 0, bichos = 0;
+  for (const [clave, r] of emitidos) {
+    const n = nuevasDelGuion(clave, r).length;
+    sec += n; if (n) bichos++;
+  }
+  const kb = [...emitidos.values()].reduce((a, r) => a + r.bytes, 0) / 1024;
+  console.log(`\n  sólo del guion  ${sec} secuencias horneadas en ${bichos} de ${emitidos.size} modelos; ` +
+    `${kb.toFixed(0)} KB de modelos en total`);
 }
 
 // --- 4. dónde va cada uno, y con qué luz ------------------------------------

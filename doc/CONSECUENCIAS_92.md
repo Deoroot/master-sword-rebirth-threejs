@@ -182,3 +182,92 @@ con el aviso funcionando**: `probe.reaccion.matarYAvisar` llama a
 `S.avisos`. Lo que mide el aviso en esta sonda es «al morir, el goblin avisa a
 los aliados que tiene a tiro de grito», que lee la lista de avisados. No se ha
 tocado la prueba (no es de esta pieza); queda dicho aquí.
+
+---
+
+## 93 (pieza F): las dos rojas de las crías eran la ventana de la sonda, no el juego
+
+Al acabar la pieza A del 93 la sonda daba **46/48**, rojas «dos están libres
+encima de su saco y avanzan» y «las cuatro te cazan al tenerte a dos metros»;
+con los `repeatdelay` de los bichos desarmados (su rotura R2), 47/48 con sólo
+la primera. Quedó sin diagnosticar (doc/SALTO_93.md §6).
+
+### Lo medido
+
+- Con el árbol del 93 y el horneado de la pieza E, la sonda **sin tocar** dio
+  48/48 cuatro veces seguidas. En un `git worktree` con el mismo árbol y R2
+  puesta (comprobada con `grep`), **48/48 y 47/48 en dos pasadas seguidas**:
+  en la roja, la primera cría acabó en `avanza` habiendo andado 0,09 m. O sea
+  que R2 no decidía nada: el mismo código sale verde o rojo.
+- En las cuatro crías sólo la PRIMERA (`#58`) está sin objetivo cuando se le
+  pone el jugador al lado; las otras tres, a 90 u, le ven mientras se mide
+  aquélla y ya cazan cuando les toca (`te ven a los: …, 0.0 s (ya cazaba)`).
+- Cuándo fija la primera, en pasos de 1/60 (sonda de medida en el
+  scratchpad): 0,48 / 0,58 / 0,65 / 0,82 s en cuatro cargas de página. Y
+  barriendo la fase a mano —adelantando el reloj antes de ponerle al
+  jugador—, **1,92 / 1,67 / 1,42 s con 0,25 / 0,5 / 0,75 s de adelanto**:
+  pendiente −1. Espera su turno de pensar.
+
+### La causa
+
+Una cría sin objetivo sólo mira alrededor cuando su `Cazador` piensa, y sin
+objetivo piensa cada `CICLO.ocioso` = **2,0 s** (src/play/ia.js:43, `tic`
+:183-233). Lo que tarda en verte es **lo que le queda de ciclo** cuando apareces,
+y eso lo pone el reloj de pared que pasa entre las llamadas de la sonda: un
+dado uniforme entre 0 y 2 s. La sonda le daba **exactamente 2,0 s**:
+
+- «libres» necesita que ande más de medio metro dentro de la ventana: con la
+  fase por encima de ~1,7 s no le da tiempo. Ésa es la roja que se ve a menudo.
+- «te cazan» necesita sólo que fije, y falla con la fase ENTERA: 2,0 − 120 ·
+  (1/60) vale 2·10⁻¹⁵, por encima de cero, y hace falta el paso **121**. El
+  borde del 81 —nuestro número cae justo en el umbral— y lo fija
+  `test/crias93f.test.mjs`. No lo he reproducido en el navegador; sí he visto
+  la primera cría fijar a **2,0 s** justos en una pasada de la sonda ya
+  corregida, que con la ventana vieja habría sido roja.
+
+**El juego no hace nada distinto del motor; el motor tarda MÁS.** La cría es de
+la IA VIEJA (`spider_mini` → `spider_base` → `base_monster` →
+`base_npc_attack`), cuyo bucle es `hunting_mode_go` con `repeatdelay
+CYCLE_TIME` y **`CYCLE_TIME_IDLE 2.8`** (base_npc_attack.script:7, :13,
+:62-63; `cycle_down` lo vuelve a poner, :760-766). El 2,0 es de la IA nueva
+(`const CYCLE_TIME_IDLE 2.0`, base_npc_attack_new.script:95). Y un jugador que
+aparece quieto no hace ruido, así que `game_heardsound` (:350-411), que le
+haría fijar antes, no corre. En Master Sword la cría puede tardar hasta 2,8 s:
+una ventana de 2 s no podía estar bien ni en el motor. El verde del 92 era la
+fase de esa pasada.
+
+### El arreglo, en la sonda
+
+`sondas/consecuencias.mjs`, sección 5: se espera a que cada cría fije
+objetivo, de décima en décima, con tope `TOPE_PARA_VERTE = 3.0` s —por encima
+de los 2,8 del motor, para que el control siga valiendo si un día se porta el
+ciclo de la IA vieja—; se imprime cuándo («te ven a los»), y **después** se le
+dejan los dos segundos de caza que miden «libres» y «dentro del saco». «Te
+cazan» exige además que haya fijado antes del tope.
+
+### Roturas
+
+En el `worktree`, `grep` = 1 puesta y = 0 quitada, archivo comparado con
+`cmp` al restaurar:
+
+| rotura | resultado |
+| --- | --- |
+| la IA no fija nunca (`visto = null` en `Cazador.tic`) | **45/48**: «te cazan» (`nunca` ×4), «libres», «dentro del saco» |
+| `CICLO.ocioso` a 2,8, el del motor — robustez, no rotura | 48/48 dos veces; la primera fijó a 1,7 y a **2,2 s**, que con la ventana vieja era rojo seguro |
+| `TOPE_PARA_VERTE` a 2,0 en la sonda | `test/crias93f` 1 roja de 4 |
+
+### Pendiente, sin tocar
+
+**El ciclo ocioso de la IA vieja.** El puerto usa 2,0 para todos los bichos y
+los de la familia vieja (rata, jabalí, arañas, murciélagos, limos…) piensan
+en el motor cada 2,8 s sin objetivo: aquí reaccionan antes que en Master
+Sword. No se ha cambiado porque mueve a todos los bichos viejos de los cinco
+mapas y las ventanas de otras sondas (`salto93`, `mordisco92`), y necesita su
+propia medida; la familia se sabe en el guion (`GuionDeNpc.maneja
+("hunting_mode_go")`, src/play/npcguion.js) y no en la ficha.
+
+### Resultados
+
+`consecuencias` **48/48** en dos pasadas con el horneado definitivo de la
+pieza E (`build/gatecity/bichos.json` de las 08:32:07), y `test/crias93f.test.mjs`
+4/4.

@@ -524,6 +524,19 @@ export function montarSonda(S) {
       },
       /** Mata y devuelve lo que ha quedado en pantalla en el mismo instante. */
       matar(o) { return S.sesion?.matar({ tipo: "monstruo", ...o }); },
+      /**
+       * EL 94. Un golpe por la puerta de TODO el daño del jugador, `danar`, que
+       * es la que avisa al oyente del tinte: no se llama al tinte a mano (el 59).
+       * Devuelve lo que hay en pantalla y el empujón de la vista en ese instante.
+       */
+      golpear(dano, o = {}) {
+        const r = S.sesion?.danar(dano, { porQue: "la sonda", ...o }) ?? null;
+        const e = S.mensajes?.estado() ?? null;
+        return { r, fundido: e?.fundido ?? null, velo: e?.velo ?? null, golpe: S.golpeDeVista ?? null,
+          vida: S.sesion?.personaje?.vida ?? null, vidaMax: S.sesion?.limites?.vidaMax ?? null };
+      },
+      /** El empujón de la vista ahora (lo suelta el bucle, `pasoDelHud`). */
+      golpe: () => S.golpeDeVista ?? null,
       /** El cadáver: si está puesto, dónde y con qué animación. */
       cadaver: () => S.cadaver?.estado() ?? null,
       /**
@@ -535,6 +548,7 @@ export function montarSonda(S) {
        */
       paso(dt = 1 / 60) {
         S.mensajes?.paso(dt);
+        S.pasoDelGolpe?.(dt);
         if (S.cadaver?.puesto) S.cadaver.paso(dt);
         aplicarCamara();
         return S.mensajes?.estado() ?? null;
@@ -2528,6 +2542,49 @@ export function montarSonda(S) {
     // (`GuionDeNpc.costuraCuenta`), no lo que la IA cree que ha mandado: un
     // contador del lado que envía no mide que haya llegado (el 67).
     costura: {
+      /**
+       * EL 94. Un sitio a `metros` del bicho `id` desde el que ÉL te ve: el
+       * rayo desde ese punto, a la altura del ojo, hasta su ojo no choca con
+       * nada antes de llegar a él, y hay suelo debajo a menos de 3 m. Prueba 16
+       * rumbos y devuelve los pies `[x, y, z]` o `null`.
+       *
+       * Existe porque `salto93` te plantaba siempre 3 m hacia −X, y en la cueva
+       * de las arañas eso es pared adentro: la araña te perdía de vista, la IA
+       * no la volvía a fijar sin verte (ia.js:259-263) y pasaba 150 s paseando.
+       * El rayo va DESDE el punto hacia el bicho y no al revés: empezar dentro
+       * de su propio cilindro daría un choque en cero (el 69).
+       */
+      sitioALaVista(id, metros = 1.5) {
+        const i = (S.bichos?.instancias ?? [])[id];
+        if (!i || !S.world) return null;
+        const u = S.level?.unitsPerMetre ?? 39.37;
+        const ojoBicho = { x: i.donde[0], y: i.donde[1] + (i.ficha?.ia?.alto ?? 32) / u, z: i.donde[2] };
+        const altoOjo = 64 / u;
+        // El suelo es el MUNDO, no un bicho: sin este filtro el rayo tocaba el
+        // techo del cilindro de la cría (20 u, 0,5 m) y la sonda te dejaba DE
+        // PIE ENCIMA de ella — que corría 25 s sin morderte, y la grande no
+        // saltaba. Se leyó como un posible fallo del juego antes de verlo.
+        const deBicho = new Set((S.bichosSolidos?.puestos ?? []).map((q) => q.colisionador.handle));
+        const soloMundo = (col) => !deBicho.has(col.handle);
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * Math.PI * 2;
+          const x = i.donde[0] + Math.cos(a) * metros, z = i.donde[2] + Math.sin(a) * metros;
+          const suelo = S.world.world.castRay(new RAPIER.Ray({ x, y: i.donde[1] + 1, z }, { x: 0, y: -1, z: 0 }),
+            3, true, undefined, undefined, undefined, S.player?.body, soloMundo);
+          if (!suelo) continue;
+          const pies = [x, i.donde[1] + 1 - suelo.timeOfImpact, z];
+          // El mismo piso, ±0,2 m: la sonda mide el salto, no los escalones.
+          if (Math.abs(pies[1] - i.donde[1]) > 0.2) continue;
+          const o = { x, y: pies[1] + altoOjo, z };
+          const d = { x: ojoBicho.x - o.x, y: ojoBicho.y - o.y, z: ojoBicho.z - o.z };
+          const L = Math.hypot(d.x, d.y, d.z);
+          const g = S.world.world.castRay(new RAPIER.Ray(o, { x: d.x / L, y: d.y / L, z: d.z / L }),
+            L, true, undefined, undefined, undefined, S.player?.body);
+          // Libre si no choca o si lo que toca está ya pegado al bicho (su cilindro).
+          if (!g || g.timeOfImpact > L - 0.7) return pies;
+        }
+        return null;
+      },
       /** La de un bicho por su guion (`monsters/giantrat`) y orden, o `null`. */
       de(guion, n = 0) {
         const l = (S.bichos?.instancias ?? []).filter((i) => i.ficha?.script === guion);
@@ -2548,7 +2605,69 @@ export function montarSonda(S) {
           // EL 92: los `dodamage` que pidió su guion y los que llegaron sin
           // evento de animación que los recogiera.
           dano: g?.danoCuenta ? { pedidos: g.danoCuenta.pedidos, sinGancho: g.danoCuenta.sinGancho } : null,
+          // EL 93: el cuerpo que lleva el guion (`Manada.cuerpoDe`), sus
+          // `repeatdelay` y cuántas veces ha corrido cada evento del salto de
+          // la araña (spider.script:93-192), leído del RASTRO del guion: esos
+          // eventos corren por el reloj, no por la costura.
+          fisica: i.fisica ? { ...i.fisica, vel: i.fisica.vel ? [...i.fisica.vel] : null, sigue: i.fisica.sigue ? { ...i.fisica.sigue } : null } : null,
+          donde: i.donde ? [...i.donde] : null, anim: i.anim?.nombre ?? null,
+          // EL 94: la generación (sube al rebobinar), si hay una de una sola
+          // vez echando el candado, y si lleva destino puesto.
+          gen: i.anim?.gen ?? null, candado: i.unaVezHasta != null, conDestino: Boolean(i.destino),
+          repeticiones: g?.repeticiones ? JSON.parse(JSON.stringify(g.repeticiones)) : null,
+          vars: Object.fromEntries(["IS_HUNTING", "CAN_HUNT", "CAN_ATTACK", "SPIDER_LATCHING", "SPIDER_LATCHED",
+            "IS_ATTACKING", "HUNT_LASTTARGET", "SPIDER_LATCHATTACK"]
+            .map((v) => [v, g?.guion?.vars?.get?.(v) ?? null])),
+          rastro: (g?.guion?.rastro ?? []).reduce((a, r) => {
+            if (/^(frame_jump|frame_falloffend|spider_latch_\w+)$/.test(r.evento)) a[r.evento] = (a[r.evento] ?? 0) + 1;
+            return a;
+          }, {}),
         };
+      },
+      /**
+       * EL 94: CUÁNTO AVANZA EL RELOJ DEL DIBUJO de un bicho (y de uno de
+       * referencia a ritmo 1) durante `ms` de reloj de pared, leído de la
+       * acción del mezclador de Three fotograma a fotograma —el clip que se
+       * está viendo—, no del `timeScale`. Una vuelta de un clip de bucle se
+       * suma; un cambio de acción (otra animación) no se cuenta.
+       */
+      async relojDeDibujo(id, ms = 1500) {
+        const l = S.bichos?.instancias ?? [];
+        const i = l.find((x) => x.id === id);
+        const ref = l.find((x) => x !== i && !x.dormido && !x.muerto && x.mezclador && x.actual?.seq?.bucle && (x.fisica?.ritmoAnim ?? 1) === 1);
+        if (!i?.mezclador || !ref) return null;
+        const leer = (x) => { const a = x.actual?.clip ? x.mezclador.existingAction(x.actual.clip) : null; return a ? { a, t: a.time, d: x.actual.clip.duration } : null; };
+        const cuenta = (x) => ({ x, ant: leer(x), suma: 0, contado: 0, cambios: 0 });
+        const c = [cuenta(i), cuenta(ref)];
+        const t0 = performance.now();
+        let antes = t0;
+        while (performance.now() - t0 < ms) {
+          await new Promise((r) => requestAnimationFrame(r));
+          const ya = performance.now(), dReal = (ya - antes) / 1000;
+          antes = ya;
+          for (const k of c) {
+            const ahora = leer(k.x);
+            if (ahora && k.ant && ahora.a === k.ant.a) { let d = ahora.t - k.ant.t; if (d < 0) d += ahora.d; k.suma += d; k.contado += dReal; } else k.cambios++;
+            k.ant = ahora;
+          }
+        }
+        const real = (performance.now() - t0) / 1000;
+        return {
+          real, ritmo: i.fisica?.ritmoAnim ?? 1, anim: i.anim?.nombre, avance: c[0].suma, contado: c[0].contado, cambios: c[0].cambios,
+          ref: { guion: ref.ficha?.script, anim: ref.anim?.nombre, avance: c[1].suma, contado: c[1].contado, cambios: c[1].cambios },
+        };
+      },
+      /**
+       * EL 93: la vida del personaje a tope. El veneno del salto son 5 por
+       * segundo durante 4 (spider.script:75-76) y un personaje recién hecho
+       * tiene menos de 20: sin esto muere agarrado, `spider_latch_think` ve
+       * al objetivo muerto y la araña se suelta antes de tiempo (:161). Lo
+       * que se mide del veneno se lee de las HERIDAS, no de la vida.
+       */
+      curar() {
+        if (!S.sesion?.personaje) return null;
+        S.sesion.personaje.vida = S.sesion.limites?.vidaMax ?? S.sesion.personaje.vida;
+        return S.sesion.personaje.vida;
       },
       /** Lo de toda la partida: nacidos, renacidos y lo que no llegó. */
       partida() {
@@ -2640,6 +2759,23 @@ export function montarSonda(S) {
           rango: i.intencion?.rango ?? null,
           alcanceDeGolpe: i.ficha.ia?.alcanceDeGolpe ?? null,
         };
+      },
+
+      /**
+       * EL 94: LLEVAR A UNO A UN SITIO (metros de escena, sus pies), para
+       * montar una escena que el mapa no trae de salida: en Gate City el
+       * aldeano más cercano al guardia está a 1 179 unidades, y el guardia sólo
+       * oye a quien pega a menos de 1 024 (gatecity/guard.script:15, :110).
+       * Mueve el SITIO y nada más: lo que se mide después corre por el juego.
+       */
+      llevar(guion, donde, n = 0) {
+        const i = this._buscar(guion, n);
+        if (!i || !Array.isArray(donde)) return null;
+        i.donde = [donde[0], donde[1], donde[2]];
+        i.destino = null;
+        i.nodo?.position?.set?.(donde[0], donde[1], donde[2]);
+        S.bichosSolidos?.seguir?.();
+        return [...i.donde];
       },
 
       /**

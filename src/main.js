@@ -109,7 +109,7 @@ import { avisoDeCanal, hablar, HABLA } from "./play/chat.js";
 // LO QUE PASA AL MORIR Y AL SUBIR (experimento 41): el velo rojo, el centrado,
 // el cartel que se escribe letra a letra y la lluvia de colores.
 import { montarMensajes } from "./juego/mensajes.js";
-import { camaraDeMuerte, sonidoDeMuerte, DESVANECIDO } from "./play/muerte.js";
+import { camaraDeMuerte, sonidoDeMuerte, DESVANECIDO, AL_REAPARECER, efectoDelGolpe, soltarGolpe } from "./play/muerte.js";
 import { subida } from "./play/nivel.js";
 import { presentacion } from "./play/intro.js";
 import { montarChispas, cargarBengala } from "./render/chispas.js";
@@ -202,6 +202,9 @@ let mensajes = null;
 let chispas = null;
 // Donde se queda la camara mientras estas muerto, o  si estas vivo.
 let camaraMuerte = null;
+// EL 94. El `pev->punchangle` del jugador, en GRADOS del motor (cabeceo, giro,
+// alabeo): lo empuja cada golpe y lo suelta `PM_DropPunchAngle`. `muerte.js`.
+let golpeDeVista = [0, 0, 0];
 // Experimento 52: el recorrido de la camara mientras el menu principal esta
 // abierto. `null` mientras el fondo vivo este apagado, que es hoy siempre salvo
 // para la sonda que elige miradores. Ver `src/play/miradores.js` y el bloque
@@ -1137,6 +1140,8 @@ async function arrancarJuego() {
     // corre aquí; lo que cambia es de dónde viene el texto.
     red?.al("suceso", (m) => suceso(m.suceso ?? "normal", m.texto));
     red?.al("aviso", (m) => mensajes?.aviso(m.titulo ?? "", m.texto ?? ""));
+    // EL 93: el fundido y los iconos de un efecto que corre en el servidor.
+    red?.al("pantalla", (m) => mensajes?.pantalla(m));
 
     // ── LO QUE CAMBIA DE TU PERSONAJE, cuando lo cambia el servidor ────────
     //
@@ -2234,6 +2239,10 @@ async function arrancarJuego() {
         herir: (g) => arnesDePaseo.golpear(
           g.atacante?.instancia ?? { ficha: { nombre: g.atacante?.nombre ?? "none", ia: {} } },
           "jugador", g.dano, g.tipo ?? ""),
+        // EL 93: `effect screenfade`, `hud.addstatusicon`… de sus efectos (el
+        // veneno) y de su guion. Al mismo sitio que lo que llega del servidor
+        // por `MENSAJE.PANTALLA`, con la misma forma (`src/play/efectospantalla.js`).
+        pantalla: (p) => mensajes?.pantalla(p.tipo === "brillo" ? { que: "brillo", ...p.brillo } : { que: p.tipo, ...p.mensaje }),
         suceso: (tipo, texto) => suceso(tipo, texto),
         // `usetrigger` (67): la unica puerta del jugador hacia el `.bsp`. Va por
         // el asa de modulo, no por la variable local del armado del mundo: un
@@ -2493,7 +2502,25 @@ async function arrancarJuego() {
       if (tipo === "monstruo") suceso("nopuedes", `Death Penalty: Lost ${impuesto} gp`);
     });
     // Y al volver se limpia todo de golpe, que es lo que hace `respawn()`.
-    sesion.al("aparece", () => { camaraMuerte = null; mensajes?.limpiar(); cadaver?.quitar(); });
+    // EL 94: y el rojo se va por donde se va en el motor, con el fundido de
+    // alfa 0 que manda `Spawn` (player.cpp:2784) y que pisa el `clgame.fade`.
+    sesion.al("aparece", () => {
+      camaraMuerte = null; mensajes?.limpiar(); cadaver?.quitar();
+      mensajes?.desvanecer(AL_REAPARECER);
+      golpeDeVista = [0, 0, 0];
+    });
+    // EL 94. Cada golpe que te entra tiñe la pantalla y te mueve la vista:
+    // `CBasePlayer::TakeDamageEffect`, player.cpp:537-550. El suceso `dano` sale
+    // ANTES de `matar` (sesion.js), que es el orden del motor: `TakeDamageEffect`
+    // es la primera línea de `CMSMonster::TakeDamage` (msmonsterserver.cpp:2369)
+    // y `Killed` viene después, así que el golpe mortal tiñe y la muerte lo pisa.
+    // `pedido` es `flDamage`, el daño entero, no el que cabía en tu vida.
+    sesion.al("dano", ({ cantidad, pedido = cantidad }) => {
+      const e = efectoDelGolpe(pedido, sesion.limites?.vidaMax);
+      if (!e) return;
+      if (e.fundido) mensajes?.desvanecer(e.fundido);
+      golpeDeVista = golpeDeVista.map((v, k) => v + e.golpe[k]);
+    });
   }
 
   say("setting up the props…");
@@ -2607,7 +2634,8 @@ async function arrancarJuego() {
   //
   // El velo de morir, el centrado y los carteles de subir de nivel. No necesita
   // ningún horneado, así que se monta siempre.
-  mensajes = montarMensajes();
+  // `base`: los iconos de estado del 93 son PNG horneados (`npm run hud`).
+  mensajes = montarMensajes({ base: `${BASE_COMUN}/` });
 
   // Y LA LLUVIA DE COLORES. La bengala sí necesita horneado —`npm run
   // efectos`—, y si no está se monta con la nuestra, que tiene un cuadro.
@@ -3086,7 +3114,8 @@ async function arrancarJuego() {
     ventanaDeAviso: (titulo, texto) => mensajes?.aviso(titulo, texto),
     // El 60: `npcstore.offer` abre el selector de la tienda.
     abrirTienda: (o) => abrirLaTienda?.(o) ?? false,
-    animar: (instancia, nombre) => bichos?.deUnaVez?.(instancia, nombre),
+    // EL 94: con el modo del `playanim` (`once`/`critical`), ver `Manada.playanim`.
+    animar: (instancia, nombre, modo) => bichos?.playanim?.(instancia, nombre, modo),
     borrarDelMundo: nombre => bichos?.aparecedor?.borrar(nombre),
     // ── EL 79: PARA QUE LOS NPC TE OIGAN ────────────────────────────────
     //
@@ -3802,7 +3831,12 @@ async function arrancarJuego() {
       eye[1] + (v ? v.pos.z / uPorM : 0) + zSentado / uPorM,   // la z de GoldSrc es la y de aquí
       eye[2] + (v ? v.pos.y / uPorM : 0),
     );
-    camera.rotation.set(player.pitch, player.yaw, 0);
+    // EL 94: más el empujón de los golpes, que el motor suma a la vista en
+    // `V_CalcNormalRefdef` (view.cpp:744-745). Va en grados del motor: cabeceo
+    // positivo es mirar ABAJO (en Three, arriba: signo cambiado), y el giro y
+    // el alabeo van como en Three. Sólo se ve, no mueve al jugador.
+    const g = golpeDeVista, rad = Math.PI / 180;
+    camera.rotation.set(player.pitch - g[0] * rad, player.yaw + g[1] * rad, g[2] * rad);
   }
 
   function vitalesDelPersonaje() {
@@ -5043,6 +5077,9 @@ async function arrancarJuego() {
     // y lo que se pierde se mide donde vive, en las pruebas de `entrenar`.
     let total = 0;
     for (const [cubo, cantidad] of Object.entries(xp)) {
+      // `while (iRemainingExp > 0)`, playerstats.cpp:83: un cubo negativo —el
+      // aldeano de `skilllevel -10`— no entra al bucle y no resta ni enseña.
+      // Sin esta línea `aprender` le daría el mínimo de 1 (el 94).
       if (!(cantidad > 0)) continue;
       total += cantidad;
       const r = entrenar(p, cubo, cantidad);
@@ -5252,6 +5289,9 @@ async function arrancarJuego() {
         // valor para los 69 haría que o te atacara el pueblo entero o no te
         // atacara nadie.
         relacion: i?.ficha?.relacion ?? 0,
+        // EL 93: `FL_ONGROUND` del jugador, que la araña mira antes de saltarle
+        // encima (`$get(HUNT_LASTTARGET,onground)`, spider.script:104).
+        enSuelo: Boolean(player.grounded),
       }];
     },
     /**
@@ -6194,6 +6234,13 @@ async function arrancarJuego() {
    */
   const velocidadParaLosPasos = () => [...player.vel];
 
+  /**
+   * EL 94: el empujón de un golpe se suelta solo (`PM_DropPunchAngle`). Es una
+   * función y no una línea del bucle para que la sonda, con el bucle parado,
+   * llame a ESTA y no a una copia (el 65).
+   */
+  function pasoDelGolpe(dt) { golpeDeVista = soltarGolpe(golpeDeVista, dt); }
+
   function pasoDelHud(dt) {
     // Los `calleventtimed` de los guiones, con el MISMO reloj que todo lo
     // demás. Va antes del `if (!hudMs)` a propósito: una conversación no se
@@ -6204,6 +6251,7 @@ async function arrancarJuego() {
     // y quedarse sin el aviso de la muerte porque falta `hud.json` es
     // exactamente el fallo que ya está documentado un poco más arriba.
     mensajes?.paso(dt);
+    pasoDelGolpe(dt);
     if (chispas?.corriendo) { chispas.seguir(player.eye); chispas.paso(dt); }
     // El cadáver sigue respirando, que es lo que hace el del motor: `CreateCorpse`
     // llama a `ResetSequenceInfo()` y la secuencia se queda andando.
@@ -6373,6 +6421,9 @@ async function arrancarJuego() {
     get colocarCamaraDelOjo() { return colocarCamaraDelOjo; },
     get chispas() { return chispas; },
     get camaraMuerte() { return camaraMuerte; },
+    /** EL 94: el `punchangle` de los golpes, en grados del motor. */
+    get golpeDeVista() { return [...golpeDeVista]; },
+    get pasoDelGolpe() { return pasoDelGolpe; },
     get cadaver() { return cadaver; },
     get celebrarSubida() { return celebrarSubida; },
     get candidatosDeGolpe() { return candidatosDeGolpe; },

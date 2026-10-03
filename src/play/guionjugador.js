@@ -39,6 +39,7 @@ import { desplazamientoDeVista } from "./efectosdeguion.js";
 import { habilidadDeGuion } from "./habilidad.js";
 import { propiedadesDe } from "../juego/stats.js";
 import { EfectosDeEntidad, BanderasDeEntidad, ResistenciasDeEntidad } from "./efectos.js";
+import { leerFundido, leerBrillo, leerIcono } from "./efectospantalla.js";
 
 /**
  * Los eventos que el motor le manda al jugador y que este puerto SÍ dispara.
@@ -202,6 +203,13 @@ export class GuionDelJugador {
     // resistencias. Quien la inyecta (`src/main.js`) la manda por el MISMO
     // camino que el golpe de un bicho. Firma Y uso abajo, por el 63.
     herir = null,
+    // EL 93. LO QUE UN GUION LE HACE A LA PANTALLA DEL JUGADOR: `effect
+    // screenfade`, `effect glow`, `hud.addstatusicon`/`killstatusicon`/
+    // `killicons` (ver `src/play/efectospantalla.js`). `(p) => void` con
+    // `p = { tipo: "fundido"|"icono"|"brillo", todos, mensaje|brillo }`. En el
+    // navegador lo dibuja `src/juego/mensajes.js`; en el servidor lo manda
+    // `Partida._efectosDe` por el cable a ESE cliente. Firma Y uso, por el 63.
+    pantalla = null,
   } = {}) {
     this.personaje = personaje;
     this._ahora = ahora;
@@ -228,6 +236,10 @@ export class GuionDelJugador {
     this._herir = herir;
     /** Cada daño recibido por esta puerta, ya resistido. Para medir. */
     this.heridas = [];
+    // EL 93: la puerta de la pantalla, y lo que ha pasado por ella (para medir;
+    // con tope, porque un veneno largo manda un fundido por segundo).
+    this._pantalla = pantalla;
+    this.pantallas = [];
 
     const dueño = this;
     this.guion = new Guion({
@@ -336,6 +348,21 @@ export class GuionDelJugador {
     this._herir({ ...g, dano });
   }
 
+  /**
+   * EL 93. Lo que un comando de pantalla le manda a ESTE jugador. Sin puerta
+   * se apunta —no se traga: el 66— y se cuenta igual, para poder medir que el
+   * comando corrió.
+   */
+  mandarAPantalla(p, guion = this.guion) {
+    this.pantallas.push({ t: this._ahora(), tipo: p.tipo, todos: p.todos, mensaje: p.mensaje ?? null, brillo: p.brillo ?? null, de: guion?.nombre ?? null });
+    if (this.pantallas.length > 200) this.pantallas.splice(0, this.pantallas.length - 200);
+    if (!this._pantalla) {
+      guion?.anotarNoSoportado?.("comando", `${p.tipo} (sin pantalla)`);
+      return;
+    }
+    this._pantalla(p);
+  }
+
   /** El paso del reloj: los eventos con `repeatdelay`. */
   paso(dt = 0) {
     // Los dos relojes, y son distintos: `repeatdelay` se mide contra el reloj
@@ -366,6 +393,77 @@ export class GuionDelJugador {
   }
 }
 
+// ── EL 93: LOS COMANDOS DE PANTALLA ─────────────────────────────────────────
+//
+// `effect` y los tres `hud.*` tienen su `case` en el intérprete
+// (`src/play/guion.js`), que llama al gancho `comandoDePantalla` del entorno.
+// Este entorno lo da (ver `entornoDelJugador`), y cada efecto del jugador lo
+// hereda, porque su entorno se construye sobre el del anfitrión
+// (`entornoDelEfecto`, efectos.js). Lo que el gancho no sabe hacer —`effect
+// beam`, `effect screenshake`— lo rechaza y el intérprete lo apunta.
+//
+// LECTURA VIEJA (pieza B del 93), citada porque explica las pruebas: aquí había
+// un PUENTE que envolvía el `ejecutarComando` de la instancia del guion del
+// jugador y de cada efecto, vigilando el `push` de `EfectosDeEntidad.lista`,
+// porque `guion.js` era de otra pieza. La pieza G lo quitó entero
+// (doc/EFECTOS_RED_93.md §6).
+
+/** Los `effect <tipo>` que este módulo hace. El resto sigue al intérprete. */
+const EFECTOS_DE_PANTALLA = new Set(["glow", "screenfade"]);
+/** Los `hud.*` que este módulo hace. */
+const ICONOS_DE_PANTALLA = new Set(["hud.addstatusicon", "hud.killstatusicon", "hud.killicons"]);
+
+/**
+ * ¿Es `ref` el jugador dueño de este guion? `ent_me` dentro de su guion y de
+ * sus efectos, sus otros alias, y su asa —lo que contesta `$get(ent_me,id)`,
+ * que es como lo nombra `effects/dot_lightning`—. `RetrieveEntity` de otra
+ * cosa no es él (y en este puerto no hay otro jugador que buscar desde aquí).
+ */
+function esElJugador(dueño, ref) {
+  const r = String(ref ?? "");
+  if (["ent_me", "ent_owner", "ent_currentplayer", "player"].includes(r.toLowerCase())) return true;
+  const id = dueño.personaje?.id;
+  return id !== undefined && id !== null && r === String(id);
+}
+
+/**
+ * Un comando de pantalla. Devuelve `true` si es suyo (lo haya mandado o lo
+ * haya apuntado) y `false` si no lo es, y entonces lo apunta el intérprete.
+ *
+ * Como en el motor, **no es condicional**: un `effect` mal escrito avisa por
+ * consola y la línea siguiente corre igual (mseffects.cpp:454-459).
+ */
+function comandoDePantalla(dueño, guion, nombre, params) {
+  let p = null;
+  let etiqueta = nombre;
+  if (nombre === "effect") {
+    const tipo = String(params?.[0] ?? "");
+    if (!EFECTOS_DE_PANTALLA.has(tipo)) return false;
+    etiqueta = `effect ${tipo}`;
+    if (tipo === "glow") {
+      const b = leerBrillo(params);
+      if (b) p = { tipo: "brillo", todos: false, aQuien: b.aQuien, brillo: b };
+    } else {
+      const f = leerFundido(params);
+      p = { tipo: "fundido", todos: f.todos, aQuien: f.aQuien, mensaje: f.mensaje };
+    }
+  } else if (ICONOS_DE_PANTALLA.has(nombre)) {
+    const i = leerIcono(nombre, params);
+    if (i) p = { tipo: "icono", todos: i.todos, aQuien: i.aQuien, mensaje: i.mensaje };
+  } else {
+    return false;
+  }
+  if (!p) { guion.anotarNoSoportado("comando", `${etiqueta} (faltan parámetros: el motor avisa y no hace nada)`); return true; }
+  // `RetrieveEntity` + `IsPlayer()`: si no es el jugador, el motor no manda
+  // nada (el brillo SÍ se pondría a un bicho, y aquí no hay quien lo dibuje).
+  if (!p.todos && !esElJugador(dueño, p.aQuien)) {
+    guion.anotarNoSoportado("comando", `${etiqueta} a otra entidad (${p.aQuien})`);
+    return true;
+  }
+  dueño.mandarAPantalla(p, guion);
+  return true;
+}
+
 /**
  * El entorno del jugador. Es el hermano de `entornoDe` de `npcguion.js`, y es
  * más corto a propósito: el jugador no tiene menú de interacción, ni tienda, ni
@@ -392,6 +490,15 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
     .includes(String(ref ?? "").toLowerCase());
   const apuntar = (tipo, nombre) => yo.noSoportados.push({ tipo, nombre: String(nombre) });
   return {
+    /**
+     * EL 93 (pieza G). `effect screenfade|glow` y `hud.addstatusicon|
+     * killstatusicon|killicons`, desde el `case` del intérprete. `desde` es el
+     * guion que corre la línea —el del jugador o el de un efecto suyo, que
+     * hereda este gancho—, para que lo que no se hace se apunte en SU lista y
+     * `pantallas` diga de quién vino. Ver `comandoDePantalla` arriba.
+     */
+    comandoDePantalla: (nombre, params, { desde } = {}) => comandoDePantalla(yo, desde ?? yo.guion, nombre, params),
+
     // ── EL 89c: LO QUE CAMBIA EL ESTADO DEL JUGADOR ───────────────────────
     //
     // Cada uno con la regla del motor aquí y el estado inyectado. Lo que no

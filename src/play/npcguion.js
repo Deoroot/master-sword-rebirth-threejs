@@ -32,7 +32,7 @@
 // La ficha (`build/gatecity/menus.json`) se queda como respaldo: un NPC cuyo
 // guion no esté horneado sigue enseñando su menú, apagado y con el motivo.
 
-import { Guion, GLOBALES, numDe, textoDeVector, repeticionDe } from "./guion.js";
+import { Guion, GLOBALES, PROPIEDADES, numDe, enteroDe, textoDeVector, repeticionDe } from "./guion.js";
 import { leerMision, ponerMision, limpiarMisiones, volcarMisiones } from "./misiones.js";
 import { usarOpcion, nombreVisibleDe } from "./usaropcion.js";
 import { oirFrase, limpiarTexto } from "./oir.js";
@@ -271,6 +271,11 @@ export function entornoDe({
   // efecto AL JUGADOR, que es el único anfitrión de efectos de este puerto
   // (`src/play/efectos.js`). Sin él, `applyeffect` se apunta.
   aplicarEfecto = null,
+  // EL 93: EL CUERPO DEL BICHO, que lo lleva la manada (`Manada.cuerpoDe`).
+  // Es por donde un guion mueve, lanza, pega o suelta a su propia entidad
+  // (`setvelocity ent_me`, `setfollow`, `gravity`…) y por donde pregunta lo que
+  // sólo la física sabe (`onground`, el rumbo). Sin él, todo eso se apunta.
+  cuerpo = null,
 } = {}) {
   /** `RetrieveEntity(ref)`: aquí sólo hay dos entidades, el jugador y el NPC. */
   const esElJugador = (ref) => {
@@ -287,6 +292,22 @@ export function entornoDe({
     // el intérprete saldría «You've slain game.monster.name.full», una frase
     // falsa con cara de mensaje del juego (el 65). Ver doc/BICHOS_GUION_91.md.
     if (r === "ent_laststruckbyme") return entorno.golpeadoPorMi === jugador.ref;
+    // ── EL 94: `ent_laststruck` YA SE RESUELVE ───────────────────────────
+    //
+    // `StoreEntity(pAttacker, ENT_LASTSTRUCK)` justo antes de `game_struck`
+    // (msmonsterserver.cpp:2380-2385). Lo apunta la costura en el caso
+    // `recibe` (`InteraccionesNpc._alCombate`). Hace falta porque el aldeano
+    // grita con él: `callevent call_for_help $get(ent_laststruck,id)`
+    // (monsters/base_civilian.script:5) y `callexternal all civilian_attacked
+    // $get(ent_laststruck,id) …` al morir (:20). Sin esto el guardia recibía
+    // «0» de atacante.
+    //
+    // Y lo de arriba —que abrirlo sacaría «You've slain
+    // game.monster.name.full»— se MIDIÓ al abrirlo, y era verdad: salía. Por
+    // eso el 94 porta también `name.full` (ver `nombreCompleto` en
+    // `GuionDeNpc`), y ahora sale «You've slain Commoner», que es la línea
+    // verde del mod. Ver doc/GUARDIAS_94.md §3.
+    if (r === "ent_laststruck") return entorno.golpeadoPor === jugador.ref;
     // EL 92: `ent_lastseen` es lo último que guardó `StoreEntity(pSighted,
     // ENT_LASTSEEN)`, y en el motor eso SÓLO lo escribe `$cansee`
     // (npcscript.cpp:1838-1846; `grep ENT_LASTSEEN` no da otro sitio). `ve`,
@@ -303,6 +324,25 @@ export function entornoDe({
   const vector = (v) => {
     const n = String(v ?? "").replace(/[()]/g, "").split(/[\s,]+/).filter(Boolean).map(Number);
     return n.length >= 3 && n.every((x) => Number.isFinite(x)) ? n : null;
+  };
+  /** EL 93: `ent_me`, el propio NPC, dicho como lo dice el guion. */
+  const esYo = (ref) => String(ref ?? "") === "ent_me";
+  /**
+   * EL 93: el `pev->origin` del motor de una de las dos entidades, en
+   * UNIDADES y con la Z arriba, o `null`. Los `origen` que da el juego son
+   * METROS de la escena con la Y arriba (`instancia.donde`, `player.feet`), y
+   * se cambian AQUÍ, una vez, con `aMotor` (la inversa de `aEscena`). El del
+   * jugador sube 36 unidades: su `origin` es el centro de la caja
+   * (msitemdefs.h:55); el de un monstruo son sus pies (msmonsterserver.cpp:244).
+   * Agachado serían 18 y no se distingue: queda dicho, como en `hizoDano`.
+   */
+  const origenMotor = (ref) => {
+    const jug = esElJugador(ref);
+    const v = vector(jug ? jugador?.origen : npc?.origen);
+    if (!v) return null;
+    const m = aMotor(v, unidadesPorMetro || 39.37);
+    if (jug) m[2] += 36;
+    return m;
   };
 
   /**
@@ -365,8 +405,20 @@ export function entornoDe({
       suceso?.("normal", `${npc?.nombre ?? "Someone"} says,  "${t}"`);
     },
 
-    /** `playanim [once|<seg>] <anim>` — npcscript.cpp:1487. */
-    animar: (nombre, modo) => animar?.(nombre, modo),
+    /**
+     * `playanim [once|<seg>] <anim>` — npcscript.cpp:1487.
+     *
+     * EL 93: `playanim break`, a secas, es `BreakAnimation` y NADA MÁS
+     * (npcscript.cpp:1527-1528, y sin nombre no hay `SetAnimation`, :1543):
+     * suelta la animación y el siguiente `Think` pone la de reposo
+     * (msmonsterserver.cpp:590-592). Hasta aquí llegaba como `animar("break")`
+     * y la manada, al no encontrar la secuencia, ponía la 0 de una vez. Con
+     * cuerpo se suelta; sin él, como antes.
+     */
+    animar: (nombre, modo) => {
+      if (cuerpo && String(modo) === "break" && String(nombre) === "break") return cuerpo.romper();
+      return animar?.(nombre, modo);
+    },
 
     /**
      * `infomsg <player|all> <title> <text>` — scriptcmds.cpp:4058. Una ventana
@@ -501,10 +553,51 @@ export function entornoDe({
       switch (String(prop)) {
         case "isplayer": return esElJugador(ref) ? "1" : "0";
         case "exists": return esElJugador(ref) ? "1" : "0";
-        case "alive": case "isalive": return esElJugador(ref) && (p?.vida ?? 0) > 0 ? "1" : "0";
+        case "alive": case "isalive":
+          // EL 93: `$get(ent_me,alive)` de un BICHO con cuerpo:
+          // `pTarget->IsAlive()` (scriptcmds.cpp:959), que en un `CMSMonster`
+          // es `pev->deadflag == DEAD_NO` (msmonster.h:357). Daba «0» para todo NPC (el 91, §5.7) y es la cuarta
+          // condición del salto de la araña (spider.script:99): sin esto no
+          // saltaba nunca. SÓLO con cuerpo —los bichos de combate—: el 91 dejó
+          // dicho que abrirlo despierta el encogerse de `base_struck`, y para
+          // ésos está cerrado y absorbido; para un NPC al que se le habla no se
+          // ha medido y sigue como estaba.
+          if (cuerpo && esYo(ref)) return cuerpo.vivo() ? "1" : "0";
+          return esElJugador(ref) && (p?.vida ?? 0) > 0 ? "1" : "0";
         case "id": return esElJugador(ref) ? (jugador?.ref ?? "0") : "0";
         case "name": return esElJugador(ref) ? (p?.nombre ?? "0") : (npc?.nombre ?? "0");
-        case "origin": return esElJugador(ref) ? (jugador?.origen ?? "0") : (npc?.origen ?? "0");
+        /**
+         * `origin` — `RETURN_POSITION("origin", pTarget->pev->origin)`
+         * (scriptcmds.cpp:1144), o sea `VecToString`: «(x,y,z)» en UNIDADES y
+         * ejes del motor (iscript.h:239-242).
+         *
+         * ── CORRECCIÓN DEL 93 ─────────────────────────────────────────────
+         * Hasta aquí devolvía el `origen` tal cual lo da el juego, que en este
+         * puerto son METROS de la escena con la Y arriba (`instancia.donde`,
+         * `player.feet`). Lo destapó el salto de la araña:
+         * `setorigin ent_me $get(SPIDER_LATCH_TARGET,origin)` (spider.script:148)
+         * habría puesto a la araña a la cuarentava parte de la distancia. Es el
+         * hallazgo del 81 —«las posiciones están en METROS y los rangos en
+         * UNIDADES»— en otra puerta. Y el `origin` de un jugador es el CENTRO de
+         * su caja, 36 unidades sobre los pies (`ENT_EFFECT_FOLLOW_ALIGN_BOTTOM`
+         * lo dice: «in players, the bottom is 36 units lower», msitemdefs.h:55);
+         * el de un monstruo, sus pies (msmonsterserver.cpp:244, el 82).
+         */
+        case "origin": {
+          const o = origenMotor(ref);
+          return o ? textoDeVector(o) : "0";
+        }
+        /**
+         * `onground` — `FBitSet(pev->flags, FL_ONGROUND)` (scriptcmds.cpp:1055).
+         * El 93: lo piden la araña y su objetivo antes de saltar
+         * (spider.script:103-104). Sólo lo sabe la física, que la tiene el
+         * cuerpo; sin cuerpo, o si el cuerpo no lo sabe, se apunta y da «0».
+         */
+        case "onground": {
+          const s = !cuerpo ? null : esYo(ref) ? cuerpo.enSuelo() : esElJugador(ref) ? cuerpo.objetivoEnSuelo(jugador?.ref) : null;
+          if (s === null || s === undefined) { apuntar?.("propiedad", `$get(${ref},onground) sin física`); return "0"; }
+          return s ? "1" : "0";
+        }
 
         // ── el 46 ─────────────────────────────────────────────────────────
         // `RETURN_FLOAT(pTarget->pev->health)` — scriptcmds.cpp:960.
@@ -567,16 +660,55 @@ export function entornoDe({
          * Con un jugador delante no se resta nada, que es el caso de Gate
          * City: el armero mira `$get(PARAM1,dist) <= 90`.
          */
+        /*
+         * ── CORRECCIÓN DEL 93 ─────────────────────────────────────────────
+         * Lo de arriba («con un jugador delante no se resta nada») es FALSO, y
+         * por lo mismo que corrigió el 92 en `maxhp`: el jugador SÍ es
+         * `pMonster` (scriptcmds.cpp:926, player.h:396, msmonster.h:352), así
+         * que con un NPC preguntando entran los dos en la rama de la resta
+         * (:1151-1152). Lo que pasa es que el `m_Width` del jugador es 0 (el
+         * 82: sólo lo asigna el `width` de un guion de NPC, npcscript.cpp:201),
+         * y lo que se resta es la MITAD DE LA ANCHURA DEL NPC. Para la araña
+         * son 17 unidades de las 200 de su salto (spider.script:102).
+         *
+         * Y la distancia se medía entre los dos `origen` crudos, que en este
+         * puerto son METROS con la Y arriba: un `<= 90` del armero se cumplía
+         * a 90 metros, y `dist2D` tiraba la Z de la escena, que es horizontal.
+         * Ahora va entre los dos `origin` del motor (`origenMotor`, arriba):
+         * unidades, Z arriba, y el del jugador en su centro.
+         */
         case "dist": case "range": case "dist2D": case "range2D": {
-          const a = vector(esElJugador(ref) ? jugador?.origen : npc?.origen);
-          const b = vector(npc?.origen);
+          const a = origenMotor(ref);
+          const b = origenMotor("ent_me");
           if (!a || !b) return "0";
           const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
           const plano = String(prop).endsWith("2D");
-          return String(Math.sqrt(dx * dx + dy * dy + (plano ? 0 : dz * dz)));
+          let d = Math.sqrt(dx * dx + dy * dy + (plano ? 0 : dz * dz));
+          // :1151-1152 — sólo `dist`/`range`, y sólo si los dos son monstruos.
+          // El otro aquí es el jugador (ancho 0) o el propio NPC.
+          if (!plano && esElJugador(ref)) d -= (Number(npc?.ancho) || 0) / 2;
+          // `RETURN_FLOAT(Dist)`: «%.2f» de un `float` (iscript.h:224).
+          return Math.fround(d).toFixed(2);
         }
 
         case "gold": return esElJugador(ref) ? String(p?.oro ?? 0) : "0";
+
+        /**
+         * `race` — `return _strlwr(pMonster->m_Race)` (scriptcmds.cpp:1390).
+         * EL 94: lo pregunta el guardia antes de perseguirte por pegar a un
+         * aldeano, `if $get(OFFENDER,race) isnot hguard`
+         * (gatecity/guard.script:109). El jugador es `pMonster` (la corrección
+         * del 92 en `maxhp`) y su raza la pone su guion al entrar:
+         * `race human` (player/player_main.script:102).
+         *
+         * **SÓLO el jugador.** La del propio NPC (`$get(ent_me,race)`,
+         * `game.monster.race`) sería la de su ficha (`race`,
+         * npcscript.cpp:225-228), y NO se contesta a propósito: la piden
+         * `game_spawn` de base_npc.script:34-40 (`NPC_FRIENDLY`,
+         * `NPC_FIGHTS_NPCS`) y `npcatk_setup_siege`, ramas que nadie ha medido
+         * en este puerto. Sigue en «0», que es lo que daba antes.
+         */
+        case "race": return esElJugador(ref) ? "human" : "0";
 
         /**
          * `steamid` — :1232, `pPlayer->AuthID()`. Aquí no hay Steam y no lo
@@ -998,6 +1130,48 @@ export function entornoDe({
   // regla que todo lo demás de este entorno; una segunda copia de «quién es
   // el jugador» sería otro mundo (el 63).
   entorno.esElJugador = esElJugador;
+  /**
+   * ── EL 93: LO QUE UN GUION LE PIDE A SU PROPIO CUERPO ──────────────────
+   *
+   * Sólo con `cuerpo` (los bichos de combate, `Manada.cuerpoDe`): sin él los
+   * ganchos no existen y `guion.js` APUNTA el comando, que es como estaba. El
+   * camino que los pide es el salto de la araña (spider.script:93-192), y cada
+   * uno lleva la regla del motor que decide a quién toca:
+   *
+   *   `setvelocity`/`addvelocity` — `RetrieveEntity(Params[0])` y, si no está
+   *       vivo, nada (`if (!pEntity->IsAlive()) abort_push`, scriptcmds.cpp:7203).
+   *       Aquí sólo `ent_me`: empujar al JUGADOR desde el guion de un bicho
+   *       (el jabalí, boar_base.script:93) es otra pieza y se apunta.
+   *   `setorigin` — `pev->origin = StringToVec(...)` (:4518-4519), `ent_me`.
+   *   `setfollow` — sigue al jugador o a nadie (:5976-5994).
+   *   `gravity`, `movespeed`, `setanim.framerate`, `setidleanim` — del propio.
+   */
+  if (cuerpo) {
+    const otro = (que, ref) => apuntar?.("comando", `${que} ${ref} (sólo ent_me)`);
+    Object.assign(entorno, {
+      velocidad(ref, v, { sumar = false } = {}) {
+        if (!esYo(ref)) return otro(sumar ? "addvelocity" : "setvelocity", ref);
+        if (!cuerpo.vivo()) return undefined;                       // :7203
+        return cuerpo.velocidad(v, { sumar });
+      },
+      ponerOrigen(ref, v) {
+        if (!esYo(ref)) return otro("setorigin", ref);
+        return cuerpo.ponerOrigen(v);
+      },
+      seguir(ref, opciones = {}) {
+        if (ref === null) return cuerpo.seguir(null);
+        // `RetrieveEntity` que no encuentra a nadie: el motor no hace nada (:5980-5981).
+        if (!esElJugador(ref)) { apuntar?.("comando", `setfollow ${ref} (sólo el jugador)`); return undefined; }
+        return cuerpo.seguir(jugador?.ref ?? "player", opciones);
+      },
+      gravedad: (f) => cuerpo.gravedad(f),
+      ritmoDeAndar: (f) => cuerpo.ritmoDeAndar(f),
+      ritmoDeAnimacion: (f) => cuerpo.ritmoDeAnimacion(f),
+      animacionDeParado: (n) => cuerpo.animacionDeParado(n),
+      // `pev->angles` del bicho, en grados del motor: lo pide `$relvel`.
+      angulosDeMi: () => cuerpo.angulos(),
+    });
+  }
   return entorno;
 }
 
@@ -1066,8 +1240,19 @@ export class GuionDeNpc {
     // vida del bicho es este guion: un área que lo vuelve a sacar crea una
     // entidad NUEVA en el motor (msmapents.cpp:1206-1230), y con ella un guion
     // nuevo.
-    cierre = null, nacimiento = 0 }) {
+    cierre = null, nacimiento = 0,
+    // EL 93: el cuerpo del bicho (`Manada.cuerpoDe`), para lo que su guion le
+    // pide a su propia entidad. Reenviado a `entornoDe` aquí abajo, por el 63.
+    cuerpo = null,
+    // EL 94: `(ref) => boolean`, el `npcatk_settarget` que pide OTRA entidad.
+    // Ver `_objetivoPedidoDeFuera`. Sin él, la llamada se cierra como hasta el
+    // 93 y se cuenta en `cerrados`.
+    fijarObjetivo = null }) {
     this.npc = npc;
+    this.fijarObjetivo = fijarObjetivo;
+    /** EL 94: profundidad de llamadas que vienen de OTRO guion (`llamar`). */
+    this.desdeFuera = 0;
+    this.cuerpo = cuerpo;
     this.nacimiento = nacimiento;
     this.cierre = cierre ? new Set([...cierre].map((c) => (typeof c === "string" ? c : c.evento))) : null;
     /**
@@ -1098,11 +1283,19 @@ export class GuionDeNpc {
     const destinoFiltrado = mandarADestino
       ? (d, o) => (dueño.absorbe("setmovedest", d?.entidad ?? (d ? "punto" : "none")) ? false : mandarADestino(d, o))
       : null;
+    // EL 93: `playanim break` también es del cuerpo, y la IA ya lo hace al
+    // huir (`npcatk_flee`): dentro de la costura se absorbe como `animar`.
+    // Los demás ganchos del cuerpo NO se absorben: lanzar, seguir o
+    // teletransportar al bicho no lo hace la IA portada, así que no hay
+    // segunda copia de nada que cerrar (ver `absorbe`).
+    const cuerpoFiltrado = cuerpo
+      ? { ...cuerpo, romper: () => (dueño.absorbe("animar", "break") ? undefined : cuerpo.romper()) }
+      : null;
     this.entorno = entornoDe({
       npc, catalogo, suceso, animar: animarFiltrado, programar, azar, tiendas, entidades, borrarDelMundo,
       ventanaDeAviso, abrirTienda, trato,
       guionDeOtro, todosLosGuiones, mandarADestino: destinoFiltrado, animarAndando, lineaDeVision, unidadesPorMetro,
-      aplicarEfecto,
+      aplicarEfecto, cuerpo: cuerpoFiltrado,
       // Las retrollamadas de la tienda (`<cb>_success` y compañía) son eventos
       // del propio guion, así que vuelven por aquí.
       llamarEvento: (nombre) => dueño.guion?.llamar(nombre, []),
@@ -1147,11 +1340,49 @@ export class GuionDeNpc {
      * y se sigue contestando «0», como antes.
      */
     this.entorno.propiedadesPropias = new Set(["dmgmulti"]);
+    if (cuerpo) {
+      // EL 93: `onground` lo contesta el cuerpo (ver `entornoDe`). Va aquí y no
+      // en `PROPIEDADES` por lo mismo que `dmgmulti`: un NPC sin cuerpo tiene
+      // que seguir apuntándola en vez de contestar «0» callado.
+      this.entorno.propiedadesPropias.add("onground");
+      // Y `game.monster.<prop>` es `$get(ent_me,<prop>)` (script.cpp:4692-4700):
+      // sólo las que este entorno sabe contestar; el resto, `null`, y el
+      // intérprete deja el nombre como estaba.
+      this.entorno.propiedadDeMi = (prop) => (PROPIEDADES.has(prop) || dueño.entorno.propiedadesPropias.has(prop)
+        ? dueño.entorno.propiedad("ent_me", prop) : null);
+    }
+    /**
+     * ── EL 94: `name.full` DEL PROPIO NPC ─────────────────────────────────
+     *
+     * `SPEECH::NPCName(pMonster)` (scriptcmds.cpp:1475): el prefijo, un
+     * espacio y el nombre, o el nombre a secas si no hay prefijo
+     * (syntax.cpp:32-49). El prefijo es lo que va antes de la barra en
+     * `name a|Goblin` (scriptcmds.cpp:4384-4388), y la ficha horneada guarda
+     * el `name` CRUDO, con la barra («|Kendra»).
+     *
+     * Lo pide la muerte en cuanto `ent_laststruck` se resuelve (el 94):
+     * `local MON_FULL game.monster.name.full` y `gplayermessage
+     * $get(ent_laststruck,id) "You've slain " MON_FULL` (base_npc.script:
+     * 192-197). Sin esto salía «You've slain game.monster.name.full», que es
+     * justo la frase falsa que el 91 dejó escrita para no abrir esa puerta.
+     * Por eso va para TODOS los NPC y no sólo los que tienen cuerpo: el
+     * aldeano no tiene, y es el primero que muere con su `game_death` entero.
+     */
+    const nombreCompleto = () => {
+      const crudo = String(npc?.nombre ?? "");
+      const barra = crudo.indexOf("|");
+      if (barra < 0) return crudo;
+      const prefijo = crudo.slice(0, barra), nombre = crudo.slice(barra + 1);
+      return prefijo ? `${prefijo} ${nombre}` : nombre;
+    };
+    this.entorno.propiedadesPropias.add("name.full");
+    if (!this.entorno.propiedadDeMi) this.entorno.propiedadDeMi = (prop) => (prop === "name.full" ? nombreCompleto() : null);
     const propiedadBase = this.entorno.propiedad;
     this.entorno.propiedad = (ref, prop, resto) => {
       if (String(prop) === "dmgmulti") {
         return String(ref) === "ent_me" ? numDe(nacer?.dmgmulti ?? "1").toFixed(2) : "0";
       }
+      if (String(prop) === "name.full") return String(ref) === "ent_me" ? nombreCompleto() : "0";
       return propiedadBase(ref, prop, resto);
     };
     this.entorno.ponerEstadistica = (nombre, valores = []) => {
@@ -1225,6 +1456,7 @@ export class GuionDeNpc {
       g.llamar = (nombre, params = []) => {
         if (dueño.retirado) { dueño.costuraCuenta.retirado++; return false; }
         if (dueño.cierre.has(nombre)) {
+          if (nombre === "npcatk_settarget" && dueño._objetivoPedidoDeFuera(params)) return true;
           const c = dueño.costuraCuenta.cerrados;
           c[nombre] = (c[nombre] ?? 0) + 1;
           return g.eventos.some((e) => e.nombre === nombre);
@@ -1236,6 +1468,10 @@ export class GuionDeNpc {
        * No es cosa del cierre: ningún guion de NPC arma sus repeticiones en
        * este puerto (sólo el jugador, los efectos y los objetos llaman a
        * `armarRepeticiones`). Se cuenta aquí para que se vea en el bicho.
+       *
+       * ── CORRECCIÓN DEL 93 ─────────────────────────────────────────────
+       * Ya corren: ver `armarRepeticionesDeBicho`, al final del constructor.
+       * Esto se queda como la cuenta de cuántos TRAE, que es lo que decía.
        */
       this.repeticionesSinArmar = (ficha?.eventos ?? []).filter((e) => repeticionDe(e) !== null).length;
     }
@@ -1318,6 +1554,126 @@ export class GuionDeNpc {
       String(nacer?.hpmulti ?? "1.00"),
       String(nacer?.params ?? "none"),
     ]);
+    // EL 93: y los `repeatdelay`, que en el motor corren desde que se CARGA el
+    // guion (script.cpp:5377-5382). Sólo los bichos de combate y sólo con reloj.
+    this.repeticiones = { armadas: 0, cerradas: 0, vueltas: {} };
+    if (this.cierre && programar) this.armarRepeticionesDeBicho(programar);
+  }
+
+  /**
+   * **LOS `repeatdelay` DE UN BICHO, ARMADOS** — el 93.
+   *
+   * Un evento con `repeatdelay` empieza a correr en cuanto se carga el guion,
+   * sin que nadie lo llame (script.cpp:5377-5382, ver `armarRepeticiones` en
+   * guion.js), y al ejecutarse vuelve a armarse (scriptcmds.cpp:5121-5136).
+   * Hasta el 92 ningún guion de NPC lo hacía (el 91, §5.8). El salto de la
+   * araña de Gate City vive en uno: `repeatdelay 4` con un 20 % por vuelta
+   * (spider.script:93-117).
+   *
+   * El reloj es el `RelojDeGuiones` de la partida —el mismo de los `callevent`
+   * con retraso— y la vuelta es `Guion.correrRepeticion`, la misma que la del
+   * jugador: dos copias serían dos reglas.
+   *
+   * **EL CIERRE MANDA AQUÍ TAMBIÉN** (el 91): un evento con nombre que esté en
+   * `CIERRE_DE_BICHO` no se arma —es `hunting_mode_go`, el bucle de caza de
+   * la familia vieja (base_npc_attack.script:62-63), que la IA ya lleva—, y se
+   * cuenta en `costuraCuenta.cerrados` como cualquier llamada cerrada. Los
+   * bloques SIN nombre no pueden estar en el cierre y corren: el del salto,
+   * el gruñido de la araña (spider_base.script:21-28), el estirarse de la rata
+   * (giantrat.script:76-83)…
+   *
+   * Un guion retirado (otra vida del bicho) deja de volver a armarse.
+   */
+  armarRepeticionesDeBicho(programar) {
+    const g = this.guion;
+    g.armarRepeticiones(0);
+    const cuenta = this.repeticiones;
+    for (const r of g.repeticiones) {
+      const nombre = r.evento.nombre;
+      if (nombre && this.cierre.has(nombre)) {
+        cuenta.cerradas++;
+        const c = this.costuraCuenta.cerrados;
+        c[nombre] = (c[nombre] ?? 0) + 1;
+        continue;
+      }
+      cuenta.armadas++;
+      const clave = nombre || `(sin nombre, línea ${r.evento.linea ?? "?"})`;
+      const vuelta = () => {
+        if (this.retirado) { this.costuraCuenta.retirado++; return; }
+        cuenta.vueltas[clave] = (cuenta.vueltas[clave] ?? 0) + 1;
+        const cada = g.correrRepeticion(r, 0);
+        programar(cada, vuelta);
+      };
+      programar(r.cada, vuelta);
+    }
+  }
+
+  /**
+   * **A QUIÉN CAZA LA IA, ESCRITO DONDE LO LEE EL GUION** — el 93.
+   *
+   * `apuntarObjetivo` (el 92) lo escribe al ATACAR. Pero el salto de la araña
+   * se decide antes, persiguiendo: pide `IS_HUNTING` y `HUNT_LASTTARGET`
+   * (spider.script:97, :102), que en la familia vieja escribe
+   * `npcatk_targetvalidate` al fijar objetivo —`setvard IS_HUNTING 1`
+   * (base_npc_attack.script:546)— y `npcatk_clear_targets` al perderlo
+   * —`IS_HUNTING 0`, `HUNT_LASTTARGET ¯NONE¯`, `NPCATK_TARGET unset`
+   * (:567-570)—. Los dos están cerrados (el 91), así que la costura escribe lo
+   * mismo cuando el `Cazador` fija o suelta su objetivo (`Manada.cazar`).
+   *
+   * Sólo la familia vieja: la nueva (`npcatk_hunt`) no usa `IS_HUNTING` y no
+   * se ha medido qué escribe al soltar.
+   */
+  cazando(ref) {
+    const g = this.guion;
+    if (!g || !this.maneja("hunting_mode_go")) return false;
+    if (ref) {
+      this.apuntarObjetivo(ref);
+      g.vars.set("IS_HUNTING", "1");
+    } else {
+      g.vars.set("IS_HUNTING", "0");
+      g.vars.set("HUNT_LASTTARGET", "¯NONE¯");
+      g.vars.set("NPCATK_TARGET", "unset");
+    }
+    return true;
+  }
+
+  /**
+   * **¿DEJA EL GUION CAZAR Y ATACAR?** — el 93.
+   *
+   * El bucle de caza de la familia vieja no hace nada sin `CAN_HUNT`
+   * (base_npc_attack.script:73) y no ataca sin `CAN_ATTACK` (:175). La IA
+   * portada ES ese bucle, así que tiene que leer las mismas dos variables: el
+   * salto de la araña las pone a 0 mientras dura (spider.script:112-113) y a 1
+   * al acabar (:180-181). Sin esto la IA la seguía persiguiendo y mordiendo
+   * en el aire.
+   *
+   * Sólo cuenta una variable PUESTA a cero: sin poner vale su nombre, y en el
+   * motor eso también es 0 — pero `base_npc_attack.script:815-817` las pone a
+   * 1 al nacer, así que un «sin poner» aquí es un hueco nuestro y no se
+   * convierte en un bicho que no caza. Y un cero de nacimiento tampoco: ver
+   * dentro.
+   */
+  puede() {
+    const g = this.guion;
+    if (!g || this.retirado || !this.maneja("hunting_mode_go")) return { cazar: true, atacar: true };
+    /*
+     * Y SÓLO UN CERO QUE VIENE DESPUÉS DE UN UNO — esto NO es del motor, y va
+     * dicho. Hay bichos que NACEN con `CAN_HUNT 0` y esperan un evento que la
+     * IA portada no dispara: el murciélago se cuelga del techo al nacer
+     * (`bat_hang`, bat_base.script:28 y :42) y sólo baja con
+     * `npc_targetsighted` o `npc_heardenemy` (:45-51). Respetar ese cero
+     * dejaría a los 16 de las cloacas colgados para siempre, que es peor que
+     * hoy (cazan sin bajar). Así que el cero cuenta cuando el guion lo ha
+     * puesto DESPUÉS de haberlo tenido a 1 en esta vida: el salto de la araña
+     * (spider.script:112-113 tras base_npc_attack.script:815-817).
+     */
+    const ve = (n) => {
+      if (!g.vars.has(n)) return true;
+      const uno = enteroDe(g.vars.get(n)) !== 0;
+      if (uno) (this._visto1 ??= new Set()).add(n);
+      return uno || !this._visto1?.has(n);
+    };
+    return { cazar: ve("CAN_HUNT"), atacar: ve("CAN_ATTACK") };
   }
 
   /**
@@ -1359,6 +1715,14 @@ export class GuionDeNpc {
    */
   absorbe(tipo, que) {
     if (!this.cierre || this.enCostura <= 0) return false;
+    // EL 93: mientras el cuerpo lo lleva el GUION —la araña en el aire o
+    // agarrada al jugador, `Manada.cuerpoDe(i).manda()`— la IA no lo mueve, y
+    // lo que el guion pida desde un evento de combate es lo único que lo
+    // mueve: `npc_struck` -> `spider_latch_drop` -> `playanim critical
+    // falloff` (spider.script:164-172, :194-198). Absorberlo dejaría a la
+    // araña agarrada sin animación de caer y sin `frame_falloffend`, o sea
+    // con `CAN_HUNT 0` para siempre.
+    if (this.cuerpo?.manda?.()) return false;
     const a = this.costuraCuenta.absorbidos;
     const k = `${tipo} ${que ?? ""}`.trim();
     a[k] = (a[k] ?? 0) + 1;
@@ -1411,6 +1775,63 @@ export class GuionDeNpc {
       g.vars.set("ENTITY_ENEMY", r);
     }
     this.entorno.ultimoVisto = r;
+  }
+
+  /**
+   * **EL `npcatk_settarget` QUE PIDE OTRA ENTIDAD** — el 94.
+   *
+   * El cierre del 91 dice «elegir objetivo lo hace `Cazador.apuntarA`/`tic`»,
+   * y es verdad para las llamadas que el bicho se hace a sí mismo: su caza
+   * (`npcatk_hunt`), su `game_struck`, su `npc_targetsighted`. Todas tienen
+   * su copia portada en la IA. Lo que la IA NO sabe es lo que le cuenta OTRO
+   * guion, y el caso es el guardia:
+   *
+   *     { [server] civilian_attacked     gatecity/guard.script:105-124
+   *       ...
+   *       if NPCATK_TARGET equals unset
+   *       setvard NO_STUCK_CHECKS 0
+   *       callevent npcatk_settarget PARAM1
+   *       if $cansee(NPCATK_TARGET)
+   *       saytextrange 1024 ... saytext Hey you! Leave him alone!
+   *
+   * que llega por `callexternal all civilian_attacked` desde el aldeano
+   * (monsters/base_civilian.script:15 y :20). Con la llamada cerrada el
+   * guardia decía la frase —no: ni eso, porque `NPCATK_TARGET` seguía
+   * «unset» y `$cansee(unset)` abandona el bloque— y la IA no se enteraba.
+   *
+   * Así que la regla es: **cerrado dentro de la costura, abierto cuando viene
+   * de fuera**. «De fuera» es `desdeFuera > 0` —la llamada entró por
+   * `GuionDeNpc.llamar`, que es por donde llegan `callexternal` y el
+   * `ms_npcscript`— y `enCostura === 0` —no está corriendo un evento de
+   * combate del propio bicho, donde la IA ya ha decidido—.
+   *
+   * Lo que hace es lo que harían las líneas que importan del evento cerrado
+   * (base_npc_attack_new.script:399-510), con sus dos guardas y sin el resto:
+   *
+   *   - `if !IS_FLEEING` (:403): quien huye no cambia de objetivo. Lo mira
+   *     quien inyecta `fijarObjetivo` (el cazador sabe si huye).
+   *   - ignorar aliados (`$get(PARAM1,relationship,ent_me) equals ally`,
+   *     :420). También allí: la relación es de la ficha.
+   *   - `setvard NPCATK_TARGET CHECK_TARGET` (:445) y las dos de
+   *     compatibilidad (:508-509): `apuntarObjetivo`, la misma que usa la
+   *     costura al atacar.
+   *
+   * NO porta `npcatk_targetvalidate` (:447, `npc_targetvalidate` en cada
+   * guion) ni el `cycle_up` (:470): el primero no lo tiene el guardia y el
+   * segundo es el reloj de la IA, que `Cazador.apuntarA` ya pone a cero.
+   *
+   * @returns si lo ha hecho. `false` y la llamada se cierra como antes.
+   */
+  _objetivoPedidoDeFuera(params = []) {
+    if (!this.fijarObjetivo || this.desdeFuera <= 0 || this.enCostura > 0) return false;
+    // `local CHECK_TARGET $get(PARAM1,id)` (:404): el asa tal cual llega.
+    const ref = String(params?.[0] ?? "");
+    if (!ref || ref === "0") return false;
+    if (!this.fijarObjetivo(ref)) return false;
+    this.apuntarObjetivo(ref);
+    const c = (this.costuraCuenta.deFuera ??= {});
+    c.npcatk_settarget = (c.npcatk_settarget ?? 0) + 1;
+    return true;
   }
 
   /**
@@ -1479,7 +1900,10 @@ export class GuionDeNpc {
    * nadie hablando.
    */
   llamar(evento, params = []) {
-    return this.guion.llamar(String(evento), params.map(String));
+    // EL 94: lo que entra por aquí lo pide otra entidad. Ver `_objetivoPedidoDeFuera`.
+    this.desdeFuera++;
+    try { return this.guion.llamar(String(evento), params.map(String)); }
+    finally { this.desdeFuera--; }
   }
 
   /** `CMSMonster::UseMenuOption(pPlayer, Option)`. */

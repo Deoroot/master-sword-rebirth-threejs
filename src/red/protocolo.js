@@ -273,6 +273,21 @@ export const MENSAJE = Object.freeze({
    * funde en el personaje que ya tiene.
    */
   FICHA: "ficha",
+  /**
+   * LO QUE UN EFECTO LE HACE A TU PANTALLA — el 93.
+   *
+   * Dos mensajes del mod en uno, distinguidos por `que`, y los dos `MSG_ONE`:
+   *
+   *   "fundido"  `gmsgFade`: `{ duracion, aguante, banderas, r, g, b, a }`,
+   *              las dos primeras en 4.12 fijo como las escribe
+   *              `UTIL_ScreenFadeWrite` (hl/util.cpp:1146-1161).
+   *   "icono"    `NETMSG_STATUSICONS`: `{ tipo, icono, nombre, duracion, tga }`
+   *              (scriptcmds.cpp:3727-3734, 3836-3842).
+   *
+   * El cliente no recalcula nada de quién lo ve: si le llega, es suyo. La
+   * regla de los dos lados está en `src/play/efectospantalla.js`.
+   */
+  PANTALLA: "pantalla",
 });
 
 // ── Los relojes, calculados como los calcula el motor ───────────────────────

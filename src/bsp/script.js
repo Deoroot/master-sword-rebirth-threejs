@@ -8,6 +8,12 @@
 // ocupa. Eso es lo que hace falta para PONERLO en el mapa, y se dice que es un
 // subconjunto para que nadie lo confunda con la IA.
 //
+// CORRECCIÓN DEL 93, al lado: la FICHA (`visita`) sigue siendo eso, pero
+// `variablesAlNacer` ya corre los eventos del nacimiento con sus condiciones,
+// sus cuentas y sus `callevent`, para saber qué valen las variables de la IA
+// al nacer. Lo que no puede saber lo declara. Ver su comentario y
+// doc/FICHAS_93.md.
+//
 // ── Por qué hay que leerlo y no basta con la entidad ───────────────────────
 //
 // Porque **el `classname` de la entidad es decorativo**. Gate City coloca:
@@ -154,6 +160,10 @@ export function partirScript(texto) {
   const incluye = [];
   const piezas = [];
   let actual = null;
+  // `crudo` (el 93): las mismas líneas CON las llaves anidadas como líneas
+  // sueltas «{» y «}». `lineas` las aplana y para casi todo da igual; para
+  // saber qué cuerpo es de qué `if`, no — ver `variablesAlNacer`.
+  let crudo = null;
   let hondo = 0;
   for (const bruto of texto.split(/\r?\n/)) {
     const l = sinComentarios(bruto);
@@ -180,6 +190,7 @@ export function partirScript(texto) {
       const cierra = resto.indexOf("}");
       if (hondo === 0 && abre >= 0 && (cierra < 0 || abre < cierra)) {
         actual = [];
+        crudo = [];
         const cola = resto.slice(abre + 1).trim();
         hondo = 1;
         resto = cola;
@@ -187,9 +198,10 @@ export function partirScript(texto) {
       }
       if (hondo > 0 && cierra >= 0 && (abre < 0 || cierra < abre)) {
         const cabeza = resto.slice(0, cierra).trim();
-        if (cabeza) actual.push(cabeza);
+        if (cabeza) { actual.push(cabeza); crudo.push(cabeza); }
         hondo--;
-        if (hondo === 0) { bloques.push(actual); piezas.push({ tipo: "bloque", lineas: actual }); actual = null; }
+        if (hondo > 0) crudo.push("}");
+        if (hondo === 0) { bloques.push(actual); piezas.push({ tipo: "bloque", lineas: actual, crudo }); actual = null; crudo = null; }
         resto = resto.slice(cierra + 1).trim();
         continue;
       }
@@ -197,12 +209,13 @@ export function partirScript(texto) {
         // Llaves anidadas: un `if { ... }` dentro de un evento. Se cuentan para
         // no cerrar el bloque antes de tiempo, y su contenido se guarda igual.
         const cabeza = resto.slice(0, abre).trim();
-        if (cabeza) actual.push(cabeza);
+        if (cabeza) { actual.push(cabeza); crudo.push(cabeza); }
+        crudo.push("{");
         hondo++;
         resto = resto.slice(abre + 1).trim();
         continue;
       }
-      if (hondo > 0) { actual.push(resto); }
+      if (hondo > 0) { actual.push(resto); crudo.push(resto); }
       break;
     }
   }
@@ -367,8 +380,68 @@ function recoger(raiz, rutaScript, vistos, profundidad, indice, vars, orden) {
  * Devuelve las dos listas por separado: `variables` (lo que queda puesto al
  * nacer) y `constantes`. Quien quiera «el valor al nacer» mira la variable y, si
  * no está, la constante — que es el `valorAlNacer` de `iaDe`.
+ *
+ * ── EL 93: AHORA SÍ EVALÚA LO QUE SE PUEDE EVALUAR ─────────────────────────
+ *
+ * La frase de arriba, «no evalúa condiciones», es la del 92 y era la razón de
+ * que 23 variables de `iaDe` siguieran leyendo `vars`: sin condiciones, el
+ * relleno por omisión de `npcatk_get_postspawn_properties`
+ *
+ *     if ( ATTACK_RANGE equals 'ATTACK_RANGE' )        base_npc_attack_new:204-208
+ *     {
+ *         setvard ATTACK_RANGE MONSTER_WIDTH
+ *         multiply ATTACK_RANGE 2.5
+ *     }
+ *
+ * se aplicaba SIEMPRE, también al goblin que declara su 90; y como `MONSTER_WIDTH`
+ * se resolvía luego con `vars` —primero gana, cualquier bloque—, salía el
+ * `MY_WIDTH` de un `ext_scale` que no corre (externals.script:963). Un valor
+ * malo detrás de otro.
+ *
+ * Así que ahora esto es un intérprete PEQUEÑO, con la estructura del motor:
+ *
+ * - **Condiciones** (`ScriptCmd_If`, scriptcmds.cpp:3956-4038): un parámetro
+ *   → `atoi` (con `!` delante, al revés); tres → `equals`/`isnot`/`!equals`
+ *   con `FStrEq`, y `<`,`>`,`<=`,`>=`,`==`,`!=` con `atof` (`GetNumeric`,
+ *   script.cpp:4804-4806). Una variable que no existe vale su propio nombre
+ *   (script.cpp:4747, y lo dice el propio comentario del motor en
+ *   scriptcmds.cpp:3950: «if THIS_VAR_IS_UNSET equals 'THIS_VAR_IS_UNSET'»),
+ *   y una comilla simple se quita al leer (script.cpp:4405-4409).
+ * - **Cuerpos**: `if ( … )` gobierna lo que tenga detrás en la línea o, si no,
+ *   la SIGUIENTE orden o el siguiente `{ }` (`m_SingleCmd`, script.cpp:5328-
+ *   5340); `else` igual (:5349-5366). El `if` VIEJO, sin paréntesis, si sale
+ *   falso abandona la lista en la que está (script.cpp:5754-5758).
+ * - **Valores**: un parámetro se resuelve AL EJECUTAR —constante, local,
+ *   variable, por ese orden (`GetConst` al cargar, `GetLocal` + `GetVar` al
+ *   correr, script.cpp:5745; `FindVar`, :419-436, mira variables y luego
+ *   constantes)— y lo que se guarda ya va resuelto.
+ * - **Cuentas**: `add`/`subtract`/`multiply`/`divide` con `atof` y `%.2f`
+ *   (`ScriptCmd_MathSet`, scriptcmds.cpp).
+ * - **Lo que el bicho sabe de sí mismo**: `width`, `height`, `hp` y
+ *   `skilllevel` se apuntan al correr (npcscript.cpp:185-213, :393-419), y
+ *   `game.monster.*` / `$get(ent_me,…)` los leen: `moveprox` es
+ *   `m_Width * 1.1` (msmonster.h:355, scriptcmds.cpp:1470), `xp` es
+ *   `m_SkillLevel` (:962-967), `maxhp` es la del `hp`. Con `%.2f`
+ *   (`RETURN_FLOAT`, iscript.h:224-228).
+ * - **`callevent`** con retraso no lleva parámetros (`CallEventTimed(EventName,
+ *   Delay)`, scriptcmds.cpp:2276-2282) y sin retraso sí, como `PARAM1…` locales
+ *   (script.cpp:5709); un `PARAM` que no llegó vale su nombre. Lo diferido corre
+ *   por ORDEN DE TIEMPO, no por orden de petición.
+ * - **`[override]`** borra los eventos de ese nombre leídos antes
+ *   (script.cpp:5205-5210).
+ *
+ * LO QUE NO SABE, Y NO SE INVENTA: el mapa (`game.map.name`), el azar
+ * (`$rand`), la posición, los jugadores, cualquier otro `$` o `game.`. Una
+ * condición que depende de eso es DUDOSA, y lo que hay detrás de ella no se
+ * aplica: se apunta en `dudosas` (nombre → `{ razones, posibles }`) con el valor
+ * que habría puesto. Antes del 93 la regla era la contraria —un `if` de varias
+ * líneas contaba como cierto—, y por eso el autoajuste de la sala de un jefe
+ * acababa en la ficha de una rata. Un VALOR que no se puede evaluar
+ * (`setvard X $rand(1,6)`) se guarda tal cual, con sus parámetros resueltos, y
+ * va en `sinEvaluar`: `rango()` sabe leer un `$rand`, y una condición sobre él
+ * es dudosa.
  */
-function variablesAlNacer(raiz, rutaScript, resolverVar) {
+function variablesAlNacer(raiz, rutaScript, opciones = {}) {
   // 1. Leer en el orden del motor: cada `#include` en su sitio (el 66).
   const bloques = [];
   const vistos = new Set();
@@ -380,57 +453,416 @@ function variablesAlNacer(raiz, rutaScript, resolverVar) {
     for (const p of partirScript(readFileSync(fichero, "latin1")).piezas) {
       if (p.tipo === "include") { if (p.ambito !== "cliente") leer(p.ruta, hondo + 1); continue; }
       const cab = cabeceraDe(p.lineas);
-      if (cab.ambito !== "cliente") bloques.push({ nombre: cab.nombre, lineas: p.lineas });
+      if (cab.ambito !== "cliente") bloques.push({ nombre: cab.nombre, anula: cab.anula, lineas: p.lineas, crudo: p.crudo });
     }
   };
   leer(rutaScript, 0);
 
-  const valores = new Map();
   const constantes = new Map();
-  const VAR = /^(setvar|setvarg|setvard)\s+(\S+)\s+(.*)$/i;
-  // 2. Al cargar: `setvar`/`setvarg` en todos los bloques, gana el último; y
-  //    `const` en todos los bloques, gana el primero.
+  // Un valor es `{ v, ok, inc, m, azar }`:
+  //   `v`     el texto, como lo guardaría el motor (un `$rand(1,6)` se queda
+  //           como texto: `rango()` lo sabe leer);
+  //   `ok`    false si es algo que este lector no sabe calcular;
+  //   `inc`   depende de una condición sobre el MUNDO (el mapa sin `mapa`, a
+  //           quién ve, la hora): se sigue el camino de NO entrar;
+  //   `m`     la MUESTRA de un sorteo: `$rand(a,b)` vale `a` para decidir;
+  //   `azar`  el texto del sorteo del que depende, si depende de uno.
+  //
+  // El estado del bicho: las variables, y lo que el motor sabe de él
+  // (`width`, `height`, `hp`, `skilllevel`) con el mismo formato.
+  const R = (v, ok = true, inc = false, extra = {}) => ({ v: String(v), ok, inc, ...extra });
+  const nuevoEstado = () => ({ vars: new Map(), yo: new Map([["xp", R("0")]]) });
+  const clonar = (e) => ({ vars: new Map(e.vars), yo: new Map(e.yo) });
+  const estado = nuevoEstado();
+  const dudosas = new Map();
+  // Lo que se puede usar para decidir: el valor, o su muestra.
+  const sabe = (r) => !r.inc && (r.ok || r.m !== undefined);
+  const val = (r) => (r.m !== undefined ? r.m : r.v);
+  const azarDe = (...rs) => rs.find((r) => r?.azar)?.azar ?? null;
+
+  // ── Resolver un parámetro, como el motor ────────────────────────────────
+  const f2 = (n) => Math.fround(n).toFixed(2);
+  const atof = (s) => { const m = String(s).trim().match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/); return m ? Number(m[0]) : 0; };
+  const atoi = (s) => { const m = String(s).trim().match(/^[+-]?\d+/); return m ? Number(m[0]) : 0; };
+  // Una propiedad del propio bicho: `game.monster.X` o `$get(ent_me,X)`.
+  // `null` si no es de las que se saben.
+  const propia = (e, p) => {
+    const q = p.toLowerCase();
+    const dos = (x, k = 1) => (x ? R(f2(atof(val(x)) * k), x.ok || x.m !== undefined, x.inc, { azar: x.azar }) : null);
+    if (q === "width" || q === "height") return dos(e.yo.get(q));
+    if (q === "maxhp" || q === "hp") return dos(e.yo.get("hp"));
+    if (q === "xp" || q === "skilllevel") return dos(e.yo.get("xp"));
+    if (q === "moveprox") return dos(e.yo.get("width"), 1.1);
+    return null;
+  };
+  const GETCONST = (t) => (constantes.has(t) ? constantes.get(t) : t);
+  // Los parámetros de un `$f(a,b)`, respetando paréntesis anidados.
+  const comas = (s) => {
+    const r = []; let h = 0, d = 0;
+    for (let k = 0; k < s.length; k++) {
+      if (s[k] === "(") h++;
+      else if (s[k] === ")") h--;
+      else if (s[k] === "," && h === 0) { r.push(s.slice(d, k)); d = k + 1; }
+    }
+    r.push(s.slice(d));
+    return r.map((x) => x.trim());
+  };
+  // GetVar (script.cpp:4396-4750): el local, las comillas simples fuera, `$` y
+  // `game.`, y si no, la variable o la constante (`FindVar`, :419-436); si no
+  // existe, su propio nombre.
+  const getVar = (e, locales, t, hondo = 0) => {
+    if (hondo > 6) return R(t, false);
+    if (locales?.has(t)) return locales.get(t);
+    if (t.length >= 2 && t[0] === "'" && t.endsWith("'")) return R(t.slice(1).split("'")[0]);
+    if (t[0] === "$") {
+      const m = t.match(/^\$(\w+)\((.*)\)$/s);
+      const ps = m ? comas(m[2]).map((x) => getVar(e, locales, GETCONST(x), hondo + 1)) : [];
+      const f = m?.[1].toLowerCase();
+      const inc = ps.some((p) => p.inc);
+      const texto = m ? `$${m[1]}(${ps.map((p) => p.v).join(",")})` : t;
+      if (f === "get" && ps.length >= 2 && ps[0].v === "ent_me") {
+        const r = propia(e, ps[1].v);
+        if (r) return R(r.v, r.ok && ps[1].ok, r.inc || ps[1].inc, { azar: r.azar });
+      }
+      // `$lcase`/`$ucase` de algo que se sabe.
+      if ((f === "lcase" || f === "ucase") && ps.length === 1 && ps[0].ok) {
+        return R(f === "lcase" ? ps[0].v.toLowerCase() : ps[0].v.toUpperCase(), true, inc, { azar: ps[0].azar });
+      }
+      // Un SORTEO con límites que se saben: se guarda como texto, y para
+      // decidir vale su mínimo — o sea la primera rama, que es la regla de
+      // `leerFichaNpc` («de una rama `if` se toma lo primero que aparezca»).
+      if ((f === "rand" || f === "randf") && ps.length === 2 && ps.every(sabe)) {
+        return R(texto, false, inc, { m: String(atof(val(ps[0]))), azar: texto });
+      }
+      return R(texto, false, inc);
+    }
+    if (/^game\./i.test(t)) {
+      const q = t.toLowerCase();
+      if (q === "game.serverside") return R("1");
+      if (q === "game.clientside") return R("0");
+      // El mapa, si quien lee la ficha lo dice (el horneado lo sabe).
+      if (q === "game.map.name" && opciones.mapa) return R(opciones.mapa);
+      const mm = q.match(/^game\.monster\.(.+)$/);
+      if (mm) { const r = propia(e, mm[1]); if (r) return r; }
+      return R(t, false);
+    }
+    const x = e.vars.get(t);
+    if (x && !x.nada) return x;
+    if (constantes.has(t)) return R(constantes.get(t), true, !!x?.inc);
+    // Una que sólo existe en una rama dudosa: no vale «su nombre», vale «no se
+    // sabe», y lo que se calcule con ella tampoco se sabe.
+    if (x) return R(t, false, x.inc);
+    return R(t);
+  };
+  const resolver = (e, locales, t) => getVar(e, locales, GETCONST(t));
+
+  // Los parámetros de una orden: comillas dobles agrupan (script.cpp:5627-5640).
+  const trozos = (s) => {
+    const r = [];
+    const re = /"([^"]*)"?|(\S+)/g;
+    let m;
+    while ((m = re.exec(s))) r.push(m[1] !== undefined ? m[1] : m[2]);
+    return r;
+  };
+
+  // ── 2. Al cargar: `const` (gana el primero) y `setvar` (se ejecuta) ──────
+  // El valor es UN trozo, o lo que haya entre comillas, y pasa por
+  // GETCONST_COMPATIBLE (script.cpp:5404-5411): un `$` sólo sustituye
+  // constantes (`GetConst`, :325-345) y lo demás se resuelve con lo que haya.
+  const valorDeCarga = (resto) => {
+    const s = resto.trim();
+    const v = s[0] === '"' ? s.slice(1).split('"')[0] : s.split(/\s+/)[0];
+    if (v[0] === "$") return R(v.replace(/[^,()$]+/g, (x) => GETCONST(x.trim())), false);
+    return getVar(estado, null, GETCONST(v));
+  };
   for (const b of bloques) {
     for (const l of b.lineas) {
       const k = l.match(/^const\s+(\S+)\s+(.*)$/i);
-      if (k) { if (!constantes.has(k[1])) constantes.set(k[1], k[2].trim()); continue; }
-      const m = l.match(VAR);
-      if (m && m[1].toLowerCase() !== "setvard") valores.set(m[2], m[3].trim());
+      if (k) { if (!constantes.has(k[1])) constantes.set(k[1], valorDeCarga(k[2]).v); continue; }
+      // Sólo `setvar`: el `setvarg` no se ejecuta al cargar —la comparación es
+      // `!_stricmp(TestCommand, "setvar")`, script.cpp:5384—, y el 92 lo metía
+      // aquí. Medido: el `setvarg ZOMBIE_QUEST_COMPLETE 1` del final de la
+      // misión del alcalde (dwarf_zombie_random.script:475) salía puesto al
+      // nacer, y con él el `deleteent ent_me` de la línea :136.
+      const m = l.match(/^setvar\s+(\S+)\s+(.*)$/i);
+      if (m) estado.vars.set(m[1], valorDeCarga(m[2]));
     }
   }
-  // 3. Al nacer: los bloques que corren, en orden de ejecución.
+
+  // ── 3. La estructura de cada bloque: órdenes, `if`, `else`, `{ }` ────────
+  const arbolDe = (crudo) => {
+    let i = 0;
+    const sentencia = () => {
+      const l = crudo[i++];
+      if (l === undefined || l === "}") return null;
+      if (l === "{") return { tipo: "grupo", cuerpo: lista(true) };
+      return linea(l);
+    };
+    const linea = (l) => {
+      const mIf = l.match(/^if\b\s*(.*)$/i);
+      if (mIf && mIf[1].startsWith("(")) {
+        // El `)` que cierra, no el primero: `if ( $lcase(game.map.name) equals
+        // goblintown )` lleva otro dentro. Con el primero, el cuerpo del `if`
+        // era «equals goblintown )» y el `{ }` de detrás corría SIEMPRE: el
+        // jefe goblin de `gertenheld_forest2` salía jefe por eso (el 92).
+        let cierre = -1;
+        for (let k = 0, h = 0; k < mIf[1].length; k++) {
+          if (mIf[1][k] === "(") h++;
+          else if (mIf[1][k] === ")" && --h === 0) { cierre = k; break; }
+        }
+        const cond = cierre >= 0 ? mIf[1].slice(1, cierre).trim() : mIf[1].slice(1).trim();
+        const resto = cierre >= 0 ? mIf[1].slice(cierre + 1).trim() : "";
+        const si = resto ? linea(resto) : sentencia();
+        let no = null;
+        const mElse = crudo[i]?.match(/^else\b\s*(.*)$/i);
+        if (mElse) { i++; no = mElse[1] ? linea(mElse[1]) : sentencia(); }
+        return { tipo: "si", cond, si, no };
+      }
+      if (mIf) return { tipo: "siViejo", cond: mIf[1].trim() };
+      return { tipo: "orden", texto: l };
+    };
+    const lista = (anidada) => {
+      const out = [];
+      while (i < crudo.length) {
+        if (crudo[i] === "}") { i++; if (anidada) return out; continue; }
+        const s = sentencia();
+        if (s) out.push(s);
+      }
+      return out;
+    };
+    return lista(false);
+  };
+
   const porNombre = new Map();
+  const sinNombre = [];
   for (const b of bloques) {
-    if (!b.nombre) continue;
-    if (!porNombre.has(b.nombre)) porNombre.set(b.nombre, []);
-    porNombre.get(b.nombre).push(b.lineas);
+    // La cabecera es la primera línea si es una cabecera (`{ nombre [server]`,
+    // script.cpp:5176-5190): no es una orden.
+    const crudo = b.crudo ?? b.lineas;
+    const primera = b.lineas[0] ?? "";
+    const c1 = cabeceraDe([primera]);
+    const esCab = !/^eventname\b/i.test(primera) && (c1.nombre || c1.anula || c1.ambito) && crudo[0] === primera;
+    const arbol = arbolDe(crudo.slice(esCab ? 1 : 0));
+    if (!b.nombre) { sinNombre.push(arbol); continue; }
+    if (b.anula || !porNombre.has(b.nombre)) porNombre.set(b.nombre, []);
+    porNombre.get(b.nombre).push(arbol);
   }
-  const diferidos = [];
+
+  // ── 4. Correr ────────────────────────────────────────────────────────────
+  // `cx` es el contexto de lo que corre: `duda` (la condición del mundo de la
+  // que depende, o null) y `azar` (el sorteo del que depende, o null).
+  const SEGURO = { duda: null, azar: null };
+  const cola = [];
+  let reloj = 0;
+  let turno = 0;
   const pisados = new Set();
-  const correr = (lineas, hondo) => {
-    for (const l of lineas) {
-      const m = l.match(VAR);
-      if (m) { valores.set(m[2], m[3].trim()); continue; }
-      const c = l.match(/^callevent\s+(.+)$/i);
-      if (!c) continue;
-      // La misma regla del retraso que `visita` (scriptcmds.cpp:2257-2266).
-      const t = c[1].trim().split(/\s+/);
-      if (t.length > 1 && /^\d/.test(resolverVar(t[0]))) diferidos.push([t[1], hondo + 1]);
-      else evento(t[0], hondo + 1);
+  const pisadosDudosos = new Set();
+  const igual = (a, b) => a && b && a.v === b.v && a.ok === b.ok && a.inc === b.inc && a.m === b.m && a.azar === b.azar;
+  // Lo que una rama dudosa cambió no se aplica: se marca incierto en el estado
+  // de fuera (con el valor de antes) y se apunta qué habría puesto y por qué.
+  const apuntarDuda = (fuera, rama, razon) => {
+    for (const [k, r] of rama.vars) {
+      if (igual(fuera.vars.get(k), r)) continue;
+      if (!dudosas.has(k)) dudosas.set(k, { razones: new Set(), posibles: new Set() });
+      dudosas.get(k).razones.add(razon);
+      dudosas.get(k).posibles.add(r.v);
+      // Si fuera no existía, sigue sin existir —vale su nombre o su
+      // constante—, pero ya no se sabe: `nada` lo dice.
+      const antes = fuera.vars.get(k) ?? { v: "", ok: true, nada: true };
+      fuera.vars.set(k, { ...antes, inc: true });
+    }
+    for (const [k, r] of rama.yo) {
+      if (igual(fuera.yo.get(k), r)) continue;
+      const antes = fuera.yo.get(k);
+      fuera.yo.set(k, antes ? { ...antes, inc: true } : R("", false, true));
     }
   };
-  const evento = (nombre, hondo) => {
-    const n = resolverVar(nombre).toLowerCase();
-    if (hondo > 6 || pisados.has(n)) return;
-    pisados.add(n);
-    for (const lineas of porNombre.get(n) ?? []) correr(lineas, hondo);
+  // Evalúa una condición: `{ c: true|false|null, azar }`. `null` es dudosa.
+  const condicion = (e, locales, texto) => {
+    const p = texto.split(/\s+/).filter(Boolean);
+    const NO = { c: null, azar: null };
+    if (p.length === 1) {
+      let t = p[0], contra = false;
+      if (t[0] === "!") { contra = true; t = t.slice(1); }
+      const r = resolver(e, locales, t);
+      if (!sabe(r)) return NO;
+      return { c: (atoi(val(r)) !== 0) !== contra, azar: azarDe(r) };
+    }
+    if (p.length !== 3) return NO;
+    const a = resolver(e, locales, p[0]);
+    const b = resolver(e, locales, p[2]);
+    if (!sabe(a) || !sabe(b)) return NO;
+    const x = val(a), y = val(b);
+    const c = {
+      equals: () => x === y, isnot: () => x !== y, "!equals": () => x !== y,
+      "<": () => atof(x) < atof(y), ">": () => atof(x) > atof(y),
+      "<=": () => atof(x) <= atof(y), ">=": () => atof(x) >= atof(y),
+      "==": () => atof(x) === atof(y), "!=": () => atof(x) !== atof(y),
+      startswith: () => x.startsWith(y), contains: () => x.includes(y),
+      "!startswith": () => !x.startsWith(y), "!contains": () => !x.includes(y),
+    }[p[1]];
+    return c ? { c: c(), azar: azarDe(a, b) } : NO;
   };
-  // El orden del motor: `spawn` y `game_spawn` (global.cpp:436-437); `npc_spawn`
-  // suele llegar por `game_spawn` y si no, se corre detrás.
-  for (const n of ["spawn", "game_spawn", ...NACIMIENTO]) evento(n, 0);
-  for (const b of bloques) if (!b.nombre) correr(b.lineas, 0);
-  while (diferidos.length) evento(...diferidos.shift());
-  return { variables: valores, constantes };
+  const poner = (e, locales, nombre, r) => {
+    if (locales.has(nombre)) locales.set(nombre, r);
+    else e.vars.set(nombre, r);
+  };
+  // Lo que se escribe dentro de una rama elegida por sorteo, depende del sorteo.
+  const conAzar = (r, cx) => (cx.azar && !r.azar ? { ...r, azar: cx.azar } : r);
+  const MATES = new Set(["add", "inc", "incvar", "subtract", "dec", "decvar", "multiply", "divide"]);
+  const orden = (e, locales, texto, cx, hondo, propio) => {
+    const t = trozos(texto);
+    const cmd = (t[0] ?? "").toLowerCase();
+    const ps = t.slice(1).map((x) => resolver(e, locales, x));
+    // `setvar` con más de un valor los JUNTA sin espacio (`ScriptCmd_SetVar`, scriptcmds.cpp:6569-6575).
+    const junto = (desde) => {
+      const q = ps.slice(desde);
+      if (q.length === 1) return conAzar(q[0], cx);
+      return conAzar(R(q.map((p) => p.v).join(""), q.every((p) => p.ok), q.some((p) => p.inc), { azar: azarDe(...q) }), cx);
+    };
+    if ((cmd === "setvar" || cmd === "setvard" || cmd === "setvarg") && t.length >= 3) { e.vars.set(t[1], junto(1)); return; }
+    if (cmd === "local" && t.length >= 3) { locales.set(t[1], junto(1)); return; }
+    if (MATES.has(cmd) && t.length >= 3) {
+      const a = resolver(e, locales, t[1]);
+      const n = ps[1];
+      const az = azarDe(a, n);
+      if (!(a.ok || a.m !== undefined) || !(n.ok || n.m !== undefined)) {
+        poner(e, locales, t[1], conAzar(R(a.v, false, a.inc || n.inc, { azar: az }), cx));
+        return;
+      }
+      let x = atof(val(a)); const y = atof(val(n));
+      if (cmd === "multiply") x *= y;
+      else if (cmd === "divide") { if (y) x /= y; }
+      else if (cmd.startsWith("dec") || cmd === "subtract") x -= y;
+      else x += y;
+      poner(e, locales, t[1], conAzar(R(t.length > 3 ? Math.fround(x).toFixed(6) : f2(x), true, a.inc || n.inc, { azar: az }), cx));
+      return;
+    }
+    if ((cmd === "width" || cmd === "height" || cmd === "hp") && ps.length) {
+      const p = cmd === "hp" && ps.length >= 2 ? ps[1] : ps[0];
+      e.yo.set(cmd, conAzar(R(String(atof(val(p))), p.ok || p.m !== undefined, p.inc, { azar: p.azar }), cx));
+      return;
+    }
+    // `skilllevel` y `expadj`: la experiencia que da el bicho es `m_SkillLevel`
+    // (msmonsterserver.cpp:2508), y la escriben estas dos (npcscript.cpp:393-
+    // 470). `skilllevel` guarda además el primer valor en `NPC_ORIG_EXP`, y
+    // `expadj` no hace nada sin él; con un punto en el número multiplica (o con
+    // `scale`, suma esa fracción del original) y sin punto SUMA.
+    if (cmd === "skilllevel" && ps.length) {
+      const p = ps[0];
+      e.yo.set("xp", conAzar(R(String(atoi(val(p))), sabe(p) || p.inc, p.inc, { azar: p.azar }), cx));
+      const orig = resolver(e, null, "NPC_ORIG_EXP");
+      if (atof(val(orig)) === 0) e.vars.set("NPC_ORIG_EXP", conAzar({ ...p, inc: p.inc || orig.inc }, cx));
+      return;
+    }
+    if (cmd === "expadj" && ps.length) {
+      const orig = resolver(e, null, "NPC_ORIG_EXP");
+      if (sabe(orig) && !(atof(val(orig)) > 0)) return;
+      const xp0 = e.yo.get("xp");
+      let xp = atof(val(xp0));
+      const k = val(ps[0]);
+      if (k.includes(".")) xp = ps[1]?.v === "scale" ? xp + atof(val(orig)) * atof(k) : xp * atof(k);
+      else xp += atof(k);
+      e.yo.set("xp", conAzar(R(String(Math.max(0, Math.fround(xp))), xp0.ok && sabe(ps[0]) && sabe(orig),
+        xp0.inc || ps[0].inc || orig.inc, { azar: azarDe(xp0, ps[0], orig) }), cx));
+      return;
+    }
+    if (cmd === "callevent" && ps.length) {
+      // ScriptCmd_CallEvent, scriptcmds.cpp:2257-2299. Un nombre o un retraso
+      // que dependen del mundo hacen dudosa la llamada entera.
+      //
+      // Un retraso al azar —`callevent $randf(0.5,1.0) npcatk_get_postspawn_
+      // properties`, el `game_spawn` del `base_npc_attack` VIEJO, :39— es un
+      // número que empieza por dígito, o sea un retraso: con la MUESTRA del
+      // sorteo (su mínimo, ver `getVar`) sale como tal, y la llamada no es
+      // dudosa: el azar mueve su hora, no si ocurre. Sin la muestra el `$randf`
+      // se leía como el NOMBRE del evento y la mitad de los bichos viejos no
+      // rellenaban sus valores por omisión. (Hubo aquí además una línea que
+      // tomaba la hora del medio; rota a propósito, no cambió nada: la muestra
+      // ya lo hacía. Se quitó por la regla del 78.)
+      const malos = ps.slice(0, 2).some((p) => p.inc || !(p.ok || p.m !== undefined));
+      const c2 = malos && !cx.duda ? { ...cx, duda: `callevent ${t.slice(1).join(" ")}` } : cx;
+      if (ps.length > 1 && /^\d/.test(val(ps[0]))) {
+        const retraso = atof(val(ps[0]));
+        if (retraso) { cola.push({ t: reloj + retraso, n: turno++, nombre: val(ps[1]), cx: c2, hondo: hondo + 1 }); return; }
+        evento(e, val(ps[1]), [], c2, hondo + 1);
+        return;
+      }
+      if (val(ps[0]).toLowerCase() === propio) return; // «Can't call myself recursively»
+      evento(e, val(ps[0]), ps.slice(1), c2, hondo + 1);
+    }
+  };
+  // Corre una rama dudosa en una copia y apunta lo que cambió.
+  const enRama = (e, locales, lista, cx, razon, hondo, propio) => {
+    const copia = clonar(e);
+    correr(copia, new Map(locales), lista, { ...cx, duda: razon }, hondo, propio);
+    apuntarDuda(e, copia, razon);
+  };
+  // Corre una lista de sentencias. Un `if` viejo que sale falso la corta.
+  const correr = (e, locales, lista, cx, hondo, propio) => {
+    for (let k = 0; k < lista.length; k++) {
+      const s = lista[k];
+      if (s.tipo === "orden") { orden(e, locales, s.texto, cx, hondo, propio); continue; }
+      if (s.tipo === "grupo") { correr(e, locales, s.cuerpo, cx, hondo, propio); continue; }
+      const { c, azar } = condicion(e, locales, s.cond);
+      const cx2 = azar && !cx.azar ? { ...cx, azar } : cx;
+      if (s.tipo === "siViejo") {
+        if (c === true) { if (cx2 !== cx) { correr(e, locales, lista.slice(k + 1), cx2, hondo, propio); return; } continue; }
+        if (c === false) return;
+        // Dudoso: lo que queda de la lista depende de esto.
+        enRama(e, locales, lista.slice(k + 1), cx, `if ${s.cond}`, hondo, propio);
+        return;
+      }
+      if (c === true) { if (s.si) correr(e, locales, [s.si], cx2, hondo, propio); continue; }
+      if (c === false) { if (s.no) correr(e, locales, [s.no], cx2, hondo, propio); continue; }
+      for (const rama of [s.si, s.no]) if (rama) enRama(e, locales, [rama], cx, `if ( ${s.cond} )`, hondo, propio);
+    }
+  };
+  // `e` es el estado sobre el que corre: el de verdad, o la copia de una rama
+  // dudosa. Lo que llega dudoso sobre el de verdad (un diferido pedido desde
+  // una rama dudosa) corre sobre una copia y se apunta.
+  const evento = (e, nombre, params, cx, hondo) => {
+    const n = String(nombre).toLowerCase();
+    const vistos = cx.duda ? pisadosDudosos : pisados;
+    if (hondo > 8 || vistos.has(n)) return;
+    vistos.add(n);
+    // Los parámetros, como `PARAM1…` locales (script.cpp:5709).
+    const locales = new Map(params.map((p, k) => [`PARAM${k + 1}`, p]));
+    for (const arbol of porNombre.get(n) ?? []) {
+      if (cx.duda && e === estado) enRama(e, locales, arbol, cx, cx.duda, hondo, n);
+      else correr(e, new Map(locales), arbol, cx, hondo, n);
+    }
+  };
+  // El orden del motor: `spawn` y `game_spawn` (global.cpp:424-437, en
+  // `CScriptedEnt::Spawn`); `npc_spawn` suele llegar por `game_spawn` y si no,
+  // se corre detrás. Luego los bloques sin nombre, en el primer
+  // `RunScriptEvents` (script.cpp:4987); y lo diferido, por su hora.
+  for (const n of ["spawn", "game_spawn", ...NACIMIENTO]) evento(estado, n, [], SEGURO, 0);
+  for (const arbol of sinNombre) correr(estado, new Map(), arbol, SEGURO, 0, null);
+  while (cola.length) {
+    cola.sort((a, b) => a.t - b.t || a.n - b.n);
+    const d = cola.shift();
+    reloj = d.t;
+    evento(estado, d.nombre, [], d.cx, d.hondo);
+  }
+  // Lo de fuera: textos, como antes, y aparte qué no se pudo evaluar y qué
+  // depende de algo que no se sabe. Una dudosa que al final se volvió a poner
+  // con certeza ya no lo es.
+  const variables = new Map();
+  const sinEvaluar = new Set();
+  for (const [k, r] of estado.vars) {
+    if (!r.nada) variables.set(k, r.v);
+    if (!r.ok) sinEvaluar.add(k);
+    // Un sorteo guardado tal cual (`ATTACK_DAMAGE $randf(6,9)`) no es dudoso:
+    // es un rango, y `rango()` lo lee entero.
+    if (!r.inc && (!r.azar || r.azar === r.v)) { dudosas.delete(k); continue; }
+    if (!dudosas.has(k)) dudosas.set(k, { razones: new Set(), posibles: new Set() });
+    if (r.azar) dudosas.get(k).razones.add(`sorteo ${r.azar}: se toma el primer resultado`);
+    else if (!dudosas.get(k).razones.size) dudosas.get(k).razones.add("depende de un valor dudoso");
+  }
+  for (const k of [...dudosas.keys()]) if (!estado.vars.has(k)) dudosas.delete(k);
+  const yo = Object.fromEntries([...estado.yo].map(([k, r]) => [k, sabe(r) ? val(r) : null]));
+  return { variables, constantes, sinEvaluar, dudosas, yo };
 }
 
 /**
@@ -487,7 +919,7 @@ export function guionDeEntidad(e) {
   return e?.scriptfile || e?.defscriptfile || null;
 }
 
-export function leerFichaNpc(raiz, rutaScript) {
+export function leerFichaNpc(raiz, rutaScript, opciones = {}) {
   const indice = new Map();
   const vars = new Map();
   const vistos = new Set();
@@ -625,7 +1057,7 @@ export function leerFichaNpc(raiz, rutaScript) {
     script: rutaScript, ruta: `${raiz}/${rutaScript}.script`,
     vars, ficha: fichaResuelta, estadisticas, resuelve,
     // Las variables como quedan al nacer (el 92): ver `variablesAlNacer`.
-    alNacer: variablesAlNacer(raiz, rutaScript, resolverVar),
+    alNacer: variablesAlNacer(raiz, rutaScript, opciones),
     // Los `bodypart` elegidos, por índice. El número de `body` que pide
     // `mallaDe()` se compone con las bases del propio modelo, así que se deja en
     // crudo: componerlo aquí obligaría a abrir el `.mdl` desde el lector de
@@ -1030,7 +1462,7 @@ export function iaDe(f) {
   // correr era la cadena de texto `ACT_ANIM_RUN`. Eso no da error: da un nombre
   // que el modelo no tiene, y el visor cae a la secuencia 0 sin decir nada. Lo
   // mismo con `ANIM_ATTACK` -> `ANIM_SXBOW_ATTACK` -> `anim_sxbow_shoot`.
-  const v = (n) => {
+  const deVars = (n) => {
     const x = f.vars?.get(n);
     return f.resuelve ? f.resuelve(x) : x;
   };
@@ -1057,17 +1489,40 @@ export function iaDe(f) {
    * de después que este lector no puede evaluar (`MY_WIDTH`,
    * `$get(ent_me,xp)`, `PARAM1`…), y cambiarlos a ciegas sería cambiar un valor
    * malo por otro. Contados en `doc/FICHAS_92.md`.
+   *
+   * CORRECCIÓN DEL 93: el párrafo de arriba es cierto del lector del 92, que
+   * no evaluaba condiciones. Ahora `variablesAlNacer` las evalúa cuando
+   * dependen de lo que el bicho sabe de sí mismo (ver su comentario) y TODO
+   * `iaDe` lee el valor al nacer: `v` ES `va`. Las 23 «mezcladas» eran, casi
+   * todas, el relleno por omisión de `npcatk_get_postspawn_properties` y
+   * `npcatk_post_load` (base_npc_attack_new:103-128, :153-224) aplicado sin
+   * mirar su `if ( X equals 'X' )`. Una por una en `doc/FICHAS_93.md`.
+   *
+   * Lo que depende de una condición que este lector no sabe (el mapa, el
+   * azar, a quién ve) sale con el valor del camino SEGURO —el de no entrar en
+   * esa rama— y se DECLARA en `dudosas`, con la condición: ni se adivina ni se
+   * calla.
    */
+  const leidas = new Set();
   const va = (n) => {
+    leidas.add(n);
     const a = f.alNacer;
-    if (!a) return v(n);
-    const x = a.variables.has(n) ? a.variables.get(n) : a.constantes.get(n);
-    return f.resuelve ? f.resuelve(x) : x;
+    if (!a) return deVars(n);
+    // Ya viene resuelta: el 93 resuelve al ejecutar, como el motor.
+    return a.variables.has(n) ? a.variables.get(n) : a.constantes.get(n);
   };
+  const v = va;
   const ancho = num(f.ficha.width);
   // Los tres alcances por omisión salen de la anchura, y los factores son del
   // comentario de cabecera del propio script (líneas 11-14): moverse hasta la
   // anchura, blandir a 3x y tocar a 4x. El goblin los pisa con 90/130/130.
+  //
+  // CORRECCIÓN DEL 93: el comentario de cabecera dice 3x y el CÓDIGO dice
+  // 2,5 —`multiply ATTACK_RANGE 2.5`, base_npc_attack_new.script:206-207—, y
+  // sobre `MONSTER_WIDTH`, que si nadie lo pone es `game.monster.moveprox`
+  // (:172), o sea `m_Width * 1.1` (msmonster.h:355). Para quien hereda esa
+  // base lo calcula ya `variablesAlNacer`; esto queda para quien no la
+  // hereda, y no se ha tocado.
   const porAncho = (k) => (ancho ? ancho * k : null);
   // El `dodamage` del evento que se llama como la animación de golpe (el 67).
   const delGolpe = danoDeEvento(f, v("ANIM_ATTACK"));
@@ -1236,7 +1691,17 @@ export function iaDe(f) {
     puedeCambiarDeObjetivo: num(v("CAN_RETALIATE")) !== 0,
     /** Avisar a los aliados. El alcance sale de la vida máxima, ver `reaccion.js`. */
     noAvisa: num(v("NO_ALERT_ALLIES")) === 1,
-    experiencia: num(v("NPC_GIVE_EXP")),
+    /**
+     * LA EXPERIENCIA BASE (el 93). No es `NPC_GIVE_EXP` al final del
+     * nacimiento: `npcatk_set_skill` (base_self_adjust.script:264-500) la pasa
+     * a `skilllevel`, le aplica `expadj` —el «+1» de la errata, la rebaja, el
+     * global, FuzzNet— y al final escribe `NPC_GIVE_EXP $get(ent_me,xp)`
+     * (:488), o sea la YA ajustada. Esos ajustes los hace en el juego
+     * `experienciaDelBicho` (src/juego/servidor.js), así que aquí va lo de
+     * ANTES: lo que `skilllevel` guardó en `NPC_ORIG_EXP` (npcscript.cpp:400-
+     * 405). Si el bicho no pasa por ahí, su `NPC_GIVE_EXP` al nacer.
+     */
+    experiencia: num(v("NPC_ORIG_EXP")) ?? num(v("NPC_GIVE_EXP")),
     /**
      * `NPC_SELF_ADJUST` — si el bicho sube de nivel con la vida total de los
      * jugadores. No lo trae el motor: lo pide el script, con `setvar
@@ -1262,6 +1727,60 @@ export function iaDe(f) {
     ancho, alto: num(f.ficha.height),
     raza: f.ficha.race ?? null,
     pasea: num(f.ficha.roam) === 1,
+    /**
+     * LOS DOS RELOJES DE PENSAR, que son DE LA BASE DEL BICHO y no del
+     * puerto (el 94). Hasta aquí `Cazador` usaba los de la IA nueva para
+     * todos, y la mitad de la fauna del juego es de la vieja:
+     *
+     *     setvard CYCLE_TIME_IDLE 2.8      base_npc_attack.script:7 (VIEJA)
+     *     setvard CYCLE_TIME_BATTLE 0.1    base_npc_attack.script:10
+     *     const CYCLE_TIME_BATTLE 0.1      base_npc_attack_new.script:94 (NUEVA)
+     *     const CYCLE_TIME_IDLE 2.0        base_npc_attack_new.script:95
+     *     const CYCLE_TIME_NPC 0.8         base_npc_attack_new.script:96
+     *
+     * La vieja la hereda quien incluye `monsters/base_monster`
+     * (base_monster.script:8): la rata, la araña, el jabalí. La nueva, quien
+     * incluye `base_monster_new` (base_monster_new.script:1): el goblin, el
+     * zombi enano. Y hay quien pone las suyas: los invocados hacen `const
+     * CYCLE_TIME_IDLE 0.1` ANTES de incluir (monsters/summon/base_summon.script:50),
+     * y como `const` gana el primero (el 66) piensan siempre a 0,1.
+     *
+     * Se lee con `va` —el valor al nacer— porque en la vieja es un `setvard`
+     * en el bloque sin nombre, que corre al nacer, y en la nueva un `const`.
+     * `null` cuando el guion no hereda ninguna de las dos: entonces no hay
+     * `npcatk_hunt` en el mod, y quien caiga en el valor por omisión de
+     * `Cazador` lo hace sabiendo que no tiene cita (ver `CICLO`, ia.js).
+     *
+     * `cicloNpc` sólo existe en la nueva (`cycle_npc`, :1373-1377) y sólo se
+     * usa con un objetivo que NO es jugador; en este puerto los candidatos de
+     * la caza son siempre jugadores (`objetivos()`, main.js y red/fauna.js),
+     * así que se hornea y no se usa: no tiene caso todavía (el 50).
+     */
+    cicloOcioso: num(va("CYCLE_TIME_IDLE")),
+    cicloCombate: num(va("CYCLE_TIME_BATTLE")),
+    cicloNpc: num(va("CYCLE_TIME_NPC")),
+    /**
+     * LAS QUE NO SE SABEN (el 93): de las variables que lee esta ficha, las
+     * que al nacer dependen de una condición que este lector no puede evaluar.
+     * El valor de arriba es el del camino seguro; esto dice por qué podría no
+     * serlo. `null` si no hay ninguna.
+     */
+    dudosas: (() => {
+      const d = f.alNacer?.dudosas;
+      if (!d) return null;
+      const fuera = {};
+      for (const n of [...leidas].sort()) {
+        if (!d.has(n)) continue;
+        const razones = [...d.get(n).razones];
+        // `$anim_exists` es la cadena de repuesto de la muerte
+        // (base_npc.script:283-296): pide el MODELO, que este lector no abre,
+        // y la aplica el horneado con el modelo delante (`muerteQueExiste`,
+        // tools/bichos.mjs). No es una duda de la ficha.
+        if (razones.every((r) => r.includes("$anim_exists"))) continue;
+        fuera[n] = razones.slice(0, 3);
+      }
+      return Object.keys(fuera).length ? fuera : null;
+    })(),
   };
 }
 

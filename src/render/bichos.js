@@ -412,6 +412,14 @@ function montarBichos(manifiesto, modelos) {
       i.nodo.position.set(i.donde[0], i.donde[1], i.donde[2]);
       i.nodo.rotation.y = i.yaw;
       aplicarAnimacion(i);
+      // EL 94: EL RITMO DE LA ANIMACIÓN, `pev->framerate`. El cliente del mod
+      // avanza el fotograma con él —`dfdt = (m_clTime - animtime) * framerate
+      // * pseqdesc->fps`, studiomodelrenderer.cpp:897—, y el servidor lo pone
+      // de `m_Framerate` (`setanim.framerate`, msmonsterserver.cpp:2079-2081).
+      // Hasta el 93 la regla corría (eventos, candado) y el dibujo iba a ritmo
+      // 1: la araña agarrada a ritmo 0,5 mordía a cámara normal. Con servidor
+      // `fisica.ritmoAnim` lo escribe `Manada.aplicar` desde la foto (`r`).
+      if (i.mezclador) i.mezclador.timeScale = i.fisica?.ritmoAnim ?? 1;
       // El cadáver que se desvanece: la manada lleva la cuenta y aquí sólo se
       // pinta. `renderamt` de 7 en 7 cada 0,1 s (combat.cpp:651).
       if (i.muerto && i.opacidad < 1) {
@@ -498,6 +506,8 @@ function montarBichos(manifiesto, modelos) {
     aplicar(lista) { manada.aplicar(lista); },
     herir(i, dano, opciones) { return manada.herir(i, dano, opciones); },
     deUnaVez(i, nombre) { const r = manada.deUnaVez(i, nombre); aplicarAnimacion(i); return r; },
+    /** EL 94: el `playanim` de un guion con su modo (ver `Manada.playanim`). */
+    playanim(i, nombre, modo) { const r = manada.playanim(i, nombre, modo); aplicarAnimacion(i); return r; },
     avisar(i, quien, opciones) { return manada.avisar(i, quien, opciones); },
     matar(i, opciones) { const r = manada.matar(i, opciones); aplicarAnimacion(i); return r; },
     pasear(dt, arnes, filtro) { manada.pasear(dt, arnes, filtro); refrescar(); },

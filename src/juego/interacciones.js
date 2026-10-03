@@ -152,9 +152,15 @@ export class InteraccionesNpc {
      * quedado por el camino. `sinGuion` son golpes a un bicho de combate sin
      * guion horneado; `noDeCombate` golpes a un NPC sin ficha de combate, que
      * en el motor también reciben `game_struck` y aquí todavía no (se dice).
+     *
+     * EL 94: ya lo reciben —`recibe` y `muere`, ver `_alCombate`— y se
+     * cuentan en `aldeanos`. `noDeCombate` queda para lo demás (un aldeano no
+     * ataca, así que en la práctica no debería subir).
      */
     this.manadaEnchufada = null;
     this.costura = { sinGuion: 0, noDeCombate: 0, nacidos: 0, renacidos: 0, sinJugador: 0 };
+    /** EL 94: asa del jugador -> su id en la manada. Ver `fijarObjetivoDe`. */
+    this._idPorAsa = new Map();
   }
 
   /**
@@ -250,12 +256,30 @@ export class InteraccionesNpc {
       // EL 92: los eventos de animación de un NPC sin ficha de combate (los
       // pasos de un aldeano) no son golpes: no se cuentan como tales. Ver
       // doc/MORDISCO_92.md — a un NPC al que no se le habla no le llegan.
-      if (s.que === "animacion" || s.que === "ataca") return;
-      this.costura.noDeCombate++; return;
+      // EL 93: tampoco lo son las dos preguntas de la caza (`caza`, `puede`).
+      if (s.que === "animacion" || s.que === "ataca" || s.que === "caza" || s.que === "puede") return;
+      // ── EL 94: RECIBIR Y MORIR SÍ LE LLEGAN A UN ALDEANO ────────────────
+      //
+      // `TraceAttack`, `TakeDamage` y `Killed` son de `CMSMonster`, y un
+      // aldeano lo es igual que un goblin: `game_damaged`, `game_struck` y
+      // `game_death` le llegan en el motor sin mirar si pelea
+      // (msmonsterserver.cpp:2311, :2385, :2605). Aquí se paraban, y con ellos
+      // se perdía lo único que hace el aldeano al recibir: gritar y avisar a
+      // los guardias (monsters/base_civilian.script:3-21). Su guion corre SIN
+      // cierre —no tiene IA de caza que duplicar— y por eso entero.
+      if (s.que !== "recibe" && s.que !== "muere") { this.costura.noDeCombate++; return; }
+      this.costura.aldeanos = (this.costura.aldeanos ?? 0) + 1;
     }
     const g = this.guionDe(i);
     if (!g) { this.costura.sinGuion++; return; }
     const jugador = this.contextoDelJugador(sesion);
+    // EL 94: el asa del jugador y su id en la manada, para el camino de vuelta
+    // (`fijarObjetivoDe`): un guion que pide `npcatk_settarget <asa>` trae el
+    // asa, y el cazador entiende ids de la manada.
+    if (hayJugador) {
+      const principal = s?.que === "danaAOtro" || s?.que === "hizoDano" ? s.objetivo : (s?.quien ?? s?.objetivo);
+      if (esUnJugador(principal)) this._idPorAsa.set(String(jugador.ref), principal);
+    }
     // `EntToString` del jugador: en este puerto su asa es el id del
     // personaje, la misma que ve el guion en `ent_lastspoke` (el 45).
     const ref = (id) => (hayJugador && esUnJugador(id) ? jugador.ref : "none");
@@ -312,6 +336,16 @@ export class InteraccionesNpc {
           s.r.porGuion = true;
         }
         return;
+      // EL 93: la IA ha fijado o soltado objetivo, y el guion lo apunta como lo
+      // apuntarían sus eventos de caza cerrados (`GuionDeNpc.cazando`).
+      case "caza":
+        g.cazando(s.objetivo === null || s.objetivo === undefined ? null : ref(s.objetivo));
+        return;
+      // EL 93: ¿deja el guion cazar y atacar? (`GuionDeNpc.puede`). `r` va por
+      // referencia, como en `ataca`.
+      case "puede":
+        if (s.r) Object.assign(s.r, g.puede());
+        return;
       case "animacion": {
         // EL 92: un evento 500/600 del modelo, al guion por su nombre
         // (`CallScriptEvent(pEvent->options)`, msmonsterserver.cpp:1487 y
@@ -341,6 +375,10 @@ export class InteraccionesNpc {
           return;
         }
         g.costura("game_damaged_end", [quien, comoF(s.dano)]);
+        // EL 94: `StoreEntity(pAttacker, ENT_LASTSTRUCK)` y después
+        // `game_struck` (msmonsterserver.cpp:2380-2385). Sólo aquí: un golpe
+        // parado no pasa por `TakeDamage` y no lo guarda.
+        g.entorno.golpeadoPor = quien;
         g.costura("game_struck", [comoF(s.dano)]);
         return;
       }
@@ -516,7 +554,12 @@ export class InteraccionesNpc {
       // El 81: la escala, para que `$cansee` compare unidades con unidades.
       unidadesPorMetro: this.unidadesPorMetro,
       // El 81: dónde está el jugador cuando no ha abierto ningún menú.
-      sitioDelJugador: () => (this.dondeEstaElJugador?.() ?? []).join(" ") || null,
+      // EL 93 (pieza G): y DE QUIÉN, con el asa del jugador de este guion. Un
+      // navegador tiene uno y no lo mira; el servidor tiene varios y, fuera de
+      // `alCombate` y de los menús, «con quién habla» es el último que abrió
+      // un menú: la araña del salto medía su `dist` contra ése (o contra nadie,
+      // y `dist` valía «0»). Ver `dondeEstaElJugador` en `src/red/partida.js`.
+      sitioDelJugador: () => (this.dondeEstaElJugador?.(caja.guion?.jugador?.ref ?? null) ?? []).join(" ") || null,
       npc: {
         nombre: instancia.ficha?.nombre ?? "Someone",
         script: instancia.ficha?.script ?? "",
@@ -532,6 +575,9 @@ export class InteraccionesNpc {
         // su vida al recibir un golpe. Con getter, porque la vida cambia.
         get vida() { return instancia.vida ?? 0; },
         get vidaMax() { return instancia.vidaMaxima ?? 0; },
+        // EL 93: `m_Width` (npcscript.cpp:201), que `$get(<x>,dist)` resta a
+        // medias (scriptcmds.cpp:1151-1152). Es el `width` del guion horneado.
+        get ancho() { return instancia.ficha?.ia?.ancho ?? instancia.ficha?.ancho ?? 0; },
       },
       catalogo: this.catalogo,
       tiendas: this.tiendas,
@@ -547,15 +593,26 @@ export class InteraccionesNpc {
       abrirTienda: (o) => this.abrirTienda?.({ ...o, instancia, para: this.hablandoCon }) ?? false,
       // `playanim once nod`, npcscript.cpp:1487. Una secuencia que no existe
       // se ignora como LookupSequence; no interrumpe la conversación.
-      animar: nombre => { try { this.animar?.(instancia, nombre); } catch {} },
+      // EL 94: y con su MODO. Tirarlo convertía cada `playanim once` en un
+      // `critical`, que rompe lo que esté corriendo (npcscript.cpp:1514-1550).
+      animar: (nombre, modo) => { try { this.animar?.(instancia, nombre, modo); } catch {} },
       programar: (s, que) => this.reloj.programar(s, que),
       entidades: this.registroDeEntidades,
       borrarDelMundo: nombre => this.borrarDelMundo?.(nombre),
       // El 81: el cableado entre NPC. `callexternal $get_by_name(wench) cider2`
       // es la mitad de la misión de la sidra y no llegaba a nadie — ver la
       // corrección del 81 en `llamarExterno`, en `npcguion.js`.
-      guionDeOtro: (asa) => this.guionPorAsa(asa),
-      todosLosGuiones: () => (this.losNpc?.() ?? []).map((i) => this.guionDe(i)).filter(Boolean),
+      // EL 94: y con el jugador de quien llama. En el motor un asa de jugador
+      // vale en cualquier guion (`RetrieveEntity`); aquí cada `GuionDeNpc` sólo
+      // reconoce al jugador que tiene atado, así que el guardia que recibe
+      // `civilian_attacked <asa>` del aldeano no sabía de quién le hablaban:
+      // `$get(OFFENDER,range)` medía al propio guardia (0, siempre dentro de
+      // `BG_MAX_HEAR_CIV`) y `$cansee` no tenía a quién mirar. Ver `atarAlJugadorDe`.
+      guionDeOtro: (asa) => this.atarAlJugadorDe(caja.guion, this.guionPorAsa(asa)),
+      todosLosGuiones: () => (this.losNpc?.() ?? []).map((i) => this.atarAlJugadorDe(caja.guion, this.guionDe(i))).filter(Boolean),
+      // EL 94: `npcatk_settarget` pedido por otro guion, a la IA. Sólo los de
+      // combate: son los únicos con cierre, y los únicos con cazador que caza.
+      fijarObjetivo: combate ? (asa) => this.fijarObjetivoDe(instancia, asa) : null,
       // El 79: una opción de menú de tipo `say` hace hablar AL JUGADOR, y
       // hablar es llegar a los oídos de alrededor — no imprimir una línea.
       hablaElJugador: (texto, { desde } = {}) => this.hablaElJugador(texto, { desde }),
@@ -564,11 +621,57 @@ export class InteraccionesNpc {
       // EL 91: el cierre y de qué vida es. Ver `esDeCombate`.
       cierre: combate ? CIERRE_DE_BICHO : null,
       nacimiento: instancia.nacimientos ?? 0,
+      // EL 93: el cuerpo del bicho, para su `setvelocity`, `setfollow`… Sólo
+      // los de combate y sólo con la manada enchufada (ver `Manada.cuerpoDe`).
+      cuerpo: combate ? (this.manadaEnchufada?.cuerpoDe?.(instancia) ?? null) : null,
     });
     if (combate) this.costura.nacidos++;
     caja.guion = g;
     this.guionesVivos.set(clave, g);
     return g;
+  }
+
+  /**
+   * **EL JUGADOR DE QUIEN LLAMA, ATADO AL GUION QUE RECIBE** — el 94.
+   *
+   * `callexternal` pasa asas, y en el motor un asa se resuelve en cualquier
+   * guion (`RetrieveEntity`). Aquí «quién es el jugador» lo sabe cada
+   * `GuionDeNpc` por su cuenta (`jugador`, que ponen `pedirOpciones`, `oir`
+   * y la costura), así que lo que viaja con la llamada es eso: el jugador del
+   * que llama, que es el del asa que lleva dentro.
+   *
+   * Sin `origen`, a propósito: el que haya quedado de un menú viejo es una
+   * foto, y el guardia mide con él cuánto le separa del que pega
+   * (`$get(OFFENDER,range)`, gatecity/guard.script:110). Sin él se pregunta
+   * a `sitioDelJugador`, que lo lee vivo.
+   *
+   * Si quien llama no tiene jugador atado, no se toca nada: la llamada no
+   * habla de ninguno.
+   */
+  atarAlJugadorDe(desde, otro) {
+    if (!otro || !desde || otro === desde) return otro;
+    const j = desde.jugador;
+    if (!j?.ref) return otro;
+    otro.jugador = { ...(otro.jugador ?? {}), personaje: j.personaje ?? null, ref: j.ref, origen: undefined };
+    return otro;
+  }
+
+  /**
+   * **`npcatk_settarget <asa>` PEDIDO POR OTRO GUION, A LA IA** — el 94.
+   *
+   * Lo llama `GuionDeNpc._objetivoPedidoDeFuera`. El asa es la del guion; el
+   * cazador entiende ids de la manada («jugador» en un navegador, «j3» con
+   * servidor). La traducción la apunta la costura cada vez que pasa un golpe
+   * de un jugador (`_idPorAsa`); sin ella, en un navegador sólo hay uno.
+   *
+   * Hoy sólo jugadores: un guion que pide como objetivo a otro NPC no tiene
+   * id de la manada que este puerto sepa dar, y se apunta.
+   */
+  fijarObjetivoDe(instancia, asa) {
+    const id = this._idPorAsa.get(String(asa))
+      ?? (!this.jugadorDe && String(asa) === String(this.contextoDelJugador().ref) ? "jugador" : null);
+    if (!id) { this.costura.objetivoSinId = (this.costura.objetivoSinId ?? 0) + 1; return false; }
+    return Boolean(this.manadaEnchufada?.fijarObjetivoPorGuion?.(instancia, id));
   }
 
   /**

@@ -150,6 +150,24 @@ export const CADAVER = { quieto: 20, desvanece: (255 / 7) * 0.1 };
 export const U_POR_METRO = 39.37;
 
 /**
+ * ── EL 93: LA FÍSICA DE UN BICHO LANZADO ────────────────────────────────────
+ *
+ * Los tres números de `SV_Physics_Step` que mueven a un monstruo con velocidad
+ * (ReHLDS, engine/sv_phys.cpp): `sv_gravity` 800 (:49, y Master Sword lo
+ * vuelve a poner a 800 al empezar la partida, multiplay_gamerules.cpp:168), y la fricción del
+ * primer fotograma en el suelo con `sv_friction` 4 y `sv_stopspeed` 100 (los
+ * valores por omisión de los dos cvars, :52-53). Ver `Manada._fisica`.
+ */
+export const FISICA = Object.freeze({ gravedad: 800, friccion: 4, parada: 100 });
+/**
+ * Lo que baja el `origin` de quien sigue a un JUGADOR con `align_bottom`:
+ * `origin.z += pOwner->pev->mins.z` (cbase.cpp:309-310), y en un jugador de
+ * pie eso es −36 («in players, the bottom is 36 units lower»,
+ * msitemdefs.h:55). Agachado serían −18 y no se distingue.
+ */
+export const ABAJO_DEL_JUGADOR = 36;
+
+/**
  * Cuántas posiciones se guardan de cada bicho para poder rebobinar.
  *
  * Son las mismas 64 de `MULTIPLAYER_BACKUP` (`netchan.h:75`) que ya guarda la
@@ -210,7 +228,11 @@ export function sorteoDeBotin(botin, azar = Math.random) {
  * que va de puntillas es exactamente el síntoma.
  */
 export function velocidadDeSecuencia(secuencias, nombre, U = U_POR_METRO) {
-  const s = buscarSecuencia(secuencias, nombre);
+  return velocidadDe(buscarSecuencia(secuencias, nombre), U);
+}
+
+/** Lo mismo, con la secuencia ya en la mano (el 94: la que echa el candado). */
+export function velocidadDe(s, U = U_POR_METRO) {
   if (!s || !s.fps) return 0;
   const d = s.fotogramas / s.fps;
   return d > 0 ? Math.hypot(...(s.avance ?? [0, 0, 0])) / d / U : 0;
@@ -267,8 +289,42 @@ export function avanzar(i, dt, libre, suelo, U = U_POR_METRO, { correr = true, v
   // `m_Activity = ACT_WALK` (msmonsterserver.cpp:1152) y la animación que sale
   // es `m_MoveAnim`, la de andar. Con la velocidad de correr sobre el ciclo de
   // andar, los pies patinan — que es el síntoma que este proyecto ya conoce.
-  const v = correr ? (i.velocidadCorriendo || i.velocidad) : (i.velocidad || i.velocidadCorriendo);
-  if (!v) { i.frenado = "sin velocidad"; return false; }
+  let v = correr ? (i.velocidadCorriendo || i.velocidad) : (i.velocidad || i.velocidadCorriendo);
+  // ── EL 94: EL BICHO ANDA LO QUE ANDA SU ANIMACIÓN, Y A SU RITMO ──────────
+  //
+  // En el motor el paso NO sale de una velocidad del bicho: sale de la
+  // secuencia que tiene puesta y de su ritmo,
+  //
+  //     float flTotal = m_flGroundSpeed * pev->framerate * flInterval
+  //                     * m_SpeedMultiplier * ScriptMultiplier;
+  //                                          msmonsterserver.cpp:1201
+  //
+  // y `m_flGroundSpeed` lo rehace `ResetSequenceInfo` cada vez que se pone una
+  // secuencia (animating.cpp:112), con el `linearmovement` de ESA secuencia
+  // (animation.cpp:266-267). O sea que mientras corre una de una sola vez
+  // —`playanim once idle2`, el jabalí comiendo hierba (boar_base.script:85)—
+  // el bicho avanza lo que avance `idle2`, que es CERO, aunque el destino siga
+  // puesto: se para a comer y sigue andando cuando la suelta `CAnimOnce`
+  // (monsteranimation.cpp:219-221). Aquí la de andar y la de correr ya están
+  // en `velocidad`/`velocidadCorriendo`; la que hay que mirar es la que está
+  // echando el candado, que es la que el motor tendría en `pev->sequence`.
+  //
+  // Y el ritmo es `pev->framerate`, que `SetAnimation` copia de `m_Framerate`
+  // (msmonsterserver.cpp:2079-2081): `setanim.framerate .5` hace que la
+  // araña ande a la mitad, no sólo que se mueva a cámara lenta. Ritmo 0, quieto
+  // (el mordisco antes del primer segundo, doc/SALTO_93.md §3). Un ritmo
+  // negativo andaría hacia atrás en el motor; aquí no anda (no se ha visto en
+  // ningún guion de los cinco mapas).
+  //
+  // `m_SpeedMultiplier` (`movespeed`) y el `maxspeed` de los efectos no entran:
+  // ver doc/ANIMACION_94.md §5.
+  const deUnaVez = i.unaVezHasta !== null ? i.actual?.seq ?? null : null;
+  if (deUnaVez) v = velocidadDe(deUnaVez, U);
+  v *= i.fisica?.ritmoAnim ?? 1;
+  if (!(v > 0)) {
+    i.frenado = deUnaVez ? `la animacion ${deUnaVez.nombre} no avanza` : "sin velocidad";
+    return false;
+  }
   const paso = Math.min(v * dt, falta - cerca);
   const ux = dx / falta, uz = dz / falta;
   // Se mira delante antes de moverse, igual que en el paseo: entrar en la
@@ -393,7 +449,16 @@ function pasoDePaseo(manada, i, dt, arnes = {}, U = U_POR_METRO) {
   // hasta la primera pared y se queda ahí para siempre.
   if (i.vagabundo.vencido) { i.vagabundo.llegado(); i.destino = null; }
   if (!i.destino) {
-    if (i.andando !== null) { manada.ponDeAndarOParar(i, manada.quieto(i)); i.andando = null; }
+    // EL 94: `andando` a `null` no basta para saber que ya está parado. Cuando
+    // vence una de una sola vez con destino, `relojes` pone la de ANDAR y deja
+    // `andando` a `null` (para que la caza vuelva a elegir ritmo); si después
+    // se suelta el destino, con sólo mirar `andando` la de andar se quedaba
+    // puesta: el jabalí **andaba en el sitio** hasta el siguiente paseo
+    // (medido: 2 s seguidos con `walk` y cero de avance). El motor pide la de
+    // reposo en cada `Think` sin destino (msmonsterserver.cpp:589-594).
+    const andaSinDestino = i.anim?.nombre && i.ficha.andando
+      && String(i.anim.nombre).toLowerCase() === String(i.ficha.andando).toLowerCase();
+    if (i.andando !== null || andaSinDestino) { manada.ponDeAndarOParar(i, manada.quieto(i)); i.andando = null; }
     return;
   }
   // Paseando se ANDA: `m_Activity = ACT_WALK`.
@@ -739,6 +804,19 @@ export class Manada {
         cazador: c.ia ? new Cazador(c.ia, { azar }) : null,
         /** Dónde ha estado, para poder rebobinar. */
         rastro: [],
+        /**
+         * EL 93: EL CUERPO CUANDO LO LLEVA EL GUION. Ver `cuerpoDe` y
+         * `_fisica`. `vel` en UNIDADES/s y ejes del motor (Z arriba), `null` si
+         * nadie lo ha lanzado; `sigue` a quién va pegado (`setfollow`);
+         * `manda` dice que la IA no lo toca (el salto de la araña, del
+         * `setvelocity` al `movespeed 1` de `spider_latch_resetmovement`).
+         * `ritmoAnim` es `m_Framerate` (`setanim.framerate`) y `parado` el
+         * `setidleanim` cuando no es el de la ficha.
+         */
+        fisica: {
+          vel: null, gravedad: 1, enSuelo: true, sigue: null, manda: false,
+          ritmoAndar: 1, ritmoAnim: 1, parado: null, saltos: 0, aterrizajes: 0,
+        },
       };
       // ESTAR PARADO, que hasta el 21 se resolvía mal. Era `pon(c.parado ??
       // c.andando)`: si el script no nombraba la de estar quieto, se ponía la
@@ -925,6 +1003,10 @@ export class Manada {
    * queda siempre en la misma. Ver `src/play/actividad.js`.
    */
   quieto(i) {
+    // EL 93: `m_IdleAnim` del guion, si lo ha cambiado (`setidleanim`,
+    // npcscript.cpp:1458-1469): es lo que el `Think` pide en cada vuelta
+    // (msmonsterserver.cpp:590-592). La araña agarrada pone `hitbite`.
+    if (i.fisica?.parado) return i.fisica.parado;
     return animacionDeParado({
       nombrado: i.ficha.parado, secuencias: i.secuencias, azar: this.azar,
     }).que;
@@ -982,7 +1064,7 @@ export class Manada {
     i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: !s.bucle, desde: this.t, visto: 0 };
     // Y si la que acaba de entrar es de una sola vez, arma el candado: a partir
     // de aquí es ELLA la que rechaza a las demás, hasta que `relojes` la vence.
-    i.unaVezHasta = s.bucle ? null : this.t + duracionDe(s);
+    i.unaVezHasta = s.bucle ? null : this.t + this._duraAlRitmo(i, s);
     i.tQuieto = 0;
     return s;
   }
@@ -1045,10 +1127,61 @@ export class Manada {
     i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: true, desde: this.t, visto: 0 };
     // El candado se rearma con ESTA, que es lo que hace `BreakAnimation` seguido
     // de `SetAnimation`: la de antes se va y la nueva manda.
-    i.unaVezHasta = this.t + duracionDe(s);
+    i.unaVezHasta = this.t + this._duraAlRitmo(i, s);
     i.andando = null;
     i.tQuieto = 0;
     return true;
+  }
+
+  /**
+   * `playanim once <nombre>` — EL 94. Hasta aquí llegaba como `deUnaVez`, o sea
+   * como `critical`, porque `InteraccionesNpc` tiraba el modo.
+   *
+   * La diferencia es UNA línea del motor y decide quién gana:
+   *
+   *     else if (!_stricmp(pszAnimType, "once"))     AnimType = MONSTER_ANIM_ONCE;
+   *     else if (!_stricmp(pszAnimType, "critical")) { AnimType = MONSTER_ANIM_ONCE;
+   *                                                    Priority = true; }
+   *     ...
+   *     if (Priority) { BreakAnimation(MONSTER_ANIM_BREAK); SetAnimation(...); }
+   *     else            SetAnimation(AnimType, pszAnimName, pData);
+   *                                          npcscript.cpp:1514-1550
+   *
+   * Sin `Priority` no se rompe nada antes: `SetAnimation` le pregunta a la que
+   * está puesta (msmonsterserver.cpp:2023), y si es otra de una sola vez que
+   * no ha acabado —un mordisco, una esquiva, otra hierba— **se rechaza** y no
+   * se apunta en ningún sitio (monsteranimation.cpp:219-221). Si la acepta, la
+   * pone desde el fotograma 0 aunque ya fuera ésa (`IsNewAnim`,
+   * monsteranimation.h:29 y monsteranimation.cpp:235-236), y la sujeta hasta que acaba —también si
+   * es de bucle: `StudioFrameAdvance` da `m_fSequenceFinished` al dar la
+   * vuelta (animating.cpp:61-68), así que una de bucle pedida «once» dura una
+   * vuelta—.
+   *
+   * Lo que NO hace es parar el paseo: el destino sigue puesto. El bicho se
+   * queda quieto porque la secuencia no avanza (ver `avanzar`, el 94).
+   */
+  unaVez(i, nombre) {
+    if (i.unaVezHasta !== null && this.t < i.unaVezHasta) { i.sigue.rechazos++; return false; }
+    return this.deUnaVez(i, nombre);
+  }
+
+  /**
+   * EL `playanim` DE UN GUION, con su modo (npcscript.cpp:1487-1555). Es lo que
+   * enchufan `src/main.js` y `src/red/partida.js` como `animar`.
+   *
+   *   - `critical`: rompe y pone (`deUnaVez`).
+   *   - `once`: pone si la de ahora lo deja (`unaVez`).
+   *   - `break` sin nombre lo resuelve el guion del bicho (`romper`); aquí no
+   *     llega con cuerpo.
+   *   - `move` y `hold` siguen yendo como antes, por `deUnaVez`: `move` dura en
+   *     el motor hasta el siguiente `Think` (la pisa la de andar o reposo,
+   *     msmonsterserver.cpp:589-594) y `hold` es `CAnimHold`, que no suelta a
+   *     la de andar (monsteranimation.cpp:183-189). Ninguna de las dos está
+   *     portada; queda dicho en doc/ANIMACION_94.md §5.
+   */
+  playanim(i, nombre, modo) {
+    if (String(modo ?? "").toLowerCase() === "once") return this.unaVez(i, nombre);
+    return this.deUnaVez(i, nombre);
   }
 
   // ── los relojes ───────────────────────────────────────────────────────────
@@ -1090,7 +1223,12 @@ export class Manada {
       // elegir entre andar, correr y huir: aquí sólo se sabe que hay destino,
       // no a cuál de los tres ritmos se va.
       i.andando = null;
-      this.ponDeAndarOParar(i, i.destino ? (i.ficha.andando ?? this.quieto(i)) : this.quieto(i));
+      // EL 93: con el cuerpo en manos del guion no hay destino que valga: el
+      // salto empieza con `setmovedest none` (spider.script:108) y el `Think`
+      // pide entonces la de reposo (msmonsterserver.cpp:589-592) —`hitbite`
+      // con la araña agarrada—, aunque la IA dejara escrito el suyo.
+      const conDestino = i.destino && !i.fisica?.manda;
+      this.ponDeAndarOParar(i, conDestino ? (i.ficha.andando ?? this.quieto(i)) : this.quieto(i));
       // Y se suelta DESPUÉS del `pon`: si el modelo no declarara reposo de
       // bucle, la de reposo volvería a echar el candado y esto se rearmaría
       // solo cada vez que venciera, rebobinándola. Un reposo no es una vez.
@@ -1304,9 +1442,26 @@ export class Manada {
     // de los bichos cuyo guion lo maneja. Ver `eventosDeAnimacion`.
     this._arnesDeCaza = arnes;
     this.eventosDeAnimacion();
+    // EL 93: los cuerpos que lleva el guion (lanzados o pegados a alguien).
+    this._fisica(dt, arnes);
     for (const i of this.instancias) {
       if (i.dormido) continue;               // todavía no ha aparecido
       if (!i.cazador || i.muerto) continue;
+      // ── EL 93: LO QUE EL GUION DEJA HACER AL BUCLE DE CAZA ─────────────
+      //
+      // La IA porta ese bucle, así que lee sus dos llaves: `if CAN_HUNT`
+      // (base_npc_attack.script:73) y `if CAN_ATTACK` (:175). Mientras la
+      // araña amaga, salta o va agarrada, su guion las tiene a 0
+      // (spider.script:112-113) y quien mueve el cuerpo es la física
+      // (`_fisica`) o el `setfollow`.
+      //
+      // Aquí hubo también un `if (i.fisica.manda) continue;` —«el cuerpo es
+      // del guion»— y se QUITÓ: rompido a propósito no puso nada rojo, porque
+      // con `CAN_HUNT 0` ya no se llega aquí. Para otros saltos del mod que no
+      // bajan `CAN_HUNT` (`leap_scan`, `orc_jump_check`…) no se ha medido qué
+      // hace el motor, y una regla sin medir no se escribe (doc/SALTO_93.md).
+      const deja = this._deja(i);
+      if (!deja.cazar) continue;
       // ── EL 77: UNA ESCENA MANDANDO ─────────────────────────────────────
       //
       // `MONSTER_NOAI` es el `stopai` del mapa: con él puesto el NPC no piensa
@@ -1344,7 +1499,11 @@ export class Manada {
         continue;
       }
       i.intencion = r;
+      // EL 93: si la IA ha fijado o soltado objetivo, el guion lo sabe —
+      // `IS_HUNTING` y `HUNT_LASTTARGET`, que el salto lee (`_avisarCaza`).
+      this._avisarCaza(i);
 
+      if (r.accion === ACCION.GOLPEAR && !deja.atacar) { mirarA(i, r.destino, this.U); continue; }
       if (r.accion === ACCION.GOLPEAR) {
         if (i.vagabundo?.tieneDestino) { i.vagabundo.llegado(); i.destino = null; }
         mirarA(i, r.destino, this.U);
@@ -1442,6 +1601,226 @@ export class Manada {
     this.pasear(dt, arnes, (i) => !i.cazador && !i.muerto);
   }
 
+  // ── EL 93: EL CUERPO DEL BICHO, PARA SU GUION ─────────────────────────────
+
+  /**
+   * **LO QUE EL GUION DE UN BICHO PUEDE PEDIRLE A SU CUERPO** — el 93.
+   *
+   * El guion vive en `npcguion.js` y no sabe dónde está nadie; esto es la
+   * puerta, una por bicho, que le da `InteraccionesNpc` al crearlo. Todo lo
+   * que entra viene en UNIDADES y ejes del motor (Z arriba) y se cambia aquí,
+   * una vez, a los de la escena (Y arriba, Z negada).
+   *
+   * Lo pidió el salto de la araña de Gate City (spider.script:93-192), que es
+   * el primer guion de este puerto que mueve el cuerpo de su bicho:
+   * `setvelocity ent_me $relvel(0,320,120)`, `gravity .9`, `movespeed 0`,
+   * `setorigin ent_me <jugador>`, `setfollow <jugador> align_bottom`,
+   * `setanim.framerate`, `setidleanim` y `playanim break`.
+   */
+  cuerpoDe(i) {
+    const m = this;
+    const f = i.fisica;
+    const U = this.U;
+    const aEscenaU = (v) => [Number(v?.[0]) || 0, Number(v?.[2]) || 0, -(Number(v?.[1]) || 0)];
+    return {
+      vivo: () => !i.muerto && (i.vida ?? 0) > 0,
+      enSuelo: () => Boolean(f.enSuelo),
+      /** `$get(<jugador>,onground)`: lo sabe quien da los objetivos. `null` si no lo dice. */
+      objetivoEnSuelo: () => {
+        const c = m._candidato(i, i.objetivoCazado ?? i.objetivoDelGuion ?? null);
+        return c && typeof c.enSuelo === "boolean" ? c.enSuelo : null;
+      },
+      /**
+       * `pev->angles` en grados: [pitch, yaw, roll]. El rumbo de la escena es
+       * el del motor —yaw 0 mira a +X en los dos, y la Z de la escena es la
+       * −Y del motor (ver `mirarA`)—, así que sólo cambia de radianes a grados.
+       */
+      angulos: () => [0, ((((i.yaw ?? 0) * 180) / Math.PI) % 360 + 360) % 360, 0],
+      /** `setvelocity`/`addvelocity ent_me` (scriptcmds.cpp:7208-7209). */
+      velocidad: (v, { sumar = false } = {}) => {
+        const a = [Number(v?.[0]) || 0, Number(v?.[1]) || 0, Number(v?.[2]) || 0];
+        f.vel = sumar && f.vel ? f.vel.map((x, k) => x + a[k]) : a;
+        // Un `setvelocity (0,0,0)` es aterrizar (spider.script:136), no lanzar.
+        if (a.some((x) => x !== 0)) { f.manda = true; f.saltos++; }
+      },
+      /** `setorigin ent_me <vec>` (scriptcmds.cpp:4518-4519). */
+      ponerOrigen: (v) => {
+        const e = aEscenaU(v);
+        i.donde = [e[0] / U, e[1] / U, e[2] / U];
+      },
+      /** `pev->gravity` (scriptcmds.cpp:3464). */
+      gravedad: (g) => { f.gravedad = g; },
+      /**
+       * `m_SpeedMultiplier` (npcscript.cpp:516). Al volver a uno positivo sin
+       * ir pegado a nadie, la IA recupera el cuerpo: es el `movespeed 1` de
+       * `spider_latch_resetmovement` (spider.script:177), el último paso.
+       */
+      ritmoDeAndar: (x) => {
+        f.ritmoAndar = x;
+        if (x > 0 && !f.sigue) { f.manda = false; f.vel = null; f.gravedad = 1; f.enSuelo = true; }
+      },
+      ritmoDeAnimacion: (x) => m.ritmo(i, x),
+      /** `m_IdleAnim`; igual que el de la ficha es como no tener ninguno. */
+      animacionDeParado: (n) => {
+        const k = String(n ?? "").toLowerCase();
+        f.parado = k && k !== String(i.ficha?.parado ?? "").toLowerCase() ? String(n) : null;
+      },
+      /**
+       * `setfollow`: con objetivo, `MOVETYPE_NONE` y pegado a él; con `none`,
+       * `MOVETYPE_STEP` otra vez (scriptcmds.cpp:5976-5993). El objetivo de
+       * este puerto es el que caza la IA (el jugador).
+       */
+      seguir: (ref, { abajo = false } = {}) => {
+        if (ref === null) { f.sigue = null; f.vel = [0, 0, 0]; f.enSuelo = false; return; }
+        const id = i.objetivoCazado ?? i.objetivoDelGuion ?? null;
+        if (id === null) return;
+        f.sigue = { id, abajo: Boolean(abajo) };
+        f.vel = null;
+        f.manda = true;
+      },
+      /**
+       * `playanim break`: `BreakAnimation` y nada más (npcscript.cpp:1527).
+       * Se vence el candado, y `relojes` pone en la vuelta siguiente la de
+       * reposo —la del `setidleanim`, si la hay—, que es lo que hace el `Think`
+       * (msmonsterserver.cpp:590-592).
+       */
+      romper: () => { i.unaVezHasta = m.t; },
+      manda: () => Boolean(f.manda),
+    };
+  }
+
+  /**
+   * Lo que tarda una secuencia AL RITMO DEL BICHO (`m_Framerate`, el 93): el
+   * candado de `CAnimOnce` se suelta cuando la secuencia ACABA
+   * (`m_fSequenceFinished`, monsteranimation.cpp:217-220), y a ritmo 0,5 una
+   * secuencia tarda el doble. Sin esto la araña que cae del jugador a ritmo
+   * 0,5 (spider.script:121, y nadie se lo devuelve a 1 en esa rama) perdía
+   * `frame_falloffend` —el fotograma 53 de 55— porque el candado se soltaba a
+   * la mitad, y se quedaba con `CAN_HUNT 0` para siempre. Lo cazó el sondeo de
+   * la prueba, no una lectura.
+   */
+  _duraAlRitmo(i, s) {
+    const r = i?.fisica?.ritmoAnim ?? 1;
+    return r > 0 ? duracionDe(s) / r : Infinity;
+  }
+
+  /** El objetivo de la IA con ese id, de los que da el arnés de esta vuelta. */
+  _candidato(i, id) {
+    if (id === null || id === undefined) return null;
+    return (this._arnesDeCaza?.objetivos?.(i) ?? []).find((x) => x.id === id) ?? null;
+  }
+
+  /**
+   * `setanim.framerate` — `m_Framerate` (npcscript.cpp:1585-1591), que el
+   * motor copia a `pev->framerate` al acabar cada `SetAnimation`
+   * (msmonsterserver.cpp:2079-2081), o sea en el `Think` siguiente: aquí, en
+   * el acto (hasta 0,1 s antes). Cambia a qué ritmo pasan los fotogramas y
+   * por tanto CUÁNDO salen sus eventos (`eventosDeAnimacion`) y cuándo se
+   * suelta el candado de una animación de una vez.
+   *
+   * EL 94: el dibujo sí se entera —`src/render/bichos.js` pone el
+   * `timeScale` del mezclador a este ritmo, y con servidor viaja en la foto
+   * (`r`, `estadoDe`)—, y el paso también (`avanzar`, msmonsterserver.cpp:1201).
+   */
+  ritmo(i, x) {
+    const r = Number(x) || 0;
+    i.fisica.ritmoAnim = r;
+    const s = i.actual?.seq;
+    if (i.unaVezHasta === null || !s?.fps) return;
+    const falta = Math.max(0, (s.fotogramas ?? 0) - (i.anim?.visto ?? 0));
+    // Ritmo cero: la secuencia no acaba nunca, y `CAnimOnce` no suelta
+    // (monsteranimation.cpp:217-220). Es lo que el motor haría.
+    i.unaVezHasta = r > 0 ? this.t + falta / (s.fps * r) : Infinity;
+  }
+
+  /**
+   * ¿Deja el GUION cazar y atacar? `CAN_HUNT`/`CAN_ATTACK` de la familia
+   * vieja (ver `GuionDeNpc.puede`). Sin oyente, sí.
+   */
+  _deja(i) {
+    if (!this.oyente) return { cazar: true, atacar: true };
+    const r = { cazar: true, atacar: true };
+    this._costura("puede", i, { r });
+    return r;
+  }
+
+  /**
+   * Si el `Cazador` ha fijado o soltado objetivo desde la última vuelta, se
+   * le cuenta al guion: `npcatk_targetvalidate`/`npcatk_clear_targets`, los
+   * dos cerrados por el 91 (ver `GuionDeNpc.cazando`).
+   */
+  _avisarCaza(i) {
+    const obj = i.cazador?.objetivo ?? null;
+    if (obj === (i.objetivoCazado ?? null)) return;
+    i.objetivoCazado = obj;
+    this._costura("caza", i, { objetivo: obj, quien: obj });
+  }
+
+  /**
+   * **EL CUERPO LANZADO O PEGADO** — `SV_Physics_Step` y `setfollow`, el 93.
+   *
+   * Sólo los bichos cuyo guion ha tomado el cuerpo (`fisica.vel` o
+   * `fisica.sigue`); los demás no pasan por aquí y andan como siempre.
+   *
+   * Lanzado, en el orden de `SV_Physics_Step` (sv_phys.cpp:1363-1430):
+   *   1. sin suelo, la gravedad: `vz -= gravity × 800 × dt` (`SV_AddGravity`,
+   *      :395-405);
+   *   2. con velocidad, deja de estar en el suelo; y si ESTABA, la fricción de
+   *      ese fotograma (`sv_friction` 4, `sv_stopspeed` 100);
+   *   3. se mueve (`SV_FlyMove`) y, si el suelo queda debajo, se posa.
+   * Lo que NO hace: `SV_FlyMove` desliza contra las paredes; aquí una pared
+   * delante anula la parte horizontal. Y el suelo se pregunta con el `suelo`
+   * del arnés, el mismo del paso.
+   *
+   * Pegado (`setfollow <jugador> align_bottom`): el `origin` del seguidor es
+   * el del anfitrión más su `mins.z` (cbase.cpp:305-310) — los pies del
+   * jugador. Aquí `donde` del candidato es su centro, y se le bajan 36.
+   */
+  _fisica(dt, arnes = {}) {
+    const U = this.U;
+    for (const i of this.instancias) {
+      const f = i.fisica;
+      if (i.dormido || (!f?.vel && !f?.sigue)) continue;
+      if (f.sigue) {
+        const c = this._candidato(i, f.sigue.id);
+        if (!c) continue;
+        const bajar = f.sigue.abajo ? ABAJO_DEL_JUGADOR : 0;
+        i.donde = [c.donde[0] / U, (c.donde[1] - bajar) / U, c.donde[2] / U];
+        continue;
+      }
+      const v = f.vel;
+      const estaba = f.enSuelo;
+      if (!estaba) v[2] -= (f.gravedad || 1) * FISICA.gravedad * dt;
+      if (!v.some((x) => x !== 0)) continue;
+      f.enSuelo = false;
+      if (estaba && !i.muerto) {
+        const rapido = Math.hypot(v[0], v[1]);
+        if (rapido > 0) {
+          const control = rapido < FISICA.parada ? FISICA.parada : rapido;
+          const factor = Math.max(0, rapido - dt * control * FISICA.friccion) / rapido;
+          v[0] *= factor; v[1] *= factor;
+        }
+      }
+      // Del motor (x, y, z arriba) a la escena (x, y arriba, z = −y).
+      const n = i.donde;
+      let hx = (v[0] * dt) / U, hz = (-v[1] * dt) / U;
+      const sube = (v[2] * dt) / U;
+      const L = Math.hypot(hx, hz);
+      if (L > 0 && arnes.libre && !arnes.libre(n[0], n[1] + CINTURA, n[2], hx / L, hz / L, Math.max(0.3, L * 2), i)) {
+        hx = 0; hz = 0; v[0] = 0; v[1] = 0;
+      }
+      const nuevo = [n[0] + hx, n[1] + sube, n[2] + hz];
+      const y = arnes.suelo ? arnes.suelo(nuevo[0], Math.max(nuevo[1], n[1]), nuevo[2], i) : null;
+      if (y !== null && y !== undefined && v[2] <= 0 && nuevo[1] <= y) {
+        nuevo[1] = y;
+        v[2] = 0;
+        f.enSuelo = true;
+        f.aterrizajes++;
+      }
+      i.donde = nuevo;
+    }
+  }
+
   // ── EL 92: EL DAÑO SALE DEL EVENTO DE ANIMACIÓN ───────────────────────────
 
   /**
@@ -1511,8 +1890,12 @@ export class Manada {
       if (!evs?.length) continue;
       const a = i.anim;
       if (!Number.isFinite(a?.desde) || !(s.fps > 0)) continue;
-      const ahora = (this.t - a.desde) * s.fps;
+      // EL 93: el fotograma AVANZA a `fps × ritmo` (`setanim.framerate`, ver
+      // `ritmo`), así que se acumula desde la última mirada en vez de
+      // calcularse desde que se rebobinó. Con el ritmo a 1 es lo mismo.
       const antes = a.visto ?? 0;
+      const ahora = antes + Math.max(0, this.t - (a.tVisto ?? a.desde)) * s.fps * (i.fisica?.ritmoAnim ?? 1);
+      a.tVisto = this.t;
       if (!(ahora > antes)) continue;
       a.visto = ahora;
       const n = Math.max(1, s.fotogramas ?? 1);
@@ -1813,6 +2196,28 @@ export class Manada {
   }
 
   /**
+   * **`npcatk_settarget` QUE LLEGA DE OTRO GUION** — el 94. Lo pide el
+   * guardia que oye a un aldeano (`civilian_attacked`,
+   * gatecity/guard.script:114) por `GuionDeNpc._objetivoPedidoDeFuera`.
+   *
+   * Las dos guardas de base_npc_attack_new.script que se pueden decidir
+   * aquí, en su orden: `if !IS_FLEEING` (:403) y «ignore allies»
+   * (`$get(PARAM1,relationship,ent_me) equals ally`, :420). La relación es la
+   * de la ficha hacia el jugador, como en `apuntaAlQueTePega`. Después,
+   * `apuntarA`, que es como ya entra aquí el `npcatk_settarget` de un aliado
+   * avisado (`avisar`).
+   *
+   * @returns si ha fijado el objetivo.
+   */
+  fijarObjetivoPorGuion(i, quien) {
+    if (!i || i.muerto || !i.cazador || quien === null || quien === undefined) return false;
+    if (i.cazador.huyendo) return false;
+    if ((i.ficha.ia?.relacion ?? i.ficha.relacion ?? null) === RELACION.ALIADO) return false;
+    i.cazador.apuntarA(quien);
+    return true;
+  }
+
+  /**
    * LA MUERTE: la animación que dice su script y dejar de pensar.
    *
    * `playanim critical ANIM_DEATH` (base_npc.script:185), y `critical` significa
@@ -1879,6 +2284,14 @@ export class Manada {
     if (i.dormido) e.d = 1;
     if (i.muerto) { e.m = 1; e.o = Math.round(i.opacidad * 100) / 100; }
     if (i.vida !== null) e.v = Math.max(0, Math.round(i.vida));
+    // EL 94: `r` es `pev->framerate` (`setanim.framerate`), que el motor manda
+    // al cliente con la entidad (`DEFINE_DELTA( framerate, DT_SIGNED | DT_FLOAT,
+    // 8, 16.0 )`, assets/msr/delta.lst:107, o sea con dieciseisavos) y el
+    // cliente usa para avanzar los fotogramas (`dfdt = (m_clTime - animtime) *
+    // framerate * fps`, studiomodelrenderer.cpp:897). Va sólo cuando no es 1,
+    // que es casi siempre; con tres decimales y no en dieciseisavos.
+    const r = i.fisica?.ritmoAnim ?? 1;
+    if (r !== 1) e.r = Math.round(r * 1000) / 1000;
     return e;
   }
 
@@ -1904,6 +2317,8 @@ export class Manada {
       if (e.p) { i.donde[0] = e.p[0]; i.donde[1] = e.p[1]; i.donde[2] = e.p[2]; }
       if (typeof e.y === "number") i.yaw = e.y;
       if (typeof e.v === "number") i.vida = e.v;
+      // EL 94: sin `r` es ritmo 1 (`estadoDe` sólo lo manda cuando no lo es).
+      if (i.fisica) i.fisica.ritmoAnim = typeof e.r === "number" ? e.r : 1;
       if (e.m) { i.muerto = true; i.opacidad = e.o ?? 1; i.cazador = null; i.destino = null; }
       if (e.a && e.g !== i.anim.gen) {
         const s = buscarSecuencia(i.secuencias, e.a);

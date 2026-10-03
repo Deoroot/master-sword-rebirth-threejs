@@ -19,7 +19,7 @@
 // 0 de 36 secuencias y 6 511 unidades de desbordamiento; con los desplazamientos
 // de canal tomados como absolutos, 2 de 36. El bueno da 36 de 36 y **cero**.
 
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 
 import {
@@ -29,6 +29,7 @@ import {
   leerSecuencias, leerHuesos, clavesDeSecuencia, cabeEnLaCaja, matricesEnFotograma,
 } from "../src/bsp/mdlanim.js";
 import { tablasDeGamma, AJUSTES } from "../src/bsp/gamma.js";
+import { partirScript } from "../src/bsp/script.js";
 import { escribirPng } from "./png.mjs";
 
 const MODELOS = "../MSC/assets/msr/models/monsters";
@@ -447,6 +448,63 @@ export function extraerBicho(relativo, {
     bytes: bin.length,
     oraculo: { caben, de: secuencias.length, peor: peorGlobal },
   };
+}
+
+// --- LAS ANIMACIONES QUE PIDE EL GUION (el 93) -------------------------------
+//
+// La regla y su porqué están en tools/bichos.mjs, apartado 2c: aquí vive sólo
+// para que se pueda probar sin hornear (test/horneado93e.test.mjs).
+const ASIGNA = /^(?:const|setvar|setvard|setvarg|local)\s+(\S+)\s+(\S+)/i;
+const ANIMA = [
+  /^setidleanim\s+(\S+)/i,
+  /^setmoveanim\s+(\S+)/i,
+  /^playanim\s+\S+\s+(\S+)/i,
+];
+function lineasDelGuion(raiz, rutaScript, vistos = new Set(), hondo = 0, lineas = []) {
+  // Mismo tope de profundidad que `recoger` (src/bsp/script.js:315).
+  if (hondo > 8) return lineas;
+  const ruta = `${raiz}/${rutaScript.replace(/\\/g, "/")}.script`;
+  if (vistos.has(ruta) || !existsSync(ruta)) return lineas;
+  vistos.add(ruta);
+  const { bloques, incluye } = partirScript(readFileSync(ruta, "latin1"));
+  for (const b of bloques) lineas.push(...b);
+  for (const inc of incluye) lineasDelGuion(raiz, inc, vistos, hondo + 1, lineas);
+  return lineas;
+}
+/**
+ * Los nombres de secuencia que un guion de monstruo puede pedir por comando
+ * (`setidleanim`, `setmoveanim`, `playanim <tipo> <anim>`), con sus variables
+ * resueltas contra TODAS sus asignaciones. Ver la nota larga en
+ * tools/bichos.mjs, apartado 2c, y doc/HORNEADO_93.md.
+ *
+ * @returns {{nombres: Set<string>, sinResolver: Set<string>}}
+ */
+export function animacionesDelGuion(raiz, rutaScript) {
+  const lineas = lineasDelGuion(raiz, rutaScript);
+  const sinResolver = new Set();
+  const valores = new Map();        // variable -> Set de valores asignados
+  const pedidas = new Set();
+  for (const l of lineas) {
+    const a = l.match(ASIGNA);
+    if (a) {
+      if (!valores.has(a[1])) valores.set(a[1], new Set());
+      valores.get(a[1]).add(a[2]);
+    }
+    for (const re of ANIMA) { const m = l.match(re); if (m) pedidas.add(m[1]); }
+  }
+  const nombres = new Set();
+  const resolver = (t, n = 0) => {
+    if (n < 8 && valores.has(t)) { for (const v of valores.get(t)) resolver(v, n + 1); return; }
+    // Un `$...` es una expresión, un número no es un nombre de secuencia para un
+    // monstruo (`SetAnimation` busca por nombre), y `none` es «quitar» (:1462).
+    if (/^[$\d'"]/.test(t) || /^none$/i.test(t) || valores.has(t)) {
+      sinResolver.add(t);
+      return;
+    }
+    nombres.add(t.toLowerCase());
+  };
+  for (const p of pedidas) resolver(p);
+  return { nombres, sinResolver };
 }
 
 // --- y la línea de órdenes, para mirar un modelo suelto ---------------------

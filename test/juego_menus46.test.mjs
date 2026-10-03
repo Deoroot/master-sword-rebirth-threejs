@@ -498,15 +498,33 @@ describe("las propiedades de `$get`, y las dos que el motor deja en cero", () =>
     assert.ok(r.guion.noSoportados.some((x) => x.tipo === "propiedad"));
   });
 
-  test("`dist` mide en unidades del motor, y `dist2D` se olvida de la altura", () => {
-    const e = conJugador({ origen: "0 0 100" }, { origen: "0 30 60" });
-    assert.equal(Math.round(Number(e.propiedad("p", "dist"))), 50);
-    assert.equal(Math.round(Number(e.propiedad("p", "dist2D"))), 30);
+  // ── CORRECCIÓN DEL 93 ──────────────────────────────────────────────────
+  // Esta prueba decía «`dist` mide en unidades del motor, y `dist2D` se olvida
+  // de la altura» con los dos `origen` escritos A MANO en unidades y con la Z
+  // arriba —`{ origen: "0 0 100" }` y `{ origen: "0 30 60" }`, 50 y 30—, y el
+  // juego no se los da así: `instancia.donde` y `player.feet` son METROS de la
+  // escena con la Y arriba (interacciones.js). O sea que en partida la
+  // distancia salía en metros y `dist2D` tiraba una componente horizontal. Es
+  // la trampa del 59 (la prueba construye el argumento) y la del 81 (metros
+  // contra unidades). Ahora los `origen` van como los da el juego.
+  test("`dist` mide en UNIDADES entre los `origin` del motor; `dist2D` se olvida de la altura", () => {
+    // Jugador con los pies a 1 m en +X; su `origin` es su centro, 36 u más arriba
+    // (msitemdefs.h:55). El NPC en el origen, sin anchura.
+    const e = conJugador({ origen: "1 0 0" }, { origen: "0 0 0" });
+    assert.equal(e.propiedad("p", "dist"), Math.fround(Math.hypot(39.37, 36)).toFixed(2));
+    assert.equal(e.propiedad("p", "dist2D"), Math.fround(39.37).toFixed(2));
+  });
+
+  test("y con un NPC con anchura, `dist` le resta la mitad (el jugador es `pMonster` de anchura 0)", () => {
+    // scriptcmds.cpp:1151-1152; el 82 (la anchura del jugador es 0).
+    const e = conJugador({ origen: "1 0 0" }, { origen: "0 0 0", ancho: 34 });
+    assert.equal(e.propiedad("p", "dist"), Math.fround(Math.hypot(39.37, 36) - 17).toFixed(2));
+    assert.equal(e.propiedad("p", "dist2D"), Math.fround(39.37).toFixed(2), "`dist2D` no resta (:1157)");
   });
 
   test("`range` y `dist` son el MISMO número", () => {
     // :1151 — las dos entran por la misma rama.
-    const e = conJugador({ origen: "0 0 100" }, { origen: "0 30 60" });
+    const e = conJugador({ origen: "1 0 0" }, { origen: "0 0.5 2" });
     assert.equal(e.propiedad("p", "range"), e.propiedad("p", "dist"));
   });
 

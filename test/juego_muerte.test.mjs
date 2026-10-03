@@ -31,13 +31,27 @@ describe("el velo rojo", () => {
     assert.ok(DESVANECIDO.alfa < 255);
   });
 
-  test("y dura dos décimas, no quince segundos", () => {
-    assert.equal(alfaDelDesvanecido(0.1), 64);
-    assert.equal(alfaDelDesvanecido(0.2), 0);
-    assert.equal(alfaDelDesvanecido(1.0), 0);
-    // El positivo: si el aguante fuera la duración, a los cinco segundos —que
-    // es cuando reapareces— todavía habría rojo. No lo hay.
-    assert.equal(alfaDelDesvanecido(5), 0);
+  // EL 94. Aquí ponía «y dura dos décimas, no quince segundos», con 64 a la
+  // décima y 0 a los cinco. Era al revés: la curva del motor (`V_FadeAlpha`,
+  // cl_game.c:472-505, con los tiempos de `CL_ParseScreenFade`, cl_parse.c:
+  // 2068-2111) pone el AGUANTE delante. Los números van escritos a mano y no
+  // calculados con la constante, para que una curva rota no los arrastre (el 75).
+  test("se queda en 128 los quince segundos de aguante", () => {
+    assert.equal(alfaDelDesvanecido(0.1), 128);
+    assert.equal(alfaDelDesvanecido(0.2), 128);
+    assert.equal(alfaDelDesvanecido(1.0), 128);
+    // Cuando reapareces (ESPERA_MUERTO = 5) sigue entero: lo quita el `Spawn`.
+    assert.equal(alfaDelDesvanecido(5), 128);
+    assert.equal(alfaDelDesvanecido(14.9), 128);
+  });
+
+  test("y luego se va en las dos décimas de duración, no antes", () => {
+    // 0,2 s viajan como 819/4096 = 0,19995 s (4.12 fijo, hl/util.cpp:1137), y
+    // `fadeSpeed` = 128 / 0,19995 = 640,16 alfa por segundo; `alpha` es `int`.
+    const a = alfaDelDesvanecido(15.1);
+    assert.ok(a > 55 && a < 70, `a mitad de la bajada, ~64: ${a}`);
+    assert.equal(alfaDelDesvanecido(15.2), 0);
+    assert.equal(alfaDelDesvanecido(20), 0);
   });
 
   test("antes de morir no hay velo", () => {

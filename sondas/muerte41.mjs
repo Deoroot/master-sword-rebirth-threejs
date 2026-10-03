@@ -186,6 +186,47 @@ control("a los cinco segundos no queda nada: el efecto se apaga solo",
 control("y ha dado las 40 vueltas, ni una más",
   fin.vueltas === 40, `${fin.vueltas}`);
 
+// ── 1b. UN GOLPE (el 94) ───────────────────────────────────────────────────
+//
+// `TakeDamageEffect` (player.cpp:537-550): rojo proporcional a la parte de la
+// vida que se lleva el golpe, medio segundo entero y uno de bajada, y un
+// empujón de la vista. Entra por `sesion.danar`, la puerta de todo el daño.
+console.log("\n  UN GOLPE");
+const camAntes = await pag.evaluate(() => window.probe.muerte.camara());
+// Un quinto de la vida: no mata, y el alfa sale lejos de cero (51).
+const golpe = await pag.evaluate(() => {
+  const vidaMax = window.probe.muerte.golpear(0).vidaMax;   // 0 de daño: sólo lee
+  return window.probe.muerte.golpear(Math.max(1, Math.floor(vidaMax * 0.2)));
+});
+const alfaEsperado = Math.trunc(golpe.r.quitado / golpe.vidaMax * 255);
+console.log(`    tinte           ${golpe.fundido?.fondo} (alfa ${golpe.fundido?.alfa}, esperado ${alfaEsperado}) · ` +
+  `${golpe.r.quitado} de ${golpe.vidaMax} de vida`);
+control("un golpe tiñe de ROJO, en proporción a la vida que quita",
+  /rgba\(255, 0, 0,/.test(golpe.fundido?.fondo ?? "") && golpe.fundido?.alfa === alfaEsperado && alfaEsperado > 0,
+  `${golpe.fundido?.alfa} contra ${alfaEsperado}`);
+control("y un golpe NO es la muerte: el velo de morir sigue apagado",
+  golpe.velo?.activo === false, `${golpe.velo?.activo}`);
+const camGolpe = await pag.evaluate(() => window.probe.muerte.camara());
+const empujon = Math.hypot(...(golpe.golpe ?? [0, 0, 0]));
+// Se lee la CÁMARA, no el número: que `golpeDeVista` cambie no dice que llegue
+// a la vista (el «se mide el efecto» del apartado 3).
+const giroCam = Math.abs(camGolpe.pitch - camAntes.pitch) + Math.abs(camGolpe.yaw - camAntes.yaw);
+console.log(`    empujón         ${empujon.toFixed(2)}° · la cámara gira ${(giroCam * 180 / Math.PI).toFixed(2)}°`);
+control("y empuja la vista: la cámara se mueve sin que el jugador mueva el ratón",
+  empujon > 0 && giroCam > 1e-4, `${empujon.toFixed(2)}°, cámara ${(giroCam * 180 / Math.PI).toFixed(3)}°`);
+const trasGolpe = await pag.evaluate(() => {
+  const r = [];
+  for (let i = 0; i < 80; i++) r.push(window.probe.muerte.paso(0.02));
+  return { a04: r[19].fundido.alfa, a10: r[49].fundido.alfa, a16: r[79].fundido.alfa,
+    golpe: window.probe.muerte.golpe(), fondo: r[79].fundido.fondo };
+});
+console.log(`    el tinte        ${golpe.fundido?.alfa} → ${trasGolpe.a04} (0,4 s) → ${trasGolpe.a10} (1,0 s) → ${trasGolpe.a16} (1,6 s)`);
+control("el tinte aguanta medio segundo entero y se va en uno",
+  trasGolpe.a04 === alfaEsperado && trasGolpe.a10 > 0 && trasGolpe.a10 < alfaEsperado && trasGolpe.a16 === 0,
+  `${trasGolpe.a04}, ${trasGolpe.a10}, ${trasGolpe.a16}`);
+control("y el empujón se ha soltado",
+  Math.hypot(...trasGolpe.golpe) < 1e-6, `${Math.hypot(...trasGolpe.golpe).toFixed(4)}°`);
+
 // ── 2. MORIR ───────────────────────────────────────────────────────────────
 console.log("\n  MORIR");
 const antes = await pag.evaluate(() => ({
@@ -244,13 +285,20 @@ control("morir NO abre ningún panel: el invento se retiró en el 41",
 await pag.evaluate(() => window.probe.draw());
 await pag.screenshot({ path: "build/gatecity/vistas/muerte41.png" });
 
-// El velo se va en dos décimas. Se avanza y se mira.
-const tras = [];
-for (let i = 0; i < 12; i++) tras.push(await pag.evaluate(() => window.probe.muerte.paso(0.02)));
-console.log(`    el velo         ${tras[0].velo.alfa} → ${tras[4].velo.alfa} → ${tras[11].velo.alfa}`);
-control("el velo se va en dos décimas, no se queda quince segundos",
-  tras[11].velo.alfa === 0 && tras[4].velo.alfa < 128 && tras[4].velo.alfa > 0,
-  `${tras.map((t) => t.velo.alfa).join(",")}`);
+// EL 94. Aquí el control decía «el velo se va en dos décimas, no se queda
+// quince segundos», y era al revés: `V_FadeAlpha` pone el AGUANTE delante
+// (cl_game.c:472-505). Se avanza hasta los cinco segundos —cuando el motor te
+// obliga a reaparecer— y el rojo tiene que seguir entero. Este verde es además
+// el control positivo del «al reaparecer se va» de abajo: con el fogonazo del
+// 41 el velo ya estaba en cero al reaparecer, y ese control no medía nada.
+const tras = await pag.evaluate(() => {
+  const r = [];
+  for (let i = 0; i < 50; i++) r.push(window.probe.muerte.paso(0.1));
+  return r.map((e) => e.velo.alfa);
+});
+console.log(`    el velo         ${tras[1]} (0,2 s) → ${tras[9]} (1 s) → ${tras[49]} (5 s)`);
+control("el velo se queda entero los cinco segundos de muerto: 15 s de aguante",
+  tras.every((a) => a === 128), `${[tras[0], tras[1], tras[2], tras[9], tras[49]].join(",")}`);
 
 const oro = await pag.evaluate(() => window.probe.sesion.vitales().oro);
 console.log(`    oro             ${antes.oro} → ${oro} (el impuesto es el 1 %, entero)`);
@@ -280,8 +328,26 @@ control("y la cámara vuelve al ojo",
   vuelto.camara.activa === false && vuelto.camara.distancia < 1,
   `${vuelto.camara.distancia.toFixed(2)} u`);
 control("no te quedas viendo el mundo en rojo",
-  vuelto.pantalla.velo.activo === false && vuelto.pantalla.velo.alfa === 0,
+  vuelto.pantalla.velo.activo === false && vuelto.pantalla.velo.alfa === 0 &&
+  vuelto.pantalla.fundido.alfa === 0 && vuelto.pantalla.velo.fondo === "transparent",
   `${vuelto.pantalla.velo.fondo}`);
+// Y lo quita el fundido de alfa 0 de `Spawn` (player.cpp:2784), que llega como
+// un mensaje más: el contador de fundidos recibidos tiene que haber subido.
+control("lo quita el fundido de `Spawn`, que pisa el de la muerte",
+  vuelto.pantalla.fundido.activo === true, `activo ${vuelto.pantalla.fundido.activo}`);
+
+// LA COLA DE LA CURVA, que el jugador no ve nunca porque reaparece antes: se
+// muere otra vez y se espera sin reaparecer. 15 s enteros y luego 0,2 s de
+// bajada.
+const cola = await pag.evaluate(() => {
+  window.probe.muerte.matar({ porQue: "la sonda, otra vez" });
+  const a = (n, dt) => { let e; for (let i = 0; i < n; i++) e = window.probe.muerte.paso(dt); return e.velo; };
+  return { a149: a(149, 0.1).alfa, a151: a(1, 0.2).alfa, a153: a(1, 0.2) };
+});
+console.log(`    la cola         ${cola.a149} (14,9 s) → ${cola.a151} (15,1 s) → ${cola.a153.alfa} (15,3 s)`);
+control("sin reaparecer: 128 hasta los 15 s y se va en las dos décimas siguientes",
+  cola.a149 === 128 && cola.a151 > 0 && cola.a151 < 128 && cola.a153.alfa === 0 && cola.a153.activo === false,
+  `${cola.a149}, ${cola.a151}, ${cola.a153.alfa}`);
 control("ni con el centrado pegado en la pantalla",
   vuelto.pantalla.centrado.visible === false, `"${vuelto.pantalla.centrado.texto}"`);
 

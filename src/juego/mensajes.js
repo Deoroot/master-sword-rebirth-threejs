@@ -37,11 +37,18 @@
 // (`game/client/message.cpp`) y va portado línea a línea, erratas incluidas.
 
 import { CARTEL, colorDeLetra, finDelAguante } from "../play/nivel.js";
-import { alfaDelDesvanecido, DESVANECIDO } from "../play/muerte.js";
+import { DESVANECIDO, mensajeDeFundido } from "../play/muerte.js";
 import { XRES, YRES } from "../play/hud.js";
 import {
   AVISO, COLOR_TEXTO, PilaDeAvisos, anclaDelAviso, anclaDeLaAyuda,
 } from "../play/aviso.js";
+// EL 93: el fundido y los iconos de estado que manda un EFECTO de guion. La
+// regla —qué lee el servidor, qué hace el cliente con ello— está allí, con la
+// curva del motor (`V_FadeAlpha`) y el `VGUI_Status` del mod.
+import {
+  fundidoAlLlegar, alfaDelFundido, pinturaDelFundido,
+  IconosDeEstado, ICONOS, archivoDeIcono,
+} from "../play/efectospantalla.js";
 
 /**
  * Cuánto se queda el centrado. `scr_centertime` del motor, que vale 2.
@@ -68,6 +75,10 @@ const CSS = `
   font-family: 'Courier New', Courier, monospace;
   margin-bottom: ${AVISO.bajoElTitulo}px; }
 .ms-aviso > p { margin: 0; white-space: pre-wrap; }
+.ms-estado { position: absolute; width: ${ICONOS.ancho}px; height: ${ICONOS.alto}px; }
+.ms-estado > img { position: absolute; left: 0; top: 0; width: ${ICONOS.anchoImagen}px;
+  height: ${ICONOS.altoImagen}px; image-rendering: pixelated; }
+.ms-estado > i { position: absolute; left: 0; top: ${ICONOS.altoImagen}px; height: ${ICONOS.alto - ICONOS.altoImagen}px; }
 `;
 
 const el = (tag, clase = "") => {
@@ -83,7 +94,7 @@ const el = (tag, clase = "") => {
  * el orden del juego: el cartel de subir de nivel se ve sobre las barras, y
  * abrir el inventario lo tapa.
  */
-export function montarMensajes({ raiz = document.body } = {}) {
+export function montarMensajes({ raiz = document.body, base = "" } = {}) {
   if (!document.getElementById("ms-msg-css")) {
     const s = el("style"); s.id = "ms-msg-css"; s.textContent = CSS;
     raiz.appendChild(s);
@@ -103,8 +114,26 @@ export function montarMensajes({ raiz = document.body } = {}) {
   const MAXIMOS = 16;
   const carteles = [];
 
-  let desvanecido = null;   // `{ t, d }` mientras dure
+  // EL 94: el velo de la muerte ya no tiene estado propio. Es un fundido más
+  // en el `clgame.fade` único; esto sólo apunta CUÁL es, para la sonda.
+  let muerteDesde = null;   // `reloj` al morir, mientras el fundido sea el suyo
   let centrado = null;      // `{ t, texto }`
+
+  // ── EL 93: LO QUE MANDA UN EFECTO ─────────────────────────────────────────
+  //
+  // `reloj` es el `cl.time` de esta capa: el motor fecha el fundido y el icono
+  // al LEER el mensaje, no cuando el servidor lo escribió.
+  let reloj = 0;
+  // El `clgame.fade` del motor, que es UNO: un fundido nuevo pisa al anterior.
+  // Desde el 94 el velo de la muerte, el de reaparecer y el tinte de un golpe
+  // entran también por aquí (`desvanecer`), como en el motor.
+  let fundido = null;
+  let fundidos = 0;
+  const iconos = new IconosDeEstado();
+  /** El `div` de cada icono vivo, por su nombre (el `m_Name` del motor). */
+  const nodosDeIcono = new Map();
+  /** Los brillos que han llegado: se cuentan y NO se dibujan (primera persona). */
+  const brillos = [];
 
   /**
    * Las dos pilas de ventanas. Son DOS y no una lista con una marca porque en
@@ -314,21 +343,91 @@ export function montarMensajes({ raiz = document.body } = {}) {
   }
 
   /**
-   * Arranca el velo. `d` son los seis números de `gmsgFade`.
+   * Un `UTIL_ScreenFade` del propio jugador: `d` son sus seis números
+   * (`DESVANECIDO`, `AL_REAPARECER` o el tinte de un golpe, `muerte.js`). Se
+   * empaqueta como lo empaqueta el servidor y entra por `pantalla`, que es el
+   * `CL_ParseScreenFade` de esta capa — un solo `clgame.fade`.
    *
    * Se pinta YA y no en el `paso` siguiente: el mensaje del motor lo pinta el
    * mismo fotograma en que llega, y esperar al reloj deja un fotograma sin
    * rojo justo en el instante en que te matan — que es el único que importa.
    */
   function desvanecer(d = DESVANECIDO) {
-    desvanecido = { t: 0, d };
-    pintarVelo();
+    pantalla(mensajeDeFundido(d));
+    if (d === DESVANECIDO) muerteDesde = reloj;
   }
 
   function pintarVelo() {
-    const a = desvanecido ? alfaDelDesvanecido(desvanecido.t, desvanecido.d) : 0;
-    const [r, g, b] = desvanecido?.d.color ?? [0, 0, 0];
-    velo.style.background = a > 0 ? `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(4)})` : "transparent";
+    // La curva del motor, `V_FadeAlpha`, y su forma de pintar (el 93).
+    const p = fundido ? pinturaDelFundido(fundido, alfaDelFundido(fundido, reloj)) : null;
+    velo.style.mixBlendMode = p?.modo === "multiplica" ? "multiply" : "";
+    velo.style.background = p
+      ? `rgba(${p.rgba[0]}, ${p.rgba[1]}, ${p.rgba[2]}, ${p.rgba[3].toFixed(4)})`
+      : "transparent";
+  }
+
+  /**
+   * EL 93. Un mensaje de pantalla de un efecto, venga del guion de aquí o del
+   * servidor (`MENSAJE.PANTALLA`): `{ que: "fundido"|"icono", ... }`, con los
+   * campos del cable (ver `src/red/protocolo.js`).
+   *
+   * Se pinta YA, como el velo de la muerte: el motor lo dibuja el mismo
+   * fotograma en que lo lee.
+   */
+  function pantalla(m) {
+    if (!m) return;
+    if (m.que === "fundido") {
+      fundido = fundidoAlLlegar(m, reloj);
+      muerteDesde = null;               // el que llega pisa al de la muerte
+      fundidos++;
+      pintarVelo();
+      return;
+    }
+    if (m.que === "icono") {
+      iconos.recibir(m, reloj);
+      pintarIconos();
+      return;
+    }
+    if (m.que === "brillo") {
+      brillos.push({ t: reloj, ...m });
+      if (brillos.length > 50) brillos.shift();
+    }
+  }
+
+  /** `VGUI_Status::Update`: quita los caducados, coloca y rellena la barra. */
+  function pintarIconos() {
+    const vivos = iconos.paso(reloj);
+    const quedan = new Set(vivos.map((v) => v.nombre));
+    for (const [nombre, n] of nodosDeIcono) {
+      if (!quedan.has(nombre)) { n.remove(); nodosDeIcono.delete(nombre); }
+    }
+    for (const v of vivos) {
+      let n = nodosDeIcono.get(v.nombre);
+      if (!n || n.dataset.icono !== v.icono) {
+        n?.remove();
+        n = el("div", "ms-estado");
+        n.dataset.icono = v.icono;
+        n.dataset.nombre = v.nombre;
+        const img = el("img");
+        img.alt = "";
+        const archivo = archivoDeIcono(v.icono);
+        // Sin horneado no hay dibujo, y el nodo lo dice en vez de enseñar un
+        // icono roto: `npm run hud` hornea `sprites/hud/status/`.
+        img.onerror = () => { n.dataset.falta = "1"; img.hidden = true; };
+        if (archivo) img.src = `${base}${archivo}`; else { n.dataset.falta = "1"; img.hidden = true; }
+        n.appendChild(img);
+        const barra = el("i");
+        // `DurColor(0, 255, 0, 128)`: en VGUI el alfa va al revés (0 opaco).
+        const [r, g, b, a] = ICONOS.colorDeBarra;
+        barra.style.background = `rgba(${r}, ${g}, ${b}, ${((255 - a) / 255).toFixed(3)})`;
+        n.appendChild(barra);
+        nodo.appendChild(n);
+        nodosDeIcono.set(v.nombre, n);
+      }
+      n.style.left = `${v.x}px`;
+      n.style.top = `${v.y}px`;
+      n.lastChild.style.width = `${Math.max(0, v.anchoBarra)}px`;
+    }
   }
 
   /**
@@ -342,7 +441,12 @@ export function montarMensajes({ raiz = document.body } = {}) {
    * cambiar de mapa sin recargar.
    */
   function limpiar() {
-    desvanecido = null;
+    muerteDesde = null;
+    // El fundido de un efecto comparte el velo y se va con él. Los ICONOS no:
+    // en el mod sólo los quita un mensaje (el `hud.killicons ent_me` de
+    // `game_spawn`/`game_death`, player_main.script) o su propio reloj.
+    fundido = null;
+    velo.style.mixBlendMode = "";
     velo.style.background = "transparent";
     centrado = null; centro.hidden = true; centro.textContent = "";
     for (const c of carteles) c.nodo.remove();
@@ -361,18 +465,21 @@ export function montarMensajes({ raiz = document.body } = {}) {
 
   function paso(dt) {
     if (!(dt > 0)) dt = 0;
+    reloj += dt;
 
     pasoDeLasVentanas(dt);
 
-    if (desvanecido) {
-      desvanecido.t += dt;
-      // El alfa del mensaje es de 0 a 255 y en CSS va de 0 a 1.
+    // EL 93. El fundido se olvida cuando el motor deja de pintarlo: pasado
+    // `fadeReset` y `fadeEnd` sin `STAYOUT` (`V_FadeAlpha`, cl_game.c:476-480).
+    if (fundido) {
       pintarVelo();
-      // El aguante es lo que tarda en OLVIDARSE, no en irse: pasado
-      // `duracion + aguante` el motor borra el struct. Hasta entonces el velo
-      // sigue existiendo aunque su alfa sea cero.
-      if (desvanecido.t > desvanecido.d.duracion + desvanecido.d.aguante) desvanecido = null;
+      if (reloj > fundido.fadeReset && reloj > fundido.fadeEnd && !(fundido.fadeFlags & 0x0004)) {
+        fundido = null;
+        muerteDesde = null;
+        pintarVelo();
+      }
     }
+    if (nodosDeIcono.size || iconos.lista.length) pintarIconos();
 
     if (centrado) {
       centrado.t += dt;
@@ -399,7 +506,7 @@ export function montarMensajes({ raiz = document.body } = {}) {
   medidas();
 
   return {
-    nodo, cartel, centrar, desvanecer, limpiar, paso, medidas, limpiarVentanas,
+    nodo, cartel, centrar, desvanecer, limpiar, paso, medidas, limpiarVentanas, pantalla,
     /** `SendHUDMsg`: el recuadro de arriba a la izquierda, título rojo. */
     aviso: (titulo, texto) => ventana("aviso", titulo, texto),
     /** `SendHelpMsg`: el de arriba a la derecha, título verde. */
@@ -407,12 +514,38 @@ export function montarMensajes({ raiz = document.body } = {}) {
     /** Lo que se ve ahora mismo, para las sondas. */
     estado() {
       return {
+        // El velo de la MUERTE: el fundido, mientras sea el suyo. El alfa se
+        // lee del struct vivo (copia: `V_FadeAlpha` escribe con `STAYOUT`).
         velo: {
-          activo: Boolean(desvanecido),
-          t: desvanecido ? Number(desvanecido.t.toFixed(3)) : 0,
+          activo: Boolean(fundido) && muerteDesde !== null,
+          t: muerteDesde !== null ? Number((reloj - muerteDesde).toFixed(3)) : 0,
           fondo: velo.style.background,
-          alfa: desvanecido ? Math.round(alfaDelDesvanecido(desvanecido.t, desvanecido.d)) : 0,
+          alfa: fundido && muerteDesde !== null ? alfaDelFundido({ ...fundido }, reloj) : 0,
         },
+        // EL 93: el fundido de un efecto (comparte el `div` del velo) y los
+        // iconos de estado, LEÍDOS DEL DOM: lo que importa es qué hay en la
+        // pantalla, no lo que la regla dice que debería haber.
+        fundido: {
+          activo: Boolean(fundido),
+          recibidos: fundidos,
+          alfa: fundido ? alfaDelFundido({ ...fundido }, reloj) : 0,
+          fondo: velo.style.background,
+          mezcla: velo.style.mixBlendMode || "normal",
+        },
+        iconos: [...nodosDeIcono.values()].map((n) => {
+          const r = n.getBoundingClientRect();
+          const img = n.firstChild;
+          return {
+            nombre: n.dataset.nombre, icono: n.dataset.icono,
+            falta: n.dataset.falta === "1",
+            cargada: Boolean(img?.complete && img.naturalWidth > 0),
+            src: img?.getAttribute("src") ?? null,
+            x: Math.round(r.left), y: Math.round(r.top), ancho: Math.round(r.width), alto: Math.round(r.height),
+            barra: Math.round(n.lastChild.getBoundingClientRect().width),
+            visible: r.width > 0 && r.height > 0 && getComputedStyle(n).display !== "none",
+          };
+        }),
+        brillos: brillos.length,
         centrado: {
           visible: !centro.hidden,
           texto: centro.textContent,

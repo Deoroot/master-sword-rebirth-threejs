@@ -39,7 +39,17 @@ import { RELACION, esEnemigo, relacionDeRazas, RAZA_DEL_JUGADOR } from "../bsp/r
 
 export { RELACION, esEnemigo, relacionDeRazas, RAZA_DEL_JUGADOR };
 
-/** Los relojes de `base_npc_attack_new.script:93`. */
+/**
+ * Los relojes de la IA NUEVA, `base_npc_attack_new.script:94-96`.
+ *
+ * CORRECCIÓN DEL 94: esto se usaba para TODOS los bichos, y es sólo el de la
+ * base nueva. La vieja —rata, araña, jabalí— piensa cada **2,8 s** sin
+ * objetivo (`setvard CYCLE_TIME_IDLE 2.8`, base_npc_attack.script:7). Ahora
+ * cada bicho lleva los suyos en la ficha (`cicloOcioso`/`cicloCombate`, que
+ * hornea `iaDe`) y `Cazador.ciclo` los lee de ahí; esto queda como valor por
+ * omisión para una ficha que no hereda ninguna de las dos bases, que en el mod
+ * no caza, y para las pruebas que construyen un cazador sin ficha del juego.
+ */
 export const CICLO = { ocioso: 2.0, combate: 0.1, npc: 0.8 };
 
 /** Hasta dónde persigue, en unidades (`npcatk_post_load`). */
@@ -167,8 +177,30 @@ export class Cazador {
 
   get huyendo() { return Boolean(this.fuga); }
 
-  /** El reloj que le toca: en cuanto tiene objetivo, piensa veinte veces más. */
-  get ciclo() { return this.objetivo ? CICLO.combate : CICLO.ocioso; }
+  /**
+   * El reloj que le toca: en cuanto tiene objetivo, piensa veinte veces más
+   * (veintiocho en la vieja).
+   *
+   * EL DE SU BASE (el 94), no uno para todos. Los dos números salen de la
+   * ficha (`iaDe`, src/bsp/script.js) y el `repeatdelay CYCLE_TIME` de la
+   * vieja (base_npc_attack.script:63) y el `callevent CYCLE_TIME npcatk_hunt`
+   * de la nueva (base_npc_attack_new.script:232) hacen lo mismo con ellos: se
+   * reprograman con el valor que tenga `CYCLE_TIME` AL EJECUTARSE —el
+   * `repeatdelay` se vuelve a correr como comando (`KeepCmd`, script.cpp:5377-
+   * 5383; scriptcmds.cpp:5125-5131)—, que es lo que hace `tic` al poner
+   * `reloj = ciclo` antes de decidir.
+   *
+   * `cycle_up` sólo pasa a `CYCLE_TIME_BATTLE` con un objetivo JUGADOR en las
+   * dos bases (base_npc_attack.script:478-482; base_npc_attack_new.script:467-
+   * 474); con un NPC la vieja se queda en el ocioso y la nueva va a
+   * `CYCLE_TIME_NPC`. Aquí los candidatos son siempre jugadores, y esa rama
+   * no tiene caso: ver `cicloNpc` en `iaDe`.
+   */
+  get ciclo() {
+    return this.objetivo
+      ? (this.f?.cicloCombate ?? CICLO.combate)
+      : (this.f?.cicloOcioso ?? CICLO.ocioso);
+  }
 
   /**
    * Un ciclo de `npcatk_hunt`.

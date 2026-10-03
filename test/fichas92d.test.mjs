@@ -65,7 +65,15 @@ describe("jefes y autoajuste: sólo lo que corre al nacer (el 92)", { skip: !HAY
 
   test("POSITIVO: un jefe por `setvard` en un bloque que corre al nacer sale jefe", () => {
     // monsters/goblinchief.script:7, dentro del bloque sin nombre de la línea 3.
-    assert.equal(ficha("monsters/goblinchief").ia.esJefe, true);
+    //
+    // CORRECCIÓN DEL 93: la línea 7 está dentro de `if ( $lcase(game.map.name)
+    // equals goblintown )` (:5-9). El lector del 92 tomaba el `if` por cierto;
+    // el del 93 lo evalúa con el mapa, así que el jefe lo es en `goblintown` y
+    // NO en `gertenheld_forest2`, que es donde lo colocamos. El positivo sigue
+    // siendo un `setvard` en un bloque que corre al nacer, con su mapa.
+    const en = (mapa) => modeloYAnimaciones(leerFichaNpc(SCRIPTS, "monsters/goblinchief", { mapa })).ia;
+    assert.equal(en("goblintown").esJefe, true);
+    assert.equal(en("gertenheld_forest2").esJefe, false, "y fuera de su mapa, no");
   });
 
   test("POSITIVO: los de `orc_for/*_sa` se ajustan, que lo piden con `setvar` (orc_archer_sa.script:2)", () => {
@@ -96,7 +104,12 @@ describe("las otras tres del mismo `externals.script` (el 92)", { skip: !HAY_MOD
   test("`NPC_EXP_REDUCT`: el `PARAM1` de `ext_reduct_xp` ya no es la rebaja de nadie", () => {
     // externals.script:860-869. Salía «PARAM1» en 968 fichas.
     assert.equal(ficha("monsters/goblin").ia.reduccionDeExp, null);
-    assert.equal(ficha("monsters/elemental_ice_guardian2").ia.reduccionDeExp, "1.5", "positivo: el suyo");
+    // CORRECCIÓN DEL 93: el `setvard NPC_EXP_REDUCT 1.5` del guardián está
+    // dentro de `if ( $lcase(game.map.name) equals tundra )`
+    // (elemental_ice_guardian2.script:12-16): es el suyo SÓLO en `tundra`.
+    const guardian = (mapa) => modeloYAnimaciones(leerFichaNpc(SCRIPTS, "monsters/elemental_ice_guardian2", { mapa })).ia;
+    assert.equal(guardian("tundra").reduccionDeExp, "1.5", "positivo: el suyo, en su mapa");
+    assert.equal(guardian("gatecity").reduccionDeExp, null, "y en otro, ninguna");
   });
 });
 
@@ -108,7 +121,13 @@ describe("la regla del motor al cargar: `setvar` corre en cualquier bloque, `set
     // y `SetVar` pisa: queda el segundo. `vars` —gana el primero— dice `walk`.
     const f = leerFichaNpc(SCRIPTS, "calruin/cavetroll");
     assert.equal(f.vars.get("ANIM_RUN"), "walk", "control: el lector viejo se queda el primero");
-    assert.equal(f.alNacer.variables.get("ANIM_RUN"), "ANIM_FULLRUN");
+    // CORRECCIÓN DEL 93: al CARGAR sí queda el segundo, pero al nacer vuelve
+    // a correr el bloque sin nombre —su `setvar ANIM_RUN walk` se ejecuta
+    // «at loadtime and runtime», scriptcmds.cpp:120— y el de la línea 114 no:
+    // está detrás de `if AM_GERIC` (:113), que en un troll sin más es falso y
+    // abandona el evento. El 92 no evaluaba ese `if`. Al nacer, `walk`; la
+    // regla de la carga la mide ahora test/fichas93c.test.mjs.
+    assert.equal(f.alNacer.variables.get("ANIM_RUN"), "walk");
   });
 
   test("`setvard` en un evento que no corre NO cuenta (script.cpp:5448-5458)", () => {

@@ -258,12 +258,25 @@ export class Partida {
         // apunta como antes.
         aplicarEfecto: this.tablaDeEfectos && this.fichaDelJugador
           ? (ruta, params, o) => {
-            const c = this._aQuienHabla();
+            // EL 93 (pieza G): el objetivo es el jugador DE ESE GUION
+            // (`GuionDeNpc.aplicarEfecto` sólo deja pasar su asa), y no el
+            // último que abrió un menú: el salto de la araña pone su veneno
+            // desde un `callevent`, fuera de `alCombate`. Ver `_clienteDelGuion`.
+            const c = this._clienteDelGuion(o?.aplicador?.instancia) ?? this._aQuienHabla();
             if (!c) { this.efectosSinJugador++; return null; }
             return this._efectosDe(c)?.efectos?.aplicar(ruta, params, o) ?? null;
           }
           : null,
         npcPorId: (id) => this.fauna?.manada?.de?.(id) ?? null,
+        // EL 93 (pieza G): el `playanim` del guion de un bicho, a la manada,
+        // como en `src/main.js` (`bichos.deUnaVez`). Sin él `InteraccionesNpc`
+        // lo tiraba, y con servidor `playanim critical jumpmiss` no ponía la
+        // animación cuyo fotograma 22 dispara `frame_jump` (spider.script:107,
+        // :118): la araña cumplía todas las condiciones del salto y no saltaba.
+        // Lo mismo que doc/SALTO_93.md §4 encontró en el arnés del 92.
+        // EL 94: con el MODO (`once` no rompe lo que corre; `critical` sí:
+        // npcscript.cpp:1514-1550). Ver `Manada.playanim`.
+        animar: (instancia, nombre, modo) => this.fauna?.manada?.playanim?.(instancia, nombre, modo),
         // A quién va cada recado: `this.hablandoCon` es la sesión del que
         // habló, y de la sesión se saca su cliente. `MSG_ONE`, no `MSG_ALL`.
         suceso: (tipo, texto) => this._aQuienHabla()?.mandar(MENSAJE.TEXTO, {
@@ -281,8 +294,11 @@ export class Partida {
         // pies antes de repartir; esto es el valor por omisión para el camino
         // del menú, donde el que habla es `hablandoCon`.
         losNpc: () => this.fauna?.manada?.instancias ?? [],
-        dondeEstaElJugador: () => {
-          const c = this._aQuienHabla();
+        // EL 93 (pieza G): con el asa del jugador del guion que pregunta
+        // (`sitioDelJugador`, interacciones.js), que manda sobre «con quién
+        // habla»: ver `_clienteDeAsa`.
+        dondeEstaElJugador: (asa = null) => {
+          const c = this._clienteDeAsa(asa) ?? this._aQuienHabla();
           return c?.cuerpo ? [...c.cuerpo.feet] : null;
         },
         unidadesPorMetro: this.mundo?.perfil?.unidadesPorMetro ?? 39.37,
@@ -305,11 +321,12 @@ export class Partida {
         mandarADestino: (instancia, avisar, apuntar) => ganchoDeMovedest({
           manada: this.fauna?.manada ?? null,
           instancia,
-          // El cuerpo del que habla lo sabe ESTA clase, no la fauna: ver el
-          // comentario de `entidadDeGuion`. Se pide en cada llamada porque
-          // cambia entre un recado y el siguiente.
+          // El cuerpo del jugador lo sabe ESTA clase, no la fauna: ver el
+          // comentario de `entidadDeGuion`. EL 94: el del jugador que NOMBRA
+          // el guion (`RetrieveEntity(Params[0])`, npcscript.cpp:1628), no el
+          // último que abrió un menú. Ver `_cuerpoDeRef`.
           buscar: (n) => this.fauna?.arnes?.entidadDeGuion?.(
-            n, instancia, this._aQuienHabla()?.cuerpo ?? null) ?? null,
+            n, instancia, this._cuerpoDeRef(n, instancia)) ?? null,
           libre: this.fauna?.arnes?.libreConBichos?.(instancia) ?? (() => true),
           avisar, apuntar,
         }),
@@ -318,7 +335,9 @@ export class Partida {
         lineaDeVision: (ref, instancia) => {
           const a = this.fauna?.arnes;
           if (!a || !instancia) return false;
-          const q = a.entidadDeGuion?.(ref, instancia, this._aQuienHabla()?.cuerpo ?? null) ?? null;
+          // EL 94: `RetrieveEntity(Name)` de `$cansee` (npcscript.cpp:1765),
+          // con el asa que trae el guion. Ver `_cuerpoDeRef`.
+          const q = a.entidadDeGuion?.(ref, instancia, this._cuerpoDeRef(ref, instancia)) ?? null;
           if (!q) return false;
           const U = this.mundo?.perfil?.unidadesPorMetro ?? 39.37;
           const n = instancia.donde;
@@ -348,6 +367,74 @@ export class Partida {
     if (!s) return null;
     for (const c of this.clientes.values()) if (c.sesion === s) return c;
     return null;
+  }
+
+  /**
+   * EL 93 (pieza G). El cliente cuyo personaje es `asa` —el `EntToString` de
+   * un jugador en este puerto es el id de su personaje (el 45)—, o `null`.
+   */
+  _clienteDeAsa(asa) {
+    if (asa === null || asa === undefined || asa === "") return null;
+    for (const c of this.clientes.values()) if (c.sesion?.personaje && String(c.sesion.personaje.id) === String(asa)) return c;
+    return null;
+  }
+
+  /**
+   * EL 93 (pieza G). El cliente del jugador con el que está el guion de
+   * `instancia` (`GuionDeNpc.jugador`, que escriben `alCombate`, la caza y
+   * los menús). En el motor el objetivo viaja en el propio comando
+   * (`applyeffect SPIDER_LATCH_TARGET …`, spider.script:151; `RetrieveEntity`,
+   * scriptcmds.cpp:1873); aquí `GuionDeNpc` sólo deja pasar el asa de su
+   * jugador, así que ese jugador ES el objetivo.
+   */
+  _clienteDelGuion(instancia) {
+    if (!instancia || !this.interacciones) return null;
+    const g = this.interacciones.guionesVivos?.get?.(instancia.id) ?? null;
+    return this._clienteDeAsa(g?.jugador?.ref ?? null);
+  }
+
+  /**
+   * EL 94. El cuerpo del jugador al que se refiere `ref` en el guion de
+   * `instancia`, o `null` si `ref` no es un jugador. Es lo que piden
+   * `setmovedest` y `$cansee`.
+   *
+   * ── LO QUE HACE EL MOTOR ────────────────────────────────────────────────
+   *
+   * Los dos resuelven su parámetro con `RetrieveEntity`: `setmovedest` con
+   * `RetrieveEntity(Params[0])` (npcscript.cpp:1628) y `$cansee` con
+   * `RetrieveEntity(Name)` (npcscript.cpp:1765). Y `RetrieveEntity(const char*)`
+   * (global.cpp:382-398) hace dos cosas y en este orden:
+   *
+   *   1. `StringToEnt(pszName)`: el asa ES la entidad. Un `PARAM1` que trae el
+   *      `EntToString` de un jugador nombra a ese jugador y a ningún otro.
+   *   2. si no, `EntityNameToType` (global.cpp:328-334) — `ent_lastspoke`,
+   *      `ent_laststruckbyme`, `ent_lastseen`… — y lo guardado con
+   *      `StoreEntity` en **`m_EntityList` de ESTA entidad** (global.cpp:361-367):
+   *      el último que le habló a ESTE NPC, no el último que le habló a alguien.
+   *
+   * En ningún sitio entra «el último jugador del servidor que abrió un menú»,
+   * que es lo que contestaba `_aQuienHabla()` aquí hasta el 93. Con un jugador
+   * es la misma persona; con dos, la araña que caza a Beto miraba a Ana porque
+   * Ana había hablado con el herrero. Lo mismo que el 93 quitó del daño y del
+   * `dist` (pieza G, `_clienteDelGuion`).
+   *
+   * El paso 2 se le pregunta al propio guion (`entorno.esElJugador`, que es la
+   * lista de referencias del 45 con sus reglas: `ent_laststruckbyme` sólo vale
+   * si de verdad le pegó, `ent_lastseen` si lo vio) y la respuesta es SU
+   * jugador (`GuionDeNpc.jugador`, que escriben `pedirOpciones`, `oir`,
+   * `elegir` y `alCombate`).
+   *
+   * **Sin jugador no se adivina**: `null`, y quien llama cae a la manada y,
+   * si tampoco es un bicho, lo APUNTA (`ganchoDeMovedest`) o contesta «no»
+   * (`$cansee`). Antes esa casilla vacía se rellenaba con «el que habla», y por
+   * eso cualquier nombre —incluso el de otro bicho— resolvía al jugador.
+   */
+  _cuerpoDeRef(ref, instancia) {
+    const c = this._clienteDeAsa(ref);                                // 1. StringToEnt
+    if (c) return c.cuerpo ?? null;
+    const g = instancia ? (this.interacciones?.guionesVivos?.get?.(instancia.id) ?? null) : null;
+    if (!g?.entorno?.esElJugador?.(ref)) return null;                // ni asa ni alias suyo
+    return this._clienteDelGuion(instancia)?.cuerpo ?? null;          // 2. su `m_EntityList`
   }
 
   /**
@@ -413,6 +500,10 @@ export class Partida {
         c.sesion.tocado?.();
       },
       herir: (golpe) => this._efectoPega(c, golpe),
+      // EL 93: `effect screenfade`, `hud.addstatusicon`… del veneno corren
+      // AQUÍ, sobre esta copia del guion del jugador, y lo que se ve es del
+      // navegador. Ver `_pantalla`.
+      pantalla: (p) => this._pantalla(c, p),
       // `$get(<el jugador>,maxhp)` que le pregunta un efecto a su anfitrión:
       // la cura del sacerdote no cura a quien cree que está al máximo
       // (effects/effect_rejuv2.script, `game_activate`). Los máximos se
@@ -426,6 +517,32 @@ export class Partida {
     });
     c.anfitrionDeEfectos = g;
     return g;
+  }
+
+  /**
+   * **LO QUE UN EFECTO LE HACE A LA PANTALLA, POR EL CABLE** — el 93.
+   *
+   * El fundido y los iconos son mensajes `MSG_ONE` en el mod: `gmsgFade`
+   * (`UTIL_ScreenFadeWrite`, hl/util.cpp:1146-1161) y `NETMSG_STATUSICONS`
+   * (scriptcmds.cpp:3727-3734). Van al cliente del jugador al que se le
+   * aplicó el efecto y a ningún otro; con `all`, a todos los que están
+   * dentro (`UTIL_ScreenFadeAll`, :1164-1177, y el bucle de :3738-3753).
+   *
+   * El brillo NO viaja aquí. En el motor es el `renderfx` de la entidad
+   * (mseffects.cpp:318-344) y lo ven los DEMÁS sobre su modelo, no él: este
+   * puerto no dibuja todavía el brillo en el modelo de otro jugador, así que se
+   * cuenta (`costura().efectos[].brillos`) y se dice pendiente
+   * (doc/EFECTOS_RED_93.md). Mandarlo a su propio navegador sería inventarse
+   * un brillo que el jugador del juego no ve.
+   */
+  _pantalla(c, p) {
+    if (!c || !p) return;
+    c.pantallas ??= { fundido: 0, icono: 0, brillo: 0 };
+    c.pantallas[p.tipo] = (c.pantallas[p.tipo] ?? 0) + 1;
+    if (p.tipo === "brillo") return;
+    const datos = { que: p.tipo, ...p.mensaje };
+    const a = p.todos ? [...this.clientes.values()].filter((x) => x.dentro) : [c];
+    for (const x of a) x.mandar(MENSAJE.PANTALLA, datos);
   }
 
   /**
@@ -496,6 +613,8 @@ export class Partida {
       efectos.push({
         cliente: c.id, personaje: c.sesion?.personaje?.id ?? null,
         activos: g.efectos.activos, aplicados: g.efectos.historial.length, heridas: g.heridas.length,
+        // EL 93: lo que sus efectos han mandado a la pantalla (y el brillo, que no viaja).
+        pantallas: { fundido: 0, icono: 0, brillo: 0, ...(c.pantallas ?? {}) },
       });
     }
     return {
@@ -1125,6 +1244,9 @@ export class Partida {
     // `Params` de `game_learnskill` (playerstats.cpp:169-172).
     const dondes = [];
     for (const [cubo, cantidad] of Object.entries(xp)) {
+      // `while (iRemainingExp > 0)`, playerstats.cpp:83: un cubo negativo —el
+      // aldeano de `skilllevel -10`— no entra al bucle y no resta ni enseña.
+      // Sin esta línea `aprender` le daría el mínimo de 1 (el 94).
       if (!(cantidad > 0)) continue;
       total += cantidad;
       const r = entrenar(p, cubo, cantidad);
@@ -1620,7 +1742,7 @@ export class Partida {
 function igualBicho(a, b) {
   return a.p[0] === b.p[0] && a.p[1] === b.p[1] && a.p[2] === b.p[2] &&
     a.y === b.y && a.a === b.a && a.g === b.g && a.v === b.v &&
-    a.m === b.m && a.o === b.o;
+    a.m === b.m && a.o === b.o && a.r === b.r;
 }
 
 /** Dos estados son iguales si nada de lo que se dibuja ha cambiado. */

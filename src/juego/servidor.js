@@ -287,7 +287,14 @@ export function experienciaDelBicho({
 } = {}) {
   const pasos = [];
   let exp = base;
-  if (!(exp > 0)) return { exp: 0, pasos };          // `if NPC_GIVE_EXP > 0`
+  // `if NPC_GIVE_EXP > 0` (base_self_adjust.script:284) SALE del evento, y lo
+  // que sale no toca `m_SkillLevel`: se queda lo que puso `skilllevel`. Para
+  // el aldeano de `NPCs/default_human` eso es **−10** (:50), y hasta el 94
+  // aquí se devolvía 0. El resultado era el mismo —el negativo lo para el
+  // reparto, `while (iRemainingExp > 0)`, playerstats.cpp:83—, pero el número
+  // que cruzaba no era el del motor y la regla vivía en el sitio equivocado
+  // (doc/EXPERIENCIA_94.md).
+  if (!(exp > 0)) return { exp: Number.isFinite(exp) ? exp : 0, pasos };
   const apunta = (porque) => pasos.push({ porque, exp });
 
   // ── 1. el ajuste propio ───────────────────────────────────────────────────

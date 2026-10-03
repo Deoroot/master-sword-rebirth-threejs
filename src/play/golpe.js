@@ -427,10 +427,18 @@ export function resolverGolpe({
  *     (`RANDOM_LONG(0, subStats-1)`, msmonstershared.cpp:620), repartir el daño
  *     entre las tres propiedades **pierde experiencia** en los redondeos.
  *   - matándolo tú solo con un arma, la suma sale exactamente `NPC_GIVE_EXP`.
+ *
+ * EL SIGNO (el 94): el motor no mira el de `m_SkillLevel`. Sólo `if (dmg > 0)`
+ * (:2506), así que un aldeano de `skilllevel -10` sale aquí con −10 en su cubo,
+ * igual que allí. Quien lo para es quien lo recibe —`while (iRemainingExp > 0)`,
+ * playerstats.cpp:83— y el aviso verde, `if (xpsend > 0 ...)`
+ * (msmonsterserver.cpp:2540). Esos dos son los `cantidad > 0` y `total > 0` de
+ * `repartirExperiencia` (main.js) y `_experiencia` (src/red/partida.js). Matar
+ * a un aldeano NO resta: no da nada (doc/EXPERIENCIA_94.md).
  */
 export function expDeLaMuerte({ nivel = 0, vidaMaxima = 0, porCubo = {} } = {}) {
   const total = Object.values(porCubo).reduce((a, b) => a + b, 0);
-  if (!(nivel > 0) || !(vidaMaxima > 0) || !(total > 0)) return {};
+  if (!Number.isFinite(nivel) || nivel === 0 || !(vidaMaxima > 0) || !(total > 0)) return {};
   const mult = Math.min(1, vidaMaxima / total);
   const out = {};
   for (const [cubo, dano] of Object.entries(porCubo)) {

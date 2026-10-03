@@ -24,15 +24,13 @@
 // con «All» en el nombre. El texto está en `anuncioDeMuerte`, en `sesion.js`,
 // desde el 21; lo que faltaba era enseñarlo, y enseñarlo donde va.
 
+import { FFADE, fijo16, fundidoAlLlegar, alfaDelFundido } from "./efectospantalla.js";
+
 /**
- * Las banderas del desvanecido. `public/engine/shake.h:40-43`.
- *
- *     #define FFADE_IN        0x0000  // Just here so we don't pass 0 into the function
- *     #define FFADE_OUT       0x0001  // Fade out (not in)
- *     #define FFADE_MODULATE  0x0002  // Modulate (don't blend)
- *     #define FFADE_STAYOUT   0x0004  // ignores the duration, stays faded out
+ * Las banderas del desvanecido. `public/engine/shake.h:40-43`. Son las de
+ * `efectospantalla.js` (el 93), que además trae `LONGFADE`: una sola tabla.
  */
-export const FFADE = { IN: 0x0000, OUT: 0x0001, MODULATE: 0x0002, STAYOUT: 0x0004 };
+export { FFADE };
 
 /**
  * El desvanecido de la muerte, con los seis números del motor:
@@ -41,14 +39,18 @@ export const FFADE = { IN: 0x0000, OUT: 0x0001, MODULATE: 0x0002, STAYOUT: 0x000
  *     UTIL_ScreenFade(this, Vector(255, 0, 0), 0.2, 15, 128, FFADE_IN);
  *                                                      player.cpp:740-741
  *
- * Rojo puro, **medio segundo no: dos décimas**, quince segundos de aguante y
- * alfa 128 de 255 — o sea que la pantalla no se pone roja, se pone A MEDIAS
- * roja, y se puede seguir viendo lo que hay detrás. Que es justo lo que se
- * describió: «el color se pone algo rojo».
+ * Rojo puro, dos décimas de desvanecido, **quince segundos de aguante** y alfa
+ * 128 de 255 — o sea que la pantalla no se pone roja, se pone A MEDIAS roja, y
+ * se puede seguir viendo lo que hay detrás. Que es justo lo que se describió:
+ * «el color se pone algo rojo».
+ *
+ * El «8.8 instead of 4.12» del comentario es el formato del cable: el tiempo
+ * viaja en 4.12 fijo (`FixedUnsigned16(…, 1 << 12)`, hl/util.cpp:1137-1138),
+ * que topa en 15,9998 s. Quince caben (61 440 de 65 535); por eso el UNDONE.
  *
  * Los quince segundos de aguante son tres veces la espera de reaparición
  * (`ESPERA_MUERTO = 5`), así que en la práctica el rojo **nunca llega a
- * apagarse solo**: lo quita el reaparecer. Está así en el motor y se copia así.
+ * apagarse solo**: lo quita el reaparecer (`AL_REAPARECER`, abajo).
  */
 export const DESVANECIDO = {
   color: [255, 0, 0],
@@ -58,42 +60,140 @@ export const DESVANECIDO = {
   banderas: FFADE.IN,
 };
 
+/** `WRITE_BYTE` de un `int`: se queda el byte bajo. */
+const byte = (n) => (Math.trunc(n) & 0xff);
+
+/**
+ * `UTIL_ScreenFadeBuild` — hl/util.cpp:1135-1144: los seis números de una
+ * llamada a `UTIL_ScreenFade` convertidos en lo que viaja por `gmsgFade`, con
+ * el tiempo en 4.12 fijo y el color y el alfa en un byte. Sale con la forma de
+ * `MENSAJE.PANTALLA` (`{ que: "fundido", duracion, aguante, banderas, r, g, b, a }`),
+ * así que el velo de la muerte y el `effect screenfade` del 93 entran por la
+ * misma puerta — y en el motor lo hacen: hay UN `clgame.fade`.
+ */
+export function mensajeDeFundido({ color, duracion, aguante, alfa, banderas = FFADE.IN }) {
+  return {
+    que: "fundido",
+    duracion: fijo16(duracion),
+    aguante: fijo16(aguante),
+    banderas: banderas | 0,
+    r: byte(color[0]), g: byte(color[1]), b: byte(color[2]),
+    a: byte(alfa),
+  };
+}
+
+/**
+ * Lo que manda `Spawn` al volver a la vida:
+ *
+ *     UTIL_ScreenFade(this, Vector(0, 0, 0), 1, 0, 0, FFADE_IN);
+ *                                                      player.cpp:2784
+ *
+ * Alfa CERO. No apaga nada a mano: **pisa** el `clgame.fade`, y un fundido de
+ * alfa 0 se pinta con alfa 0 (`bound(0, alpha, fadealpha)`, cl_game.c:502).
+ * Así es como se va el rojo de la muerte, y de paso cualquier fundido de guion.
+ */
+export const AL_REAPARECER = { color: [0, 0, 0], duracion: 1, aguante: 0, alfa: 0, banderas: FFADE.IN };
+
 /**
  * El alfa del velo, de 0 a 255, `t` segundos después de morir.
  *
- * ── Una advertencia sobre esta función ─────────────────────────────────────
+ * ── Corrección del 94: la curva SÍ está en el motor, y era al revés ────────
  *
- * **La cuenta del desvanecido no está en el SDK.** El mod manda un mensaje
- * —`gmsgFade` con duración, aguante, banderas y RGBA (`util.cpp:1137-1153`)— y
- * quien lo pinta es el motor, que no viene con la fuente. Así que esto no
- * lleva `archivo:línea` de la curva, porque no hay archivo que citar, y decir
- * lo contrario sería inventarse una cita.
+ * Hasta el 94 esto decía que «la cuenta del desvanecido no está en el SDK» y
+ * deducía la curva del efecto de guion (hudscript.cpp:268-270): un fogonazo de
+ * dos décimas. Las dos cosas eran falsas. La cuenta está en el motor de Xash3D,
+ * que viene en `../MSC/xash3d-fwgs-sdk`, y el 93 ya la había portado para los
+ * efectos de guion sin que nadie volviera aquí:
  *
- * Lo que sí se puede leer es la forma del struct que el motor consume
- * (`common/screenfade.h:14-22`) y el único sitio del SDK que lo rellena a mano,
- * que es el efecto de guion:
+ *     sf->fadeEnd   = duration * flScale;           // 0,2
+ *     sf->fadeReset = holdTime * flScale;           // 15
+ *     ...
+ *     sf->fadeSpeed  = (float)sf->fadealpha / sf->fadeEnd;
+ *     sf->fadeReset += cl.time;                     // ahora + 15
+ *     sf->fadeEnd   += sf->fadeReset;               // ahora + 15,2
+ *                                     CL_ParseScreenFade, cl_parse.c:2068-2111
  *
- *     ScreenFade.fadeSpeed = ScreenFade.fadealpha / (Duration ? Duration : ...);
- *     ScreenFade.fadeEnd   = gpGlobals->time + Duration;
- *     ScreenFade.fadeReset = ScreenFade.fadeEnd - blendduration;
- *                                                     hudscript.cpp:268-270
+ *     alpha = sf->fadeSpeed * ( sf->fadeEnd - cl.time );
+ *     alpha = bound( 0, alpha, sf->fadealpha );
+ *                                     V_FadeAlpha, cl_game.c:472-505
  *
- * De ahí sale todo: `fadeSpeed` es **alfa por segundo**, el desvanecido acaba
- * en `fadeEnd`, y el campo se llama `fadeSpeed` con el comentario «(+ fade in,
- * − fade out)». Con `FFADE_IN` —o sea, sin `FFADE_OUT`— el velo empieza opaco
- * en el instante del mensaje y **baja** hasta cero al llegar a `fadeEnd`; el
- * aguante es lo que tarda en olvidarse el desvanecido, no en empezar.
+ * Con `FFADE_IN` el aguante va **delante** del desvanecido: `640 · (15,2 − t)`
+ * vale más de 128 hasta los 15 s, así que el velo se queda **clavado en 128
+ * quince segundos** y sólo entonces se va, en dos décimas. El 41 tenía las dos
+ * mitades en el orden contrario. Y no se nota en la prueba de los tres números,
+ * que estaban bien: se nota al morir, que es cuando importa.
  *
- * Con los números de la muerte eso son dos décimas de rojo a medias que se van.
- * Un fogonazo, no un velo permanente. Se mide en la sonda y se dice ahí cuánto
- * dura de verdad, para que nadie tenga que fiarse de este párrafo.
+ * Ahora no hay cuenta propia: se construye el mensaje y se le pasa por las dos
+ * funciones del 93, que son las del motor.
  */
 export function alfaDelDesvanecido(t, d = DESVANECIDO) {
   if (!(t >= 0)) return 0;
-  if (t >= d.duracion) return 0;
-  // `fadeSpeed · (fadeEnd − ahora)`, acotado a [0, fadealpha].
-  const v = (d.alfa / d.duracion) * (d.duracion - t);
-  return Math.max(0, Math.min(d.alfa, v));
+  return alfaDelFundido(fundidoAlLlegar(mensajeDeFundido(d), 0), t);
+}
+
+/**
+ * EL 94. El tinte rojo de cada golpe que te entra. `CBasePlayer::TakeDamageEffect`:
+ *
+ *     if (flDamage > 0 && IsAlive())
+ *     {
+ *       float Amt = flDamage / MaxHP() * 255;
+ *       int alpha = V_max(Amt, 0);
+ *       if (flDamage > 0.5) //If too small, don't even waste the bandwidth
+ *         UTIL_ScreenFade(this, Vector(255, 0, 0), 1, 0.5, alpha, FFADE_IN);
+ *       float flPunch = alpha * 0.25;
+ *       pev->punchangle.x += RANDOM_FLOAT(-flPunch, flPunch) * 0.5;
+ *       pev->punchangle.y += RANDOM_FLOAT(-flPunch, flPunch) * 0.1;
+ *       pev->punchangle.z += RANDOM_FLOAT(-flPunch, flPunch) * 0.2;
+ *     }
+ *                                                       player.cpp:537-550
+ *
+ * El rojo es proporcional a la parte de tu vida que se lleva el golpe: uno que
+ * te quita la mitad pone 127 —el rojo de morir—, y uno de 5 sobre 50, 25.
+ * Medio segundo entero y luego se va en uno (`V_FadeAlpha` otra vez).
+ *
+ * Lo llama `CMSMonster::TakeDamage` en su **primera** línea útil
+ * (msmonsterserver.cpp:2369), antes de `GiveHP(-flDamage)` (:2394): el golpe
+ * que mata también tiñe — con el jugador todavía vivo — y el velo de `Killed`
+ * lo pisa en el mismo instante. Y `alpha` es el daño PEDIDO, no el que cabía
+ * en la vida que te quedaba.
+ *
+ * El `WRITE_BYTE` se porta: un golpe de más de tu vida entera da un alfa por
+ * encima de 255, que da la vuelta. No se ve nunca, porque ese golpe te mata.
+ *
+ * Devuelve `{ fundido, mensaje, golpe }` —los seis números del fundido y su
+ * mensaje empaquetado (`null` los dos si no llega a 0,5), y el empujón de la
+ * vista en grados del motor— o `null` si no hay nada que hacer.
+ * `azar()` es `RANDOM_FLOAT(-1, 1)`.
+ */
+export function efectoDelGolpe(dano, vidaMax, { vivo = true, azar = () => Math.random() * 2 - 1 } = {}) {
+  if (!(dano > 0) || !vivo || !(vidaMax > 0)) return null;
+  const alfa = Math.trunc(Math.max(dano / vidaMax * 255, 0));
+  const fundido = dano > 0.5
+    ? { color: [255, 0, 0], duracion: 1, aguante: 0.5, alfa, banderas: FFADE.IN }
+    : null;
+  const p = alfa * 0.25;
+  const golpe = [azar() * p * 0.5, azar() * p * 0.1, azar() * p * 0.2];
+  return { fundido, mensaje: fundido ? mensajeDeFundido(fundido) : null, golpe, alfa };
+}
+
+/**
+ * Cómo se va el empujón: `PM_DropPunchAngle`, pm_shared.cpp:3023-3031, que
+ * corre en cada `PM_PlayerMove` (:3083):
+ *
+ *     len = VectorNormalize(punchangle);
+ *     len -= (10.0 + len * 0.5) * pmove->frametime;
+ *     len = V_max(len, 0.0);
+ *     VectorScale(punchangle, len, punchangle);
+ *
+ * Diez grados por segundo más la mitad de lo que quede: un empujón de 3° se va
+ * en unas tres décimas. Devuelve un vector nuevo.
+ */
+export function soltarGolpe(golpe, dt) {
+  const len = Math.hypot(golpe[0], golpe[1], golpe[2]);
+  if (!(len > 0)) return [0, 0, 0];
+  const queda = Math.max(len - (10 + len * 0.5) * dt, 0);
+  const k = queda / len;
+  return [golpe[0] * k, golpe[1] * k, golpe[2] * k];
 }
 
 /**

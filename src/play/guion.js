@@ -490,6 +490,28 @@ export function textoDeVector(v) {
 }
 
 /**
+ * `$relvel`: `vRight * x + vForward * y + vUp * z` con los tres vectores de
+ * `MakeVectors(Angle)` (script.cpp:3621-3624). `MakeVectors` es el
+ * `AngleVectors` de Quake, en grados y en este orden —pitch, yaw, roll—
+ * (ReHLDS, engine/mathlib.cpp:208, `AngleVectors`):
+ *
+ *     forward = ( cp*cy,               cp*sy,               -sp   )
+ *     right   = ( -sr*sp*cy + cr*sy,   -sr*sp*sy - cr*cy,   -sr*cp )
+ *     up      = (  cr*sp*cy + sr*sy,    cr*sp*sy - sr*cy,    cr*cp )
+ *
+ * Todo en UNIDADES y ejes del motor (Z arriba). El 93.
+ */
+export function velocidadRelativa(angulos, rel) {
+  const [p, y, r] = (angulos ?? [0, 0, 0]).map((g) => ((Number(g) || 0) * Math.PI) / 180);
+  const sp = Math.sin(p), cp = Math.cos(p), sy = Math.sin(y), cy = Math.cos(y), sr = Math.sin(r), cr = Math.cos(r);
+  const fw = [cp * cy, cp * sy, -sp];
+  const rt = [-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp];
+  const up = [cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp];
+  const [x, f, z] = [0, 1, 2].map((k) => Number(rel?.[k]) || 0);
+  return [0, 1, 2].map((k) => rt[k] * x + fw[k] * f + up[k] * z);
+}
+
+/**
  * `RETURN_FLOAT` — iscript.h:224-228: `"%.2f"` de un `float`. El 91.
  *
  * Es lo que devuelve `$math`, y eso tiene consecuencias que se ven: el fin de
@@ -845,6 +867,24 @@ export const COMANDOS = new Set([
   "xdodamage",                                    // scriptcmds.cpp:81 / :7336-7466
   "scriptflags",                                  // scriptcmds.cpp:191 / :5265-5451
   "takedmg",                                      // npcscript.cpp:1057-1104 (de CMSMonster)
+  // ── EL 93: EL SALTO DE LA ARAÑA (`monsters/spider.script:93-192`) ─────────
+  // Lo que pide el camino del salto y no estaba: seguir a otra entidad, la
+  // gravedad, la velocidad de andar, el ritmo de la animación y la pose de
+  // reposo. Los cinco van a un gancho del entorno —el CUERPO del bicho, que lo
+  // tiene la manada— y sin gancho se APUNTAN. Ver doc/SALTO_93.md.
+  "setfollow",                                    // scriptcmds.cpp:119 / :5970-6000
+  "gravity",                                      // scriptcmds.cpp:90  / :3461-3467
+  "movespeed",                                    // npcscript.cpp:41   / :514-521
+  "setanim.framerate",                            // npcscript.cpp:81   / :1585-1591
+  "setidleanim",                                  // npcscript.cpp:56   / :1458-1469
+  // ── EL 93 (piezas B y G): LA PANTALLA ─────────────────────────────────────
+  // `effect` cuenta entero aunque sólo `screenfade` y `glow` tengan regla
+  // (mseffects.cpp:877-926): los demás tipos —`screenshake`, `beam`…— siguen
+  // llegando al gancho, que los rechaza, y se apuntan con el nombre del
+  // comando. Ver su `case` y `src/play/efectospantalla.js`.
+  "effect",                                       // scriptcmds.cpp:140 / :3040
+  "hud.addstatusicon", "hud.killstatusicon",      // scriptcmds.cpp:60, :63 / :3706-3847
+  "hud.killicons",                                // scriptcmds.cpp:62
 ]);
 
 /** Los `$getters` portados. `m_GlobalGetterHash`, script.cpp:41-170. */
@@ -885,6 +925,9 @@ export const GETTERS = new Set([
   // Pedido por el censo de los bichos (otra sesión, `doc/CENSO_BICHOS_91.md`):
   // `game_struck` lo usa en 544 guiones. Ver su `case`.
   "$can_damage",      // script.cpp:67  / :662-684
+  // EL 93: el salto de la araña sale con `setvelocity ent_me $relvel(0,320,120)`
+  // (spider.script:119). 610 de los 724 guiones con modelo lo piden.
+  "$relvel",          // script.cpp:90  / :3597-3628
 ]);
 
 /** Las propiedades de `$get(<ent>,<prop>)` que este puerto sabe contestar. */
@@ -896,6 +939,7 @@ export const PROPIEDADES = new Set([
   "dist", "dist2D", "range", "range2D",   // :1146
   "gold",                                 // :1263
   "steamid",                              // :1232
+  "race",                                 // :1390 — EL 94, el guardia
 ]);
 
 /**
@@ -1093,6 +1137,27 @@ export class Guion {
     if (t === "game.players" || t === "game.players.noafk" || t === "game.players.playersnb") {
       return this.jugadores ? String(this.jugadores()) : t;
     }
+    // ── EL 93: `game.monster.<prop>` ES `$get(ent_me,<prop>)` ──────────────
+    //
+    //     TokenizeString(Name, Params, ".");  Name = Params[0];
+    //     msstring FullProp = &FullName.c_str()[5 + Name.len() + 1];
+    //     if ((Name == "entity" || Name == "monster" || ...) && m.pScriptedEnt)
+    //       Value = m.pScriptedEnt->GetProp(m.pScriptedEnt, FullProp, Params);
+    //                                            script.cpp:4692-4700
+    //
+    // La araña lo pide al caer del salto: `if( game.monster.onground )`
+    // (spider.script:134). Sin resolver valía su propio nombre, `atoi` daba 0
+    // y la araña **no aterrizaba nunca**: se volvía a llamar cada 0,001 s.
+    //
+    // SÓLO con el gancho `propiedadDeMi`, que hoy pone el entorno de un NPC
+    // (npcguion.js), y SÓLO para las propiedades que ese gancho sabe contestar:
+    // el resto —`game.monster.name.full`, `game.monster.race`…— sigue
+    // valiendo su propio nombre, como hasta el 92. Contestar «0» a ésas sería
+    // cambiar ramas que hoy nadie ha medido (el «You've slain» del 91, §5.3).
+    if (t.startsWith("game.monster.") && this.entorno?.propiedadDeMi) {
+      const r = this.entorno.propiedadDeMi(t.slice("game.monster.".length));
+      if (r !== null && r !== undefined) return String(r);
+    }
     // 5. variables.
     const v = this.buscarVar(t);
     if (v) return v.valor;
@@ -1173,6 +1238,35 @@ export class Guion {
       // El 81. El entorno que no lo tenga se comporta como antes: el getter
       // cae en «no soportado» y el `if` viejo abandona el bloque.
       case "$cansee": return e.ve ? String(e.ve(a[0], a[1])) : null;    // npcscript.cpp:1754
+
+      // ── EL 93: `$relvel(<derecha,adelante,arriba>)` ─────────────────────
+      //
+      //     if (Params[0].c_str()[0] != '(') {
+      //       Angle = (IsPlayer() || FL_FLY|FL_SWIM) ? v_angle : pev->angles;
+      //       RelVel = StringToVec(&FullName.c_str()[7]); }
+      //     else { Angle = StringToVec(Params[0]); RelVel = StringToVec(Params[1]); }
+      //     MakeVectors(Angle, vForward, vRight, vUp);
+      //     Final = vRight * RelVel.x + vForward * RelVel.y + vUp * RelVel.z;
+      //                                            script.cpp:3605-3628
+      //
+      // Es una VELOCIDAD, no un punto: no suma el origen (eso es `$relpos`).
+      // Los ángulos del propio bicho los da el gancho `angulosDeMi` —el rumbo
+      // vive en la manada—; sin él se apunta y se devuelve el texto entero,
+      // que es lo que el motor hace con un getter que no conoce.
+      case "$relvel": {
+        if (!a.length) return "0";                                  // :3628
+        let ang, rel;
+        if (String(a[0]).startsWith("(")) {
+          ang = vectorDeTexto(String(a[0]));
+          rel = vectorDeTexto(String(a[1] ?? ""));
+        } else {
+          if (!e.angulosDeMi) { this.anotarNoSoportado("getter", `${nombre} (sin ángulos del bicho)`); return texto; }
+          ang = e.angulosDeMi();
+          // `&FullName.c_str()[7]`: lo que va detrás de «$relvel», paréntesis incluidos.
+          rel = vectorDeTexto(texto.slice(7));
+        }
+        return textoDeVector(velocidadRelativa(ang, rel));
+      }
 
       // `$get_token(<lista>,<n>)` — script.cpp:2628-2649.
       //
@@ -1384,17 +1478,31 @@ export class Guion {
     let n = 0;
     for (const r of this.repeticiones ?? []) {
       if (ahora < r.cuando) continue;
-      const ev = { nombre: r.evento.nombre, locales: new Map(), params: [], parar: false, repetirEn: null };
-      this.rastro.push({ evento: r.evento.nombre, params: [] });
-      this.ejecutarLista(r.evento.cmds, ev);
+      this.correrRepeticion(r, ahora);
       n++;
-      // Se vuelve a armar con lo que el `repeatdelay` de ESTA vuelta haya
-      // dicho: el guion puede cambiarlo —la regeneración le resta 6 segundos
-      // con el anillo de sangre— y el motor lo relee cada vez.
-      r.cada = ev.repetirEn ?? r.cada;
-      r.cuando = ahora + r.cada;
     }
     return n;
+  }
+
+  /**
+   * UNA vuelta de un evento con `repeatdelay`, y su siguiente cita. El 93 la
+   * saca de `pasoDeRepeticiones` para que el guion de un BICHO, que no tiene
+   * reloj propio sino el `RelojDeGuiones` de la partida, corra la MISMA vuelta
+   * (npcguion.js, `armarRepeticionesDeBicho`): dos copias de esto serían dos
+   * reglas para el mismo `repeatdelay`.
+   *
+   * @returns los segundos hasta la siguiente vuelta.
+   */
+  correrRepeticion(r, ahora = 0) {
+    const ev = { nombre: r.evento.nombre, locales: new Map(), params: [], parar: false, repetirEn: null };
+    this.rastro.push({ evento: r.evento.nombre, params: [] });
+    this.ejecutarLista(r.evento.cmds, ev);
+    // Se vuelve a armar con lo que el `repeatdelay` de ESTA vuelta haya
+    // dicho: el guion puede cambiarlo —la regeneración le resta 6 segundos
+    // con el anillo de sangre— y el motor lo relee cada vez.
+    r.cada = ev.repetirEn ?? r.cada;
+    r.cuando = ahora + r.cada;
+    return r.cada;
   }
 
   /**
@@ -2474,6 +2582,56 @@ export class Guion {
         return true;
       }
 
+      // ── EL 93: LO QUE EL SALTO DE LA ARAÑA LE PIDE AL CUERPO ─────────────
+      //
+      // Los cinco son del CUERPO de la entidad, y el cuerpo de un bicho lo
+      // lleva la manada: aquí se parte el comando con las reglas del motor y
+      // se pasa al gancho. Sin gancho, se apunta (no hay `=> {}`, el 66).
+      //
+      // `gravity <f>` — `pev->gravity = V_max(atof(Params[0]), 0.001f)`
+      // (scriptcmds.cpp:3461-3467): nunca cero, y un texto que no es número
+      // da 0 y por tanto 0,001.
+      case "gravity": {
+        if (!params.length) return true;             // `ERROR_MISSING_PARMS`
+        if (!e.gravedad) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.gravedad(Math.max(numDe(params[0]), 0.001));
+        return true;
+      }
+      // `movespeed <f>` — `m_SpeedMultiplier = atof(Params[0])`
+      // (npcscript.cpp:514-521, «NOV2014_19 this was atoi»). El −1 de
+      // `spider_latch_drop` se guarda tal cual: el motor no lo trata aparte.
+      // `setanim.framerate <f>` — `m_Framerate = atof(Params[0])`
+      // (npcscript.cpp:1585-1591).
+      case "movespeed": case "setanim.framerate": {
+        if (!params.length) return true;
+        const gancho = c.nombre === "movespeed" ? e.ritmoDeAndar : e.ritmoDeAnimacion;
+        if (!gancho) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        gancho(numDe(params[0]));
+        return true;
+      }
+      // `setidleanim <anim|none>` — `m_IdleAnim`, con `none` a vacío
+      // (npcscript.cpp:1458-1469).
+      case "setidleanim": {
+        if (!params.length) return true;
+        if (!e.animacionDeParado) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        const n = String(params[0]);
+        e.animacionDeParado(n === "none" ? "" : n);
+        return true;
+      }
+      // `setfollow <objetivo> <banderas>` | `setfollow none` —
+      // scriptcmds.cpp:5970-6000. Con `none` vuelve a `MOVETYPE_STEP`; con un
+      // objetivo que `RetrieveEntity` encuentra, le sigue (`MOVETYPE_NONE`), y
+      // `align_bottom` se busca como SUBCADENA del segundo (`find`, :5987). Con
+      // un solo parámetro que no es `none`, `ERROR_MISSING_PARMS` y nada.
+      case "setfollow": {
+        if (!params.length) return true;
+        if (!e.seguir) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        if (String(params[0]) === "none") { e.seguir(null); return true; }
+        if (params.length < 2) return true;
+        e.seguir(String(params[0]), { abajo: String(params[1]).includes("align_bottom") });
+        return true;
+      }
+
       // `noxploss ent_me 0`, en `game_player_putinworld`
       // (player_main.script:986). **No existe**: la palabra no sale en todo el
       // código del mod ni del motor. No está en `m_GlobalCmdHash` ni en la
@@ -2548,6 +2706,26 @@ export class Guion {
         if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
         if (!e.ponerRecibeDano) { this.anotarNoSoportado("comando", c.nombre); return true; }
         e.ponerRecibeDano(String(params[0]), numDe(params[1]), params.length >= 3 ? String(params[2]) : null);
+        return true;
+      }
+
+      // ── EL 93 (pieza G): LO QUE UN GUION LE HACE A LA PANTALLA ──────────
+      //
+      // `effect <tipo> …` es UNA función con una rama por tipo
+      // (`ScriptCmd_Effect`, scriptcmds.cpp:140 / :3040, que reparte a
+      // mseffects.cpp) y los tres `hud.*` son otra (`ScriptCmd_HudIcon`,
+      // scriptcmds.cpp:60-63 / :3706-3847). El intérprete no parte nada: la
+      // regla está en `src/play/efectospantalla.js` y a quién le llega lo sabe
+      // el entorno, que es el del jugador (`src/play/guionjugador.js`) y, por
+      // herencia, el de cada efecto suyo (`entornoDelEfecto`, efectos.js).
+      //
+      // El gancho devuelve `false` si el tipo no es suyo —`effect beam`,
+      // `effect screenshake`—, y entonces se apunta con el nombre del comando,
+      // igual que hacía el `default`. Sin gancho (un NPC), lo mismo. Hasta este
+      // `case` lo hacía un PUENTE que envolvía `ejecutarComando` de cada
+      // instancia (doc/EFECTOS_RED_93.md §5.1 y §6).
+      case "effect": case "hud.addstatusicon": case "hud.killstatusicon": case "hud.killicons": {
+        if (!e.comandoDePantalla?.(c.nombre, params.map(String), { desde: this })) this.anotarNoSoportado("comando", c.nombre);
         return true;
       }
 

@@ -205,6 +205,13 @@ export class ClienteDeRed {
       case MENSAJE.TIENDA:
         this._avisar("tienda", m);
         return m;
+      // EL 93: el fundido y los iconos de estado de un efecto que corre en el
+      // servidor. Se entregan tal cual: el reloj lo pone quien los dibuja, que
+      // es lo que hace el motor (`cl.time` al leer el mensaje).
+      case MENSAJE.PANTALLA:
+        this.pantallas = (this.pantallas ?? 0) + 1;
+        this._avisar("pantalla", m);
+        return m;
       // El 63: lo que ha cambiado del personaje. Se FUNDE, no se sustituye: el
       // servidor manda los campos que ha tocado y el resto de la ficha —el
       // nombre, las habilidades, las manos— es el mismo de siempre.

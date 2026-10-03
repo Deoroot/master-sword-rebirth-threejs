@@ -83,6 +83,15 @@ setvard NPC_IS_BOSS 1`, y nueve más): ninguno está en los cinco mapas
 horneados. Tampoco aplica `[override]` ni pasa parámetros: `skeleton_mage`
 llega a `ext_reduct_xp` desde un evento con retraso y sale con `PARAM1`.
 
+> **Corrección del 93** (doc/FICHAS_93.md): «ninguno está en los cinco mapas
+> horneados» era falso por la otra punta. El jefe goblin de
+> `gertenheld_forest2` sí es un jefe-según-el-mapa, sólo que de varias
+> líneas, y el lector lo contaba siempre (ver la corrección de la tabla de
+> abajo). Y el código de este experimento hacía algo que este párrafo no
+> dice: ejecutaba al cargar también el `setvarg`, que el motor no ejecuta
+> (script.cpp:5384 compara sólo con `"setvar"`). Desde el 93 las condiciones
+> se evalúan, `[override]` se aplica y los `callevent` pasan sus parámetros.
+
 ### Cuántos campos de `iaDe` tenían la misma trampa
 
 Medido sobre los **1 593 guiones con modelo** de los 2 884, comparando para
@@ -147,6 +156,16 @@ colocado; los `modelos` no cambian en ninguno):
 El jefe goblin de `gertenheld_forest2` es el segundo caso que el control de
 Gate City no tiene (el 50): `setvard NPC_IS_BOSS 1` en su bloque sin nombre
 (`monsters/goblinchief.script:3-7`).
+
+> **Corrección del 93:** falso. La línea 7 está dentro de `if (
+> $lcase(game.map.name) equals goblintown )` (:5-9), y en
+> `gertenheld_forest2` el que corre es el último `else` (:16-19): ni jefe, y
+> 150 de experiencia, no 400. El lector del 92 no evaluaba condiciones y,
+> además, cortaba la condición en el PRIMER `)` —el de `$lcase(…)`—, así que
+> el `{ }` de la rama corría siempre. En la tabla de arriba, la fila de
+> `gertenheld_forest2` tiene que decir «0» jefes. Lo mide
+> `test/fichas93c.test.mjs`, y la prueba de este experimento que lo daba por
+> jefe lleva su corrección al lado.
 
 ### Lo que cambia en el juego, y no se ve en la sonda de este experimento
 
@@ -287,6 +306,11 @@ Se vacía la lista después de nacer, como ya hacía la prueba de al lado.
    deciden nada.
 3. Los `if (...) setvard` de una línea no cuentan: los jefes que lo son según
    el mapa salen `false` (ninguno en los cinco mapas).
+
+> **Del 93:** los tres, hechos o declarados en doc/FICHAS_93.md. Las 23 leen
+> ya el valor al nacer (con las condiciones evaluadas), el botín también, y
+> los jefes según el mapa salen bien cuando el horneado pasa el mapa; sin
+> mapa, se declaran en `ia.dudosas`.
 4. `andando: "walk"` del zombi de ballesta sale de un camino condicional
    (`npcatk_settarget`). En el motor, al nacer, `m_MoveAnim` está vacío.
 5. `probe.vivo.pasear` no corre los relojes de la manada, a diferencia del

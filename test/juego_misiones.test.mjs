@@ -339,9 +339,22 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
     // El 91 sumó cuatro, los que pedía el veneno: `dodamage` y `xdodamage`
     // (las dos formas de hacer daño desde un guion), `scriptflags` y
     // `takedmg`. Ver `test/veneno91.test.mjs`.
-    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4);
+    // El 93 sumó cinco, lo que el salto de la araña le pide a su cuerpo:
+    // `setfollow`, `gravity`, `movespeed`, `setanim.framerate` y
+    // `setidleanim`. Ver `test/salto93a.test.mjs`.
+    // La pieza G del 93 sumó cuatro, los de la PANTALLA, que hasta entonces
+    // entraban por un puente en `guionjugador.js`: `effect`,
+    // `hud.addstatusicon`, `hud.killstatusicon` y `hud.killicons`. Ver
+    // `test/efectos93b.test.mjs`. Lectura vieja: `90 + 9 + 3 + 4 + 5`.
+    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4 + 5 + 4);
+    for (const c of ["effect", "hud.addstatusicon", "hud.killstatusicon", "hud.killicons"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es de la pieza G del 93`);
+    }
     for (const c of ["dodamage", "xdodamage", "scriptflags", "takedmg"]) {
       assert.ok(COMANDOS.has(c), `falta ${c}, que es del 91`);
+    }
+    for (const c of ["setfollow", "gravity", "movespeed", "setanim.framerate", "setidleanim"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 93`);
     }
     assert.equal(COMANDOS.has("exit"), false, "`exit` no es un comando del motor (el 83)");
     for (const c of ["exitevent", "returndata"]) {
@@ -387,12 +400,14 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
       assert.ok(COMANDOS.has(`g_${c}`), `falta la global de ${c}`);
     }
   });
-  test("y 28 getters", () => {
+  test("y 29 getters", () => {
     // 21 hasta el 90; el 91 sumó seis para los venenos: `$get_takedmg`,
     // `$math`, `$string_upto` y su gemelo `$string_from` (la MISMA función,
     // script.cpp:98 y :119), `$get_scriptflag` y `$pass`; y uno más que pidió
     // el censo de los bichos, `$can_damage`.
-    assert.equal(GETTERS.size, 21 + 6 + 1);
+    // Y el 93, `$relvel`, con el que salta la araña (spider.script:119).
+    assert.equal(GETTERS.size, 21 + 6 + 1 + 1);
+    assert.ok(GETTERS.has("$relvel"), "falta $relvel, que es del 93");
     for (const g of ["$get_takedmg", "$math", "$string_upto", "$string_from", "$get_scriptflag", "$pass", "$can_damage"]) {
       assert.ok(GETTERS.has(g), `falta ${g}, que es del 91`);
     }

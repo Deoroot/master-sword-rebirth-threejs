@@ -66,6 +66,11 @@ function secuencias({ evento = null, frame = 14, codigo = 600, enReposo = null }
 function montar(script, {
   evento = null, frame = 14, codigo = 600, enReposo = null, aU = 30, azar = dado(5),
   relacion = RELACION.ODIO, defensa = null, enchufar = true, postspawn = null, hp = null, pasea = null,
+  // EL 93: las secuencias DEL MODELO de verdad, para el bicho cuyo guion pide
+  // animaciones que las de prueba no traen (el salto de la araña: `jumpmiss`
+  // y su `frame_jump`). Sin ellas `buscarSecuencia` cae en la 0, el evento no
+  // sale nunca y la araña se queda a medio salto para siempre.
+  reales = null,
 } = {}) {
   const ficha = modeloYAnimaciones(leerFichaNpc(SCRIPTS, script));
   const guion = cargarGuion(script);
@@ -83,7 +88,7 @@ function montar(script, {
       ia: { ...ficha.ia, golpe: "attack", ...(hp ? { vida: hp } : {}), ...(pasea === null ? {} : { pasea }) },
     }],
   }, {
-    secuenciasPorClave: new Map([["b", secuencias({ evento, frame, codigo, enReposo })]]),
+    secuenciasPorClave: new Map([["b", reales ?? secuencias({ evento, frame, codigo, enReposo })]]),
     cajasPorClave: new Map([["b", { min: [-16, -16, 0], max: [16, 16, 32] }]]),
     azar,
   });
@@ -99,6 +104,14 @@ function montar(script, {
     losNpc: () => manada.instancias,
     dondeEstaElJugador: pies,
     unidadesPorMetro: U,
+    // EL 93: el `playanim` del guion llega a la manada como en `src/main.js`
+    // (`animar: (instancia, nombre) => bichos.deUnaVez(instancia, nombre)`).
+    // Hasta el 92 este arnés no lo enchufaba, y ningún guion de esta prueba
+    // movía la animación: con el salto de la araña eso deja el `frame_jump`
+    // sin salir, que es otro juego (el 59: el arnés tiene que ser el del jugador).
+    // EL 94: con el modo, como `src/main.js` (`bichos.playanim`); antes,
+    // `manada.deUnaVez(inst, nombre)`, que hacía `critical` de todo.
+    animar: (inst, nombre, modo) => manada.playanim(inst, nombre, modo),
     // El anfitrión de efectos es el jugador (`main.js`); aquí se apunta qué
     // llega y con qué aplicador, que es lo que decide el «X hits you».
     aplicarEfecto: (ruta, params, o) => { efectos.push({ ruta, params: [...params], aplicador: o?.aplicador ?? null, t: manada.t }); return {}; },
@@ -133,6 +146,15 @@ function montar(script, {
   const g = () => inter.guionesVivos.get(i.id) ?? null;
   const recibidos = () => ({ ...(g()?.costuraCuenta?.recibidos ?? {}) });
   return { manada, inter, i, correr, paso, golpes, ataques, efectos, lejos, g, recibidos, personaje };
+}
+
+/** EL 93: las secuencias de un `.mdl` de verdad, con la forma del horneado. */
+function secuenciasDelModelo(relativo) {
+  const m = leerMdl(`${MODELOS}/${relativo}`);
+  return leerSecuencias(m).map((s, k) => ({
+    indice: k, nombre: s.nombre, fps: s.fps, fotogramas: Math.max(1, s.nFotogramas), bucle: s.bucle,
+    actividad: s.actividad, pesoActividad: s.pesoActividad, avance: s.avance, eventos: eventosDeSecuencia(m, k),
+  }));
 }
 
 // ── EL HORNEADO ─────────────────────────────────────────────────────────────
@@ -319,13 +341,29 @@ describe("la araña venenosa envenena desde `bite_dodamage`, y las otras no", { 
     // pega con `dmgevent:bite` y no maneja `bite_dodamage`. Su veneno es el
     // SALTO (`spider_latch_hit` -> `effect_spiderlatch`, spider.script), que
     // cuelga de un `repeatdelay` que este puerto no arma para un NPC.
-    const r = montar("monsters/spider", { evento: "frame_bite1", aU: 30 });
+    //
+    // EL 93: el salto ya existe (`test/salto93a.test.mjs`), así que aquí la
+    // araña lleva su MODELO de verdad —si no, se queda a medio salto— y lo que
+    // se mira es que ningún veneno sale del MORDISCO: los efectos que llegan,
+    // si llegan, son `effect_spiderlatch`, el del salto, nunca `dot_poison`
+    // directo. Antes decía `efectos.length === 0`, que con el salto portado
+    // es falso en una de cada dos pasadas sin que el mordisco envenene.
+    //
+    // Y el jugador llega DESPUÉS del primer segundo: la araña de Gate City
+    // hace `setanim.framerate BASE_FRAMERATE` en cada mordisco
+    // (spider.script:207-209), y `BASE_FRAMERATE` no existe hasta su
+    // `npc_post_spawn` (base_self_adjust.script:141, un segundo tras nacer):
+    // un mordisco antes la deja a ritmo 0, congelada. Es del mod, y lo mide
+    // `test/salto93a.test.mjs`; aquí no es lo que se viene a medir.
+    const r = montar("monsters/spider", { evento: "frame_bite1", aU: 3000, reales: secuenciasDelModelo("monsters/spider.mdl") });
+    r.correr(1.5);
+    r.lejos.aU = 30;
     r.correr(15);
     const rec = r.recibidos();
     assert.ok(r.golpes.length >= 1 && r.golpes.every((x) => x.tipo === "pierce"), JSON.stringify(r.golpes));
     assert.ok((rec.bite_dodamage ?? 0) >= 1, "el motor le manda `bite_dodamage` igual…");
     assert.equal(r.g().maneja("bite_dodamage"), false, "…y su guion no lo tiene");
-    assert.equal(r.efectos.length, 0);
+    assert.ok(r.efectos.every((e) => e.ruta === "effects/effect_spiderlatch"), JSON.stringify(r.efectos.map((e) => e.ruta)));
   });
 });
 

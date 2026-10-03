@@ -18,6 +18,8 @@
 //      envenenado, con el veneno firmado por ella.
 //   3. gatecity, «Leaping Cave Spider»: muerde por su guion, con `pierce`, y
 //      NO envenena al morder — su veneno es el salto, que no está portado.
+//      (EL 93: ya lo está, `sondas/salto93.mjs`; el control de abajo pide
+//      que todo veneno venga de un salto.)
 //      El encargo daba por hecho lo contrario; el mod dice esto.
 //
 // Lo que se lee es lo que el GUION ha recibido (`probe.costura`) y lo que el
@@ -207,8 +209,24 @@ try {
     control("con `pierce`: «Leaping Cave Spider hits you: … pierce damage.»",
       lineas.some((l) => /Leaping Cave Spider hits you: \d+\.\d pierce damage\./.test(l)),
       lineas.filter((l) => /hits you/.test(l)).slice(-2).join(" / "));
+    // EL 93: el salto ya está portado (sondas/salto93.mjs), y en 60 s pegada
+    // a ella puede saltarte encima y envenenarte. Lo que este control mide es
+    // que el MORDISCO no envenena: si hay veneno, tiene que haber habido salto
+    // (`spider_latch_hit` en el rastro de su guion, `probe.costura.de`).
+    const envenenada = lineas.some((l) => /poisoned/i.test(l)) || (await activos(pag)).includes("DOT_poison");
+    // EL 94: los saltos de TODAS las arañas grandes, no sólo de la que se mide.
+    // Gate City tiene tres; pegado 60 s a una, otra puede saltarte encima (la
+    // sonda del 93 vio pegarse a dos). Contando sólo ésta, el veneno de la otra
+    // salía como «el mordisco envenena»: un rojo sin nada roto.
+    const porArana = await pag.evaluate((g) => {
+      const l = [];
+      for (let k = 0; k < 8; k++) { const x = window.probe.costura.de(g, k); if (!x) break; l.push(x.rastro?.spider_latch_hit ?? 0); }
+      return l;
+    }, ARANA);
+    const saltos = porArana.reduce((a, b) => a + b, 0);
+    console.log(`  saltos que se pegaron, por araña (la medida es la ${n}): ${JSON.stringify(porArana)}`);
     control("CONTROL NEGATIVO: su mordisco NO envenena (no maneja `bite_dodamage`; su veneno es el salto)",
-      !lineas.some((l) => /poisoned/i.test(l)) && !(await activos(pag)).includes("DOT_poison"));
+      !envenenada || saltos >= 1, `envenenada ${envenenada}, saltos que se pegaron ${saltos}`);
     await pag.close();
   }
 

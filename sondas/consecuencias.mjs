@@ -284,7 +284,39 @@ const noHuyen = await pag.evaluate((ns) => ns.map((n) => {
   window.probe.reaccion.vida(n, q.vida);   // se le devuelve la vida: abajo tiene que cazar
   return { n, huyendo: r.huyendo, muerto: r.muerto };
 }), crias);
-const encajonadas = await pag.evaluate((ns) => {
+// ── CORRECCIÓN DEL 93: LA VENTANA ESTABA PUESTA EN EL BORDE DEL CICLO ──────
+//
+// Hasta aquí eran DOS SEGUNDOS fijos desde que el jugador aparece al lado, y
+// dos segundos es justo lo que dura el ciclo ocioso de la IA de este puerto
+// (`CICLO.ocioso`, src/play/ia.js). Una cría sin objetivo sólo mira alrededor
+// cuando le toca pensar, así que **cuándo te ve depende de en qué punto de su
+// ciclo la pilla la sonda**, y eso lo decide el reloj de pared que ha pasado
+// entre las llamadas de antes: es un dado. Medido en el 93 (pieza F),
+// barriendo la fase a mano: la primera cría fijaba a 1,92 / 1,67 / 1,42 s
+// adelantando 0,25 / 0,5 / 0,75 s — pendiente −1, o sea que espera su turno
+// de pensar. Con la ventana vieja la sonda dio 48/48 cuatro veces con el árbol
+// del 93, y con los `repeatdelay` desarmados (la rotura R2 de la pieza A)
+// 48/48 y 47/48 en dos pasadas seguidas («libres»: la primera cría fijó a
+// ~1,9 s y anduvo 0,09 m). O sea que R2 no decidía nada: decidía la fase. La
+// pieza A vio 46/48 (además «te cazan»: con la fase entera, 2,0 s menos
+// 120 pasos de 1/60 deja el reloj a 2·10⁻¹⁵ por ENCIMA de cero y hace falta
+// el paso 121 — el borde del 81). Las otras tres no lo sufrían porque, a 90 u
+// de la primera, te ven mientras se mide aquélla.
+//
+// Y EL MOTOR TARDA MÁS, no menos: la cría es de la familia VIEJA
+// (spider_mini -> spider_base -> base_monster -> base_npc_attack), cuyo bucle
+// es `hunting_mode_go` con `repeatdelay CYCLE_TIME` y `CYCLE_TIME_IDLE 2.8`
+// (base_npc_attack.script:7, :13, :62-63; el 2,0 es de la nueva,
+// base_npc_attack_new.script:95). Un jugador que aparece quieto no hace ruido
+// para `game_heardsound` (:350), así que en Master Sword la cría puede tardar
+// hasta 2,8 s en verte. Una ventana de 2 s no podía estar bien ni en el motor.
+//
+// Ahora: se espera a que fije objetivo, con TOPE en 3 s —por encima de los
+// 2,8 del motor, para que el control siga valiendo el día que el ciclo de la
+// IA vieja se porte—, se apunta cuándo, y DESPUÉS se le dejan dos segundos
+// de caza, que es lo que miden los controles de andar.
+const TOPE_PARA_VERTE = 3.0;          // > CYCLE_TIME_IDLE 2.8, base_npc_attack.script:7
+const encajonadas = await pag.evaluate(({ ns, tope }) => {
   // Dónde NACIÓ cada una, apuntado antes de acercarse a ninguna: al ponerse al
   // lado de la primera, la segunda —a 90 u— también caza, y medir su paso desde
   // donde estuviera al llegarle el turno mediría el orden de la sonda.
@@ -292,7 +324,15 @@ const encajonadas = await pag.evaluate((ns) => {
   const out = [];
   for (const n of ns) {
     const a = window.probe.reaccion.quien(n);
+    const teniaObjetivo = a.objetivo;
     window.probe.mundo.poner(a.donde[0] + 2, a.donde[1] + 0.3, a.donde[2]);
+    // 1. hasta que te ve, de décima en décima, con tope.
+    let fija = a.objetivo === "jugador" ? 0 : null;
+    for (let t = 0.1; fija === null && t <= tope + 1e-9; t += 0.1) {
+      window.probe.reaccion.avanzar(0.1);
+      if (window.probe.reaccion.quien(n).objetivo === "jugador") fija = t;
+    }
+    // 2. y dos segundos cazando.
     const frenados = [];
     for (let k = 0; k < 10; k++) {
       window.probe.reaccion.avanzar(0.2);
@@ -300,13 +340,14 @@ const encajonadas = await pag.evaluate((ns) => {
     }
     const b = window.probe.reaccion.quien(n), c = nacio.get(n);
     const piso = window.probe.sondaFisica(b.donde[0] + 0.2, b.donde[1], b.donde[2], n).suelo;
-    out.push({ n, objetivo: b.objetivo, frenados, frenado: b.frenado,
+    out.push({ n, objetivo: b.objetivo, fija, teniaObjetivo, frenados, frenado: b.frenado,
       suelo: piso === null ? -1 : (piso - b.donde[1]) * 39.37,
       paso: Math.hypot(b.donde[0] - c[0], b.donde[2] - c[2]) });
   }
   return out;
-}, crias);
+}, { ns: crias, tope: TOPE_PARA_VERTE });
 console.log(`    las ${encajonadas.length} crías: ${encajonadas.map((r) => `'${r.frenado}' ${r.paso.toFixed(2)} m, suelo a ${r.suelo.toFixed(1)}`).join(", ")}`);
+console.log(`    te ven a los: ${encajonadas.map((r) => r.fija === null ? "nunca" : `${r.fija.toFixed(1)} s${r.teniaObjetivo ? " (ya cazaba)" : ""}`).join(", ")}`);
 // Ojo con lo que defiende: romper a propósito la guarda de `CAN_FLEE`
 // (reaccion.js, `huyeDelGolpe`) lo deja VERDE, porque la cría tampoco tiene
 // `FLEE_HEALTH` —0 por omisión, «won't flee from dmg» (base_npc_attack_new.script:16)—
@@ -315,9 +356,11 @@ console.log(`    las ${encajonadas.length} crías: ${encajonadas.map((r) => `'${
 control("las crías de araña NO huyen ni con el dado a favor: sin FLEE_HEALTH y CAN_FLEE 0",
   noHuyen.length === 4 && noHuyen.every((r) => r.huyendo === false && !r.muerto),
   `${noHuyen.filter((r) => r.huyendo).length} huyen de ${noHuyen.length}`);
+// (93) «Te ven» antes del tope, que es el ciclo ocioso del motor y un poco
+// más: ver arriba. Y que al acabar sigan contigo, que es lo que decía antes.
 control("y las cuatro te cazan al tenerte a dos metros: HUNT_AGRO 1",
-  encajonadas.length === 4 && encajonadas.every((r) => r.objetivo === "jugador"),
-  encajonadas.map((r) => r.objetivo).join(", "));
+  encajonadas.length === 4 && encajonadas.every((r) => r.fija !== null && r.objetivo === "jugador"),
+  encajonadas.map((r) => `${r.objetivo} (${r.fija === null ? "nunca" : `${r.fija.toFixed(1)} s`})`).join(", "));
 // LO QUE ERAN LAS «RATAS HUNDIDAS», corregido en el 39 — y no eran ratas.
 //
 // Estos dos controles decían «ninguna se mueve, están HUNDIDAS» y estaban VERDES
@@ -443,6 +486,56 @@ control("blandiendo de verdad contra la araña, alguno se para",
 control("y la esquiva se le queda puesta al pararlo",
   blandiendo.parados === 0 || ["dodge", "idle", "walk", "run"].includes(blandiendo.quien?.animacion),
   `'${blandiendo.quien?.animacion}'`);
+
+// ── 7b. MATAR A UN ALDEANO (el 94) ─────────────────────────────────────────
+//
+// `NPCs/default_human` hace `skilllevel -10` (:50) y el 93 dejó escrito que en
+// el motor eso RESTA. No resta: `while (iRemainingExp > 0)` (playerstats.cpp:83)
+// no entra con un negativo, y `if (xpsend > 0 ...)` (msmonsterserver.cpp:2540)
+// no manda `game_xpgain`. Lo que se mide es el camino de UN jugador
+// (`repartirExperiencia` de main.js; el del servidor lo mide
+// test/experiencia94.test.mjs). La propiedad se pone a MEDIO PUNTO del umbral,
+// porque es el único estado donde quitar la guarda cambia algo: ahí `aprender`
+// entregaría el mínimo de 1. Y el goblin es el control positivo de los dos
+// instrumentos: la hoja y la línea verde de la consola.
+const aldeano = await pag.evaluate(async () => {
+  const { expNecesaria } = await import("/src/juego/stats.js");
+  const lista = window.probe.reaccion.censo();
+  const vivo = (s) => lista.find((c) => c.script === s && !window.probe.reaccion.quien(c.n)?.muerto);
+  const xpVerdes = () => (window.probe.hud.estado()?.consola?.lineas ?? [])
+    .filter((l) => /XP Awarded/.test(l.texto)).length;
+  const prop = () => window.probe.sesion.personaje.habilidades.swordsmanship.power;
+  const medir = (c) => {
+    if (!c) return null;
+    const p = prop();
+    p.exp = expNecesaria(p.valor) - 0.5;
+    const antes = { valor: p.valor, exp: p.exp, verdes: xpVerdes() };
+    const r = window.probe.reaccion.pegarA(c.n, c.vida + 1, { tipo: "slash", parry: 0 });
+    return {
+      nombre: c.nombre, script: c.script, muerto: Boolean(r?.muerto),
+      antes, despues: { valor: prop().valor, exp: prop().exp, verdes: xpVerdes() },
+    };
+  };
+  return { comun: medir(vivo("NPCs/default_human")), goblin: medir(vivo("monsters/goblin")) };
+});
+const fmt = (m) => m ? `${m.nombre}: power ${m.antes.valor}/${m.antes.exp.toFixed(2)} -> ` +
+  `${m.despues.valor}/${m.despues.exp.toFixed(2)}, líneas verdes ${m.antes.verdes} -> ${m.despues.verdes}` : "no encontrado";
+console.log(`\n  matar a un aldeano:\n    ${fmt(aldeano.comun)}\n    ${fmt(aldeano.goblin)}`);
+control("hay un aldeano de NPCs/default_human y muere del golpe",
+  aldeano.comun?.muerto === true, aldeano.comun ? aldeano.comun.nombre : "ninguno");
+control("matarlo no resta experiencia NI da el mínimo de 1 (playerstats.cpp:83)",
+  aldeano.comun && aldeano.comun.despues.valor === aldeano.comun.antes.valor
+    && aldeano.comun.despues.exp === aldeano.comun.antes.exp,
+  aldeano.comun ? `${aldeano.comun.antes.exp.toFixed(2)} -> ${aldeano.comun.despues.exp.toFixed(2)}` : "");
+control("y no sale '* N XP Awarded' (msmonsterserver.cpp:2540)",
+  aldeano.comun && aldeano.comun.despues.verdes === aldeano.comun.antes.verdes,
+  aldeano.comun ? `${aldeano.comun.antes.verdes} -> ${aldeano.comun.despues.verdes}` : "");
+control("CONTROL POSITIVO: el goblin, en el mismo estado, sí mueve la hoja",
+  aldeano.goblin?.muerto === true && (aldeano.goblin.despues.exp !== aldeano.goblin.antes.exp
+    || aldeano.goblin.despues.valor !== aldeano.goblin.antes.valor), fmt(aldeano.goblin));
+control("y sí sale la línea verde: la consola sabía enseñarla",
+  aldeano.goblin && aldeano.goblin.despues.verdes > aldeano.goblin.antes.verdes,
+  aldeano.goblin ? `${aldeano.goblin.antes.verdes} -> ${aldeano.goblin.despues.verdes}` : "");
 
 // ── 8. NADA DE ESTO ROMPE EL MUNDO ─────────────────────────────────────────
 const final = await pag.evaluate(() => {

@@ -71,6 +71,19 @@ y el rojo ya no estaba.
 > sale `alfaDelDesvanecido`, y no lleva `archivo:línea` de la fórmula porque no
 > hay archivo que citar. Inventarse la cita habría sido peor que no tenerla.
 
+> **Corrección del 94.** Había archivo que citar, y la curva era la contraria.
+> El motor está al lado, en `../MSC/xash3d-fwgs-sdk/engine/`: `CL_ParseScreenFade`
+> (cl_parse.c:2068-2111) pone `fadeReset = ahora + aguante` y
+> `fadeEnd = fadeReset + duración`, y `V_FadeAlpha` (cl_game.c:472-505) pinta
+> `fadeSpeed · (fadeEnd − ahora)` topado a 128. Con `FFADE_IN` el AGUANTE va
+> delante: **128 durante quince segundos y luego dos décimas de bajada**. Toda
+> la muerte —los cinco segundos hasta que reapareces— se ve a medias en rojo, y
+> lo quita el fundido de alfa 0 que manda `Spawn` (player.cpp:2784). El 93 lo
+> descubrió y lo escribió en `efectospantalla.js`, pero dejó esto como estaba
+> porque «no es de esta pieza»; la prueba del 41 afirmaba el fallo («dura dos
+> décimas, no quince segundos») y por eso estuvo verde 53 experimentos. Ver
+> [VELO_94.md](VELO_94.md).
+
 ### La cámara, y el `+= 180` que parece un fallo y no lo es
 
 ```c

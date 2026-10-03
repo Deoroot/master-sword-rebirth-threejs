@@ -26,6 +26,12 @@
 //           identificación del objetivo («Giant Rat / Hostile»), la consola de
 //           chat (`ms_txthud_*`), los iconos de estado de `sprites/hud/status/`
 //           y las ventanas de ayuda. Están todos leídos y ninguno hecho.
+//
+// CORRECCIÓN DEL 93, al lado: los iconos de estado ya están, y no aquí sino en
+// `src/juego/mensajes.js` (con la regla en `src/play/efectospantalla.js`),
+// porque llegan por el mismo camino que el fundido de pantalla: un efecto de
+// guion, en este navegador o en el servidor. (Las ventanas de ayuda llevan
+// desde el 60 en ese mismo archivo.)
 
 import {
   ConsolaDeSucesos, CVARS, AJUSTES, XRES, YRES,

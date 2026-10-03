@@ -61,6 +61,7 @@
     "sonda:ia": "node sondas/ia.mjs",
     "sonda:golpe": "node sondas/golpe.mjs",
     "sonda:consecuencias": "node sondas/consecuencias.mjs",
+    "sonda:guardias94": "node sondas/guardias94.mjs",
     "sonda:escudo": "node sondas/escudo.mjs",
     "sonda:arco": "node sondas/arco.mjs",
     "sonda:red": "node sondas/red.mjs",

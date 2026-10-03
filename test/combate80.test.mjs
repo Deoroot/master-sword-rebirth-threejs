@@ -22,6 +22,13 @@
 // (:433, :1358). Así que el mod también se queda dos segundos parado tras el
 // primer golpe, y eso **no se toca**: es suyo.
 //
+// CORRECCIÓN DEL 94: el 2,0 es de la IA NUEVA, y la rata es de la VIEJA
+// (`monsters/base_monster` → `base_npc_attack`), donde el ocioso es 2,8
+// (`setvard CYCLE_TIME_IDLE 2.8`, base_npc_attack.script:7) y el bucle es
+// `repeatdelay CYCLE_TIME` (:62-63), que se reprograma igual de pronto. El
+// razonamiento de arriba vale; el número para la rata es 2,8. Aquí `IA_RATA`
+// está escrita a mano sin `cicloOcioso` y sigue pensando con 2,0.
+//
 // Lo que sí está mal son las dos mitades de la misma pieza que falta, y las
 // dos se ven en el cronograma de un ataque:
 //

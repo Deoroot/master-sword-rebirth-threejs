@@ -407,8 +407,14 @@ describe("effects/dot_poison de una araña de Gate City sobre el jugador", { ski
     const m = jugadorCon("{ nada\n}", { tabla: tablaDe(["effects/dot_poison"]) });
     const { ef } = poner(m);
     const faltan = ef.guion.noSoportados.map((x) => x.nombre);
-    assert.ok(faltan.includes("effect"), faltan.join(" "));
-    assert.ok(faltan.includes("hud.addstatusicon"), faltan.join(" "));
+    // CORRECCIÓN DEL 93, al lado: el brillo, el fundido y el icono ya se leen
+    // (`src/play/efectospantalla.js`) y van a la puerta `pantalla` del
+    // jugador. Este jugador de prueba no la tiene, así que siguen APUNTÁNDOSE,
+    // ahora como «(sin pantalla)» y no como comandos desconocidos. Con la
+    // puerta puesta, lo mide test/efectos93b.test.mjs.
+    assert.ok(faltan.includes("brillo (sin pantalla)"), faltan.join(" "));
+    assert.ok(faltan.includes("icono (sin pantalla)"), faltan.join(" "));
+    assert.ok(!faltan.includes("effect") && !faltan.includes("hud.addstatusicon"), faltan.join(" "));
     assert.ok(!faltan.includes("$get_takedmg") && !faltan.includes("$math") && !faltan.includes("$string_upto"), faltan.join(" "));
   });
 });

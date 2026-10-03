@@ -1,10 +1,10 @@
 # Master Sword: Rebirth — in Three.js
 
 <!-- insignias:inicio -->
-![script commands: 100/325 · 30%](https://img.shields.io/badge/script%20commands-100%2F325%20%C2%B7%2030%25-orange)
+![script commands: 109/325 · 33%](https://img.shields.io/badge/script%20commands-109%2F325%20%C2%B7%2033%25-orange)
 ![Edana scripts: 20/27 · 74%](https://img.shields.io/badge/Edana%20scripts-20%2F27%20%C2%B7%2074%25-yellowgreen)
 ![Gate City scripts: 23/25 · 92%](https://img.shields.io/badge/Gate%20City%20scripts-23%2F25%20%C2%B7%2092%25-green)
-![NPC menus: 238/262 · 90%](https://img.shields.io/badge/NPC%20menus-238%2F262%20%C2%B7%2090%25-green)
+![NPC menus: 239/262 · 91%](https://img.shields.io/badge/NPC%20menus-239%2F262%20%C2%B7%2091%25-green)
 ![options: 9/30 · 30%](https://img.shields.io/badge/options-9%2F30%20%C2%B7%2030%25-orange)
 ![create server: 2/13 · 15%](https://img.shields.io/badge/create%20server-2%2F13%20%C2%B7%2015%25-red)
 <!-- insignias:fin -->

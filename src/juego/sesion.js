@@ -345,7 +345,9 @@ export class Sesion {
     const vida = Math.max(0, antes - cantidad);
     this.personaje.vida = vida;
     this._sucio = true;
-    this._avisar("dano", { cantidad: antes - vida, vida, porQue, deQuien });
+    // `pedido` es el `flDamage` del motor, entero: el tinte del golpe lo mide
+    // así aunque te quedara menos vida (player.cpp:540, el 94).
+    this._avisar("dano", { cantidad: antes - vida, pedido: cantidad, vida, porQue, deQuien });
     if (vida <= 0) { this.matar({ porQue, deQuien, tipo }); return { quitado: antes, muerto: true }; }
     return { quitado: antes - vida, muerto: false };
   }

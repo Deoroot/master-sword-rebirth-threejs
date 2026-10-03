@@ -42,7 +42,7 @@ import { salidaComun, prepararComunes } from "./recursos.mjs";
 // extraído vive en `build/msr/hud/`, que está en `.gitignore`, y **no se
 // mueve un byte a `public/`**.
 
-import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from "node:fs";
 
 import { leerSpr } from "../src/bsp/sprite.js";
 import { decodificarTga } from "../src/bsp/tga.js";
@@ -163,6 +163,32 @@ const emblema = {
   bytes: bytesEmblema,
 };
 
+// EL 93: LOS ICONOS DE ESTADO. `hud.addstatusicon … hud/status/alpha_dot_poison`
+// carga un SPRITE —`LoadImg(Icon, bSprite = false, …)` con `false` = sprite,
+// ui/vgui_status.h:57— y lo pinta con `SPR_DrawHoles` porque su color de
+// primer plano es opaco (`fgColor[3] >= 255`, vgui_mscontrols.cpp:198-201):
+// el índice 255 es un agujero. Se hornean TODOS los de `sprites/hud/status/`,
+// que son pocos, y no sólo el del veneno: el nombre lo pone cada guion.
+const estado = {};
+const tirasDeEstado = {};
+const CARPETA_ESTADO = `${ASSETS}/sprites/hud/status`;
+if (existsSync(CARPETA_ESTADO)) {
+  mkdirSync(`${SALIDA}/estado`, { recursive: true });
+  for (const f of readdirSync(CARPETA_ESTADO).filter((x) => /\.spr$/i.test(x)).sort()) {
+    const nombre = f.replace(/\.spr$/i, "");
+    const spr = leerSpr(`${CARPETA_ESTADO}/${f}`);
+    // Un solo cuadro: `m_Frame` no se toca en un icono de estado.
+    const tira = tiraVertical({ ...spr, cuadros: [spr.cuadros[0]] });
+    tirasDeEstado[nombre] = { spr, tira };
+    const n = escribirPng(`${SALIDA}/estado/${nombre}.png`, tira.rgba, tira.ancho, tira.alto);
+    bytes += n;
+    estado[nombre] = {
+      archivo: `hud/estado/${nombre}.png`, de: `sprites/hud/status/${f}`,
+      ancho: tira.anchoCuadro, alto: tira.altoCuadro, mezcla: spr.mezcla, cuadros: spr.cuadros.length, bytes: n,
+    };
+  }
+}
+
 // ── CONTROLES ───────────────────────────────────────────────────────────────
 const malos = [];
 const control = (que, bien, detalle = "") => {
@@ -253,6 +279,34 @@ control("a 1920×1080 miden más que el sprite original",
   LIENZO(1920, 1080).anchoBarra > 320,
   `${LIENZO(1920, 1080).anchoBarra.toFixed(1)} px de 320`);
 
+// 7. EL 93: los iconos de estado. Que se recorran enteros, que tengan
+//    agujeros (si el 255 no se tratara como transparente, el icono sería un
+//    cuadrado opaco de 64×64) y que el del veneno sea lo que su paleta dice.
+//
+//    El primer control decía «el del veneno es verde» y salió ROJO con el
+//    horneado bien: `alpha_dot_poison.spr` usa DOS índices, el 0 —blanco puro—
+//    y el 255 —el agujero—. Los ocho `alpha_dot_*`, `debuff_*`, `stun`,
+//    `shield` e `iceshield` son siluetas BLANCAS; el verde del veneno en
+//    pantalla es la BARRA (`DurColor`, vgui_status.h:8), no el dibujo. Y el
+//    motor no las tiñe: `SPR_Set` con el color de primer plano, que el icono
+//    pone a (255,255,255) (vgui_status.h:58, vgui_mscontrols.cpp:188).
+{
+  const nombres = Object.keys(estado);
+  control("hay iconos de estado en sprites/hud/status", nombres.length > 0, `${nombres.length}: ${nombres.join(", ")}`);
+  for (const n of nombres) {
+    const { spr, tira } = tirasDeEstado[n];
+    control(`${n}.spr se recorre entero`, spr.cuadra, `${spr.fin} de ${spr.bytes} bytes`);
+    const m = medirCuadro(tira, 0);
+    control(`${n}: tiene agujeros (alfa recortado)`, m.opacos < tira.anchoCuadro * tira.altoCuadro,
+      `${m.opacos} opacos de ${tira.anchoCuadro * tira.altoCuadro}`);
+  }
+  if (tirasDeEstado.alpha_dot_poison) {
+    const m = medirCuadro(tirasDeEstado.alpha_dot_poison.tira, 0);
+    control("el del veneno es una silueta BLANCA (índice 0 de su paleta)", m.r === 255 && m.g === 255 && m.b === 255 && m.opacos > 500,
+      `rgb(${m.r.toFixed(0)}, ${m.g.toFixed(0)}, ${m.b.toFixed(0)}), ${m.opacos} opacos`);
+  }
+}
+
 // ── EL FICHERO ──────────────────────────────────────────────────────────────
 writeFileSync(`${SALIDA}/../hud.json`, JSON.stringify({
   procedencia: {
@@ -262,6 +316,8 @@ writeFileSync(`${SALIDA}/../hud.json`, JSON.stringify({
   },
   barras,
   emblema,
+  // EL 93: los iconos de estado, por el nombre de archivo que pone el guion.
+  estado,
   // Los seis colores de suceso y los cvars van también aquí, para que el
   // fichero se pueda leer solo y se vea de dónde sale cada número.
   colores: COLORES_DE_SUCESO,
