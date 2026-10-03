@@ -14,6 +14,7 @@
 // Ver tools/recursos.mjs y doc/EXTRACTORES_MAPA.md.
 
 import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 
 export { MAPA_POR_DEFECTO, esNombreDeMapa } from "../src/play/mapa.js";
 import { MAPA_POR_DEFECTO, esNombreDeMapa } from "../src/play/mapa.js";
@@ -72,9 +73,24 @@ function validado(n) {
   return n;
 }
 
-/** El `.bsp` de ese mapa, o la ruta que se haya dado a mano. */
-export function bspDe(mapa, argv = process.argv.slice(2)) {
-  return argv.find((a) => a.endsWith(".bsp")) ?? `${CONTENIDO}/maps/${mapa}.bsp`;
+/** Donde `tools/contenido.mjs` deja los mapas NUESTROS compilados (el 88). */
+export const PROPIOS = "build/contenido/maps";
+
+/**
+ * El `.bsp` de ese mapa, o la ruta que se haya dado a mano.
+ *
+ * Desde el 88 hay dos sitios: los mapas del juego y los nuestros. **Un nombre
+ * que esté en los dos es un error y no una preferencia**: si uno tapara al otro
+ * en silencio, se hornearía un mapa distinto del que se cree, y sin aviso.
+ */
+export function bspDe(mapa, argv = process.argv.slice(2), existe = existsSync) {
+  const dado = argv.find((a) => a.endsWith(".bsp"));
+  if (dado) return dado;
+  const delJuego = `${CONTENIDO}/maps/${mapa}.bsp`;
+  const propio = `${PROPIOS}/${mapa}.bsp`;
+  if (!existe(propio)) return delJuego;
+  if (existe(delJuego)) throw new Error(`«${mapa}» está en el juego y en ${PROPIOS}: cambia el nombre del nuestro`);
+  return propio;
 }
 
 /** `build/<mapa>`, absoluta, que es lo que quieren `mkdir` y `writeFile`. */

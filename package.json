@@ -31,6 +31,8 @@
     "efectos": "node tools/efectos.mjs",
     "objetos": "node tools/objetos.mjs",
     "objetos:guion": "node tools/objetosguion.mjs",
+    "efectos:guion": "node tools/efectosguion.mjs",
+    "bichos:guion": "node tools/bichosguion.mjs",
     "armas": "node tools/armas.mjs",
     "escudos": "node tools/escudos.mjs",
     "suelo": "node tools/suelo.mjs",
@@ -45,6 +47,7 @@
     "iconos": "node tools/iconos.mjs",
     "sonda:edana82": "node sondas/edana82.mjs",
     "sonda:reverberacion82": "node sondas/reverberacion82.mjs",
+    "sonda:transicion89": "node sondas/transicion89.mjs",
     "sonda:mundo": "node sondas/mundo.mjs",
     "sonda:mapa": "node sondas/mapa.mjs",
     "sonda:cuerpo": "node sondas/cuerpo.mjs",
@@ -73,6 +76,7 @@
     "sonda:misiones33": "node sondas/misiones33.mjs",
     "sonda:vgui2_34": "node sondas/vgui2_34.mjs",
     "sonda:arranque36": "node sondas/arranque36.mjs",
+    "sonda:sala88": "node sondas/sala88.mjs",
     "sonda:ajustes37": "node sondas/ajustes37.mjs",
     "sonda:pantalla38": "node sondas/pantalla38.mjs",
     "sonda:muerte41": "node sondas/muerte41.mjs",
@@ -111,7 +115,8 @@
     "sonda:parpadeo82": "node sondas/parpadeo82.mjs",
     "sonda:menujugador85": "node sondas/menujugador85.mjs",
     "hornear": "node tools/hornear.mjs",
-    "insignias": "node tools/insignias.mjs"
+    "insignias": "node tools/insignias.mjs",
+    "contenido": "node tools/contenido.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

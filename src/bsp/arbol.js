@@ -171,3 +171,33 @@ export function leerLlegada(bsp, entidades, origen) {
     reapariciones: spawns.length,
   };
 }
+
+/**
+ * LAS LLEGADAS CON NOMBRE: dónde aparece quien viene por una transición. El 89.
+ *
+ * `leerLlegada` de arriba sólo se queda con UNA —la de empezar— y de las demás
+ * guarda el número. Pero las `ms_player_spawn` que llevan `message` no son
+ * reapariciones cualquiera: son **el otro extremo de una transición**. Quien
+ * cruza una `msarea_transition` aparece en el mapa destino en una de las que se
+ * llaman como su `desttrans`:
+ *
+ *     if (TransitionName && !FStrEq(STRING(pSpot->pev->message), TransitionName))
+ *       { fValidSpot = false; continue; }            player.cpp:2363-2367
+ *
+ * Coincidencia EXACTA: una sin `message` no vale para ningún nombre. Y entre las
+ * que valen se sortea (`RANDOM_LONG`, :2378), por eso se devuelven todas y no la
+ * primera: Edana tiene cinco que se llaman `sewer_entrance`.
+ *
+ * El rumbo es el segundo de los tres `angles`, como en todas las entidades de
+ * punto de GoldSrc.
+ */
+export function leerLlegadasConNombre(bsp, entidades, origen) {
+  return entidades
+    .filter((e) => e.classname === "ms_player_spawn" && e.message && origen(e))
+    .map((e) => {
+      const o = origen(e);
+      const suelo = sueloBajo(bsp, o);
+      const yaw = Number(String(e.angles ?? "0 0 0").trim().split(/\s+/)[1] ?? 0) || 0;
+      return { nombre: e.message, unidades: o, pies: [o[0], o[1], suelo ?? o[2]], yaw };
+    });
+}

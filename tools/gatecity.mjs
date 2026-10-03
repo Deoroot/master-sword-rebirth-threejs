@@ -37,7 +37,7 @@ import {
   estilosAnimados, cuboDeCara, claveDeCubo, variantesDeCubo,
 } from "../src/bsp/luz.js";
 import { emitirMalla, conEntidad, reservarLuxeles, MODOS_RENDER } from "../src/bsp/malla.js";
-import { leerLlegada, sePuedeEstar, contenidoEn } from "../src/bsp/arbol.js";
+import { leerLlegada, leerLlegadasConNombre, sePuedeEstar, contenidoEn } from "../src/bsp/arbol.js";
 import { monsterclipDeMapa, piezasEnEscena, OCUPADO, SOLIDO, CLIP_MINS, CLIP_MAXS } from "../src/bsp/clip.js";
 import { usoDeTriggerstate, objetivosDeManager } from "../src/play/disparadores.js";
 // EL 76: la regla de «¿se dibuja?» en el único sitio donde está escrita, para
@@ -1195,8 +1195,16 @@ const zonas = [
     musica: e.song ?? Object.keys(e).find((k) => /\.(mp3|ogg)$/i.test(k)) ?? null,
     grupo: e.targetname ?? null,
   }), COMO_DISPARADOR),
+  // El 89: las cuatro claves que lee `CAreaTransition::KeyValue`
+  // (msmapents.cpp:1886-1907) y el nombre propio. Hasta aquí sólo se horneaban
+  // `destmap` y `destname`, o sea a DÓNDE y CÓMO SE LLAMA, y faltaba lo que
+  // decide en qué punto del otro mapa se aparece: `desttrans`, que es el
+  // `message` de las `ms_player_spawn` del destino (ver `leerLlegadasConNombre`).
+  // `targetname` es el nombre de ESTA transición —el motor lo exige y se borra
+  // sin él, :1645-1648— y `master` la puede tener cerrada.
   ...volumenesDe("msarea_transition", (e) => ({
-    clase: "msarea_transition", destino: e.destmap ?? null, comoSeLlama: e.destname ?? null }), COMO_DISPARADOR),
+    clase: "msarea_transition", destino: e.destmap ?? null, comoSeLlama: e.destname ?? null,
+    llegada: e.desttrans ?? null, nombre: e.targetname ?? null, maestro: e.master ?? null }), COMO_DISPARADOR),
   ...volumenesDe("trigger_once", (e) => ({ clase: "trigger_once", dispara: e.target ?? null }), COMO_DISPARADOR),
 ];
 
@@ -1836,20 +1844,28 @@ for (const e of escaleras) {
 //
 // Si todos los volúmenes llenaran su caja, los planos serían trabajo para nada
 // y bastaría la envolvente. El estanque grande dice que no.
+//
+// CORRECCIÓN DEL 88: con CERO volúmenes, `Math.min()` de nada es `Infinity` y
+// esto salía FALLO —«todos llenan su caja»— en la sala del 88, que no tiene
+// agua. El control habla del extractor y no del mapa, y en un mapa sin agua no
+// hay con qué medirlo: se dice pendiente, que no es ni verde ni rojo.
 {
   const conPlanos = agua.filter((a) => a.piezas?.length);
   const peor = Math.min(...conPlanos.map((a) => a.llenaLaCaja));
-  if (!(peor < 0.9)) {
+  if (!conPlanos.length) {
+    console.log(`    los planos    PENDIENTE: este mapa no tiene volúmenes con planos y el control no se puede medir`);
+  } else if (!(peor < 0.9)) {
     console.error(
       `  FALLO: todos los volúmenes llenan su caja (el peor, el ${(peor * 100).toFixed(0)} %). ` +
       `Entonces los planos no hacen falta y sobra la mitad de esta sección.`
     );
     process.exit(1);
+  } else {
+    console.log(
+      `    los planos    hacen falta: el peor volumen llena el ${(peor * 100).toFixed(0)} % de su caja, ` +
+      `o sea que con la envolvente el ${((1 - peor) * 100).toFixed(0)} % sería agua inventada`
+    );
   }
-  console.log(
-    `    los planos    hacen falta: el peor volumen llena el ${(peor * 100).toFixed(0)} % de su caja, ` +
-    `o sea que con la envolvente el ${((1 - peor) * 100).toFixed(0)} % sería agua inventada`
-  );
 }
 
 // LO QUE EL 48 CORRIGIÓ, medido: los volúmenes INVISIBLES.
@@ -1936,6 +1952,8 @@ const luces = entidades
 // comentario de `leerLlegada()`: escribí aquí que no existía, con la clase a la
 // vista en la lista de entidades, y lo encontró alguien andando el mapa un minuto.
 const llegada = leerLlegada(bsp, entidades, origen);
+// El 89: las llegadas CON NOMBRE, el otro extremo de cada transición.
+const llegadasConNombre = leerLlegadasConNombre(bsp, entidades, origen);
 const entrada = llegada.unidades;
 console.log(`\n  entrada         ${llegada.clase} en ${entrada.map((v) => (v / U).toFixed(1)).join(", ")} m, ` +
   `${llegada.alturaSobreElSuelo} unidades (${(llegada.alturaSobreElSuelo / U).toFixed(2)} m) sobre el suelo`);
@@ -2925,6 +2943,11 @@ const manifiesto = {
     alturaSobreElSuelo: llegada.alturaSobreElSuelo,
     reapariciones: llegada.reapariciones,
   },
+  // El 89: dónde aparece quien llega por cada transición, por su nombre. Ver
+  // `leerLlegadasConNombre` en src/bsp/arbol.js. `yaw` en grados, del `.bsp`.
+  llegadas: llegadasConNombre.map((l) => ({
+    nombre: l.nombre, unidades: l.unidades, pies: aEscena(l.pies), yaw: l.yaw,
+  })),
   // Sitios donde se puede estar dentro de cada zona segura, para poder ir a ver
   // los interiores sin andar los 40 m de cueva que el mapa pone a propósito.
   pueblos: pueblos.map((p) => ({ ...p, escena: aEscena(p.pies) })),

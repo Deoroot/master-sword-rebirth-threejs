@@ -65,6 +65,15 @@ lo tiene, no. El hueco puede estar en el sitio donde buscas.
 
 **Ningún asset sin licencia al lado.**
 
+**Y desde el 88 hay contenido NUESTRO**, en `contenido/`: mapas descritos en
+código (`contenido/sala88.mjs`), que `npm run contenido -- <mapa>` convierte en
+`.map` y compila con VHLT a `build/contenido/maps/`. Lo aprobó el usuario. La
+descripción es nuestra; el `.bsp` lleva dentro texturas de MSR y por eso se
+queda en `build/` como todo lo extraído. Un `.map` o un `.script` hechos a mano
+todavía no tienen sitio: abrirles la puerta en `test/procedencia.test.mjs` es
+decisión del usuario, y la licencia de la carpeta también
+([contenido/LEEME.md](contenido/LEEME.md), [doc/CONTENIDO_88.md](doc/CONTENIDO_88.md)).
+
 ## 3. Cómo se comprueba que algo funciona
 
 Dos capas, y hacen falta las dos:

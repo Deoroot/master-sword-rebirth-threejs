@@ -1,5 +1,50 @@
 # Dónde se quedó esto
 
+> **EL 91: LOS BICHOS CORREN GUION (HÍBRIDO), Y EL VENENO LE QUITA VIDA AL
+> JUGADOR**, por tres agentes a la vez. La IA portada sigue mandando; el guion
+> del bicho nace con él y recibe `game_dodamage`, `game_damaged`/`game_struck`,
+> `game_parry` y `game_death` desde los puntos donde la IA decide, con los
+> bucles que la duplicarían (`npcatk_hunt`…) cerrados en una lista citada y
+> contada ([doc/BICHOS_GUION_91.md](doc/BICHOS_GUION_91.md), `sondas/costura91.mjs`).
+> `effects/dot_poison` funciona sobre el jugador con `xdodamage`, `$math`,
+> `$get_takedmg`, `scriptflags` ([doc/VENENO_91.md](doc/VENENO_91.md),
+> `sondas/veneno91.mjs`). Y el censo de los 846 guiones de monstruo, con la
+> propuesta de qué portar para la primera mazmorra
+> ([doc/CENSO_BICHOS_91.md](doc/CENSO_BICHOS_91.md), `npm run bichos:guion`).
+> **Lo siguiente:** que el DAÑO salga del evento de animación (500/600 del
+> `.mdl` → `bite1` → `dodamage`), que es lo que hace venenosa a la araña
+> jugando; `enchufarA` en `src/red/partida.js` (con servidor la costura no
+> corre); `game.monster.name.full`. Y `sondas/consecuencias.mjs` da 42/46 con
+> cuatro rojas que, según el agente, salen igual con la costura desenchufada:
+> sin diagnosticar.
+
+> **EL 90: EL GUION DEL JUGADOR, DE 259 A 314 DE 541 EVENTOS ENTEROS**, por
+> tres agentes a la vez. `applyeffect` funciona (el sumo sacerdote de Edana
+> cura: `sondas/efectos90.mjs`), `drainstamina` llena el aguante al entrar
+> (`sondas/aguante89c.mjs`), y doce comandos pequeños del intérprete. Lo que
+> NO: los venenos, porque **los bichos no corren guion** — es lo siguiente.
+> Hallazgos sin arreglar (`game_equipped` no lo llama nadie, el `const` de
+> cabecera, `trigger_push` ×39) en [doc/GUION_JUGADOR_90.md](doc/GUION_JUGADOR_90.md).
+
+> **EL 88 HIZO EL PRIMER MAPA NUESTRO, Y SE JUEGA EN LOS DOS MOTORES.** El
+> usuario quiere ampliar Gate City con misiones y mazmorras para jugadores de
+> hasta 500 de vida, y pidió probar ANTES que se puede. Lo nunca probado era
+> hacer contenido: todo lo que este port leía eran mapas oficiales.
+>
+> `contenido/sala88.mjs` (dos salas, un pasillo y una rata) → `tools/mapagen.mjs`
+> escribe el `.map` → `npm run contenido -- sala88` lo compila con VHLT
+> (`C:/Herramientas/vhlt`) → **Xash3D lo carga** (`map sala88`, servidor
+> dedicado: la rata se reconoce) y **aquí `sonda:sala88` da 10 de 10** entrando
+> por el menú, con dos roturas deliberadas que se ponen rojas. Tres controles del
+> horneado no sabían qué hacer con un mapa pequeño y se corrigieron con su nota.
+> Todo en [doc/CONTENIDO_88.md](doc/CONTENIDO_88.md).
+>
+> **Lo siguiente, en orden:** (1) ~~que el usuario mire la sala con el cliente
+> de Xash~~ — hecho: la jugó en los dos y se ven igual; (2) la `msarea_transition` entre la sala y Gate City; (3) el primer
+> guion propio, que pide abrir `test/procedencia.test.mjs` a un `.script`
+> NUESTRO; (4) la licencia de `contenido/`. Los puntos 3 y 4 los decide el
+> usuario.
+
 > **EL HISTORIAL SE REESCRIBIÓ ANTES DE PUBLICARLO (87), Y LOS HASHES DE ANTES
 > YA NO EXISTEN.** Lo eligió el usuario: 18 commits llevaban su correo de
 > trabajo y 4 otro personal, y un repositorio público los enseña. Ahora los 22

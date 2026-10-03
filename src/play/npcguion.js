@@ -32,7 +32,7 @@
 // La ficha (`build/gatecity/menus.json`) se queda como respaldo: un NPC cuyo
 // guion no esté horneado sigue enseñando su menú, apagado y con el motivo.
 
-import { Guion, GLOBALES, numDe } from "./guion.js";
+import { Guion, GLOBALES, numDe, textoDeVector, repeticionDe } from "./guion.js";
 import { leerMision, ponerMision, limpiarMisiones, volcarMisiones } from "./misiones.js";
 import { usarOpcion, nombreVisibleDe } from "./usaropcion.js";
 import { oirFrase, limpiarTexto } from "./oir.js";
@@ -97,6 +97,124 @@ export class RelojDeGuiones {
 const SALTOS_MAXIMOS = 8;
 let saltos = 0;
 
+/**
+ * ── EL 91: LA COSTURA ENTRE LA IA PORTADA Y EL GUION DEL BICHO ──────────────
+ *
+ * El diseño es híbrido y va dicho aquí porque es donde se nota: la IA portada
+ * a mano (`ia.js`, `manada.js`, `reaccion.js`) SIGUE mandando —a quién se
+ * persigue, cuándo se ataca, cuánto daño, quién huye y quién se encoge— y el
+ * guion del bicho corre a su lado y **recibe los eventos que el motor le
+ * dispararía**. Lo que el guion haría por su cuenta y la IA ya hace se cierra
+ * con esta lista: cada entrada es un evento del guion que, si corriera, sería
+ * una SEGUNDA copia de una regla que ya está portada, con su propio dado.
+ *
+ * Cerrar no es callar: cada llamada a un evento cerrado se CUENTA en
+ * `GuionDeNpc.costuraCuenta.cerrados`, y la sonda lo lee (el 66: un `=> {}` de
+ * relleno es donde vive una regla muerta).
+ *
+ * La lista salió de MEDIR: se creó el guion de los 12 guiones con ficha de
+ * combate de Gate City, Edana y sala88 y se les dispararon los eventos de
+ * combate del motor (ver doc/BICHOS_GUION_91.md, §1). `medido: true` son los
+ * que se vieron correr y duplicaban algo. Hay TRES con `medido: false`, y van
+ * marcados para que no se lean como medidos: se llega a ellos por un camino
+ * que la medida no recorrió (un `repeatdelay` que este puerto no arma, o una
+ * rama que hoy corta un getter sin portar), y sin cerrarlos moverían el
+ * cuerpo el día que ese camino se abra.
+ */
+export const CIERRE_DE_BICHO = Object.freeze([
+  { evento: "npcatk_hunt", medido: true,
+    cita: "monsters/base_npc_attack_new.script:230-232 (`callevent CYCLE_TIME npcatk_hunt`)",
+    porque: "el bucle de caza; lo lleva `Cazador.tic` (ia.js) desde `Manada.cazar`" },
+  { evento: "hunting_mode_go", medido: false,
+    cita: "monsters/base_npc_attack.script:62-63 (`repeatdelay CYCLE_TIME`)",
+    porque: "el mismo bucle en la familia vieja (rata, jabalí, arañas). NO MEDIDO: es un `repeatdelay` y ningún guion de NPC arma sus repeticiones en este puerto; se cierra para el día que se armen" },
+  { evento: "npcatk_settarget", medido: true,
+    cita: "monsters/base_npc_attack_new.script:400",
+    porque: "elegir objetivo; lo hace `Cazador.apuntarA`/`tic`" },
+  { evento: "npcatk_target", medido: true,
+    cita: "monsters/base_npc_attack.script:588; base_npc_attack_new.script:394",
+    porque: "el mismo, con su nombre viejo" },
+  { evento: "npcatk_go_agro", medido: true,
+    cita: "monsters/base_npc_attack.script:220",
+    porque: "ponerse hostil al recibir; lo hace `apuntaAlQueTePega` (reaccion.js) en `Manada.herir`" },
+  { evento: "npcatk_retaliate", medido: true,
+    cita: "monsters/base_npc_attack_new.script:1096; base_npc_attack.script:262",
+    porque: "cambiar de objetivo al recibir; `cambiaDeObjetivo`/`apuntaAlQueTePega` (el 82)" },
+  { evento: "npcatk_checkflee", medido: true,
+    cita: "monsters/base_npc_attack_new.script:1142; base_npc_attack.script:303",
+    porque: "decidir si huye; `reaccionAlGolpe` (reaccion.js), con su propio dado" },
+  { evento: "npcatk_flee", medido: true,
+    cita: "monsters/base_npc_attack_new.script:778; base_npc_attack.script:319",
+    porque: "huir; `Cazador.huyeDe`. Medido: el zombi pedía `setmovedest` aquí" },
+  { evento: "npcatk_checkflinch", medido: true,
+    cita: "monsters/base_npc_attack_new.script:1156; base_npc_attack.script:415",
+    porque: "decidir si se encoge; `reaccionAlGolpe`" },
+  { evento: "npcatk_suspend_ai", medido: false,
+    cita: "monsters/base_npc_attack_new.script:1224; base_npc_attack.script:710",
+    porque: "quedarse quieto al encogerse; `reaccion.quietoHasta` en `Manada.herir`. NO MEDIDO: lo pide `base_struck.script:208` tras `if $get(ent_me,isalive)`, que hoy da «0» para un NPC" },
+  { evento: "npcatk_alert_all_allies", medido: true,
+    cita: "monsters/base_monster_shared.script:1071-1095, llamado desde base_npc.script:169-172",
+    porque: "avisar a los aliados al morir; `Manada.avisar` desde `Manada.matar`" },
+  { evento: "chicken_run", medido: false,
+    cita: "monsters/base_npc_attack_new.script:926; base_anti_stuck.script:422",
+    porque: "mueve el cuerpo, que es de la IA. El anti-atasco NO está portado en la IA: cerrarlo es un hueco declarado, no una copia. NO MEDIDO: hacen falta siete `game_damaged` con `game.time > AS_ATTACKING`, y `game.time` vale 0 en un guion de NPC" },
+  { evento: "game_parry", medido: true,
+    cita: "monsters/base_monster_shared.script:843-857 (`callevent game_parry ATTACKER_ID` dentro de `game_damaged`)",
+    porque: "la tirada del parry del bicho la hace `parryDelBicho` (parry.js:101); el guion tiraría otro dado. Lo cerrado es la llamada INTERNA: la costura dispara `game_parry` cuando la IA decide que para" },
+]);
+
+/** Los nombres de `CIERRE_DE_BICHO`, para mirar rápido. */
+export const EVENTOS_CERRADOS = new Set(CIERRE_DE_BICHO.map((c) => c.evento));
+
+/**
+ * Un número como lo escribe `UTIL_VarArgs("%f", x)`: seis decimales. Es el
+ * formato de PARAM2 de `game_damaged` y de PARAM1 de `game_struck`
+ * (msmonsterserver.cpp:2283 y :2384), y un guion que compare con `equals`
+ * lee la cadena, no el número.
+ */
+export const comoF = (x) => (Number.isFinite(Number(x)) ? Number(x).toFixed(6) : "0.000000");
+
+/**
+ * Un punto de la escena (metros, Y arriba) a UNIDADES del motor (Z arriba).
+ * Es la inversa exacta de `aEscena` (src/bsp/lector.js:402-408).
+ */
+// El `+ 0` no es decoración: `-0 * U` es `-0`, y `VecToString` del motor
+// imprimiría «-0.00» sólo si el número de verdad fuera un cero negativo, que
+// aquí lo fabricaría el cambio de ejes y no la física (guion.js, `textoDeVector`).
+export const aMotor = (p, U = 39.37) => [p[0] * U + 0, -p[2] * U + 0, p[1] * U + 0];
+
+/**
+ * LOS PARÁMETROS DE `game_dodamage`, en su orden — giattack.cpp:2036-2045.
+ *
+ *     Parameters.add(Damage.AttackHit ? "1" : "0");
+ *     Parameters.add(pTarget ? EntToString(pTarget) : "none");
+ *     Parameters.add(VecToString(Damage.vecSrc));
+ *     Parameters.add(VecToString(EndPos));
+ *     Parameters.add(Damage.sDamageType.c_str());
+ *     Parameters.add(AttackHit ? UTIL_VarArgs(" %.1f damage.", flDamage) : "0");
+ *
+ * Tres cosas que no se ven leyendo el guion:
+ *
+ *   - **el sexto lleva un ESPACIO delante** (« 0.4 damage.»), y al fallar no
+ *     es «0.0 damage.» sino la cadena «0»;
+ *   - el tipo de un `dodamage` de NPC sin quinto parámetro es «generic»
+ *     (`Damage.sDamageType = "generic"`, npcscript.cpp:1116), no la cadena vacía;
+ *   - `vecSrc` es el OJO del atacante (`EyePosition()`, npcscript.cpp:1121) y
+ *     el final, con el objetivo a tiro, su `Center()` (:1197-1198). Por la
+ *     esfera de `DoDamage` (giattack.cpp:1559-1576) la traza que acierta acaba
+ *     en el mismo `Center()`, así que los dos casos dan el mismo punto.
+ */
+export function paramsDeDodamage({ acierto, objetivo = "none", desde = null, hasta = null, tipo = "", dano = 0 } = {}) {
+  const v = (p) => (Array.isArray(p) && p.length >= 3 ? textoDeVector(p) : "(0.00,0.00,0.00)");
+  return [
+    acierto ? "1" : "0",
+    String(objetivo ?? "none"),
+    v(desde), v(hasta),
+    String(tipo || "generic"),
+    acierto ? ` ${(Number(dano) || 0).toFixed(1)} damage.` : "0",
+  ];
+}
+
 export function entornoDe({
   npc = null, jugador = null, catalogo = null,
   suceso = null, animar = null, programar = null, azar = null,
@@ -147,11 +265,27 @@ export function entornoDe({
   // tres veces el pueblo entero — un alcance infinito y callado, que es la
   // forma del 79. Va inyectado porque la escala la sabe el nivel.
   unidadesPorMetro = 39.37,
+  // LOS EFECTOS. `(ruta, params, {aplicador}) => efecto|null`: pegarle un
+  // efecto AL JUGADOR, que es el único anfitrión de efectos de este puerto
+  // (`src/play/efectos.js`). Sin él, `applyeffect` se apunta.
+  aplicarEfecto = null,
 } = {}) {
   /** `RetrieveEntity(ref)`: aquí sólo hay dos entidades, el jugador y el NPC. */
   const esElJugador = (ref) => {
     const r = String(ref ?? "");
-    return Boolean(jugador) && (r === jugador.ref || r === "ent_lastspoke" || r === "player");
+    if (!jugador) return false;
+    if (r === jugador.ref || r === "ent_lastspoke" || r === "player") return true;
+    // EL 91: `ent_laststruckbyme` es a quién pegó este bicho la última vez:
+    // `pAttMonster->StoreEntity(pTarget, ENT_LASTSTRUCKBYME)`, justo antes de
+    // `game_damaged_other` (giattack.cpp:1754-1756). Lo apunta la costura.
+    //
+    // `ent_laststruck` —quién le pegó a ÉL— NO se resuelve todavía, y es a
+    // propósito: su uso más visible es el «You've slain» de `game_death`
+    // (base_npc.script:192-199), y con `game.monster.name.full` sin portar en
+    // el intérprete saldría «You've slain game.monster.name.full», una frase
+    // falsa con cara de mensaje del juego (el 65). Ver doc/BICHOS_GUION_91.md.
+    if (r === "ent_laststruckbyme") return entorno.golpeadoPorMi === jugador.ref;
+    return false;
   };
   const personaje = () => jugador?.personaje ?? null;
   /** «x y z» o «(x,y,z)» a tres números, que es como los guardan los guiones. */
@@ -319,6 +453,29 @@ export function entornoDe({
     /** `callevent <retardo> <evento>`: lo encola quien tenga reloj. */
     programar: (segundos, que) => programar?.(segundos, que),
 
+    /**
+     * `applyeffect <objetivo> <guion> [params]` desde un NPC — scriptcmds.cpp:1865.
+     *
+     * El objetivo tiene que ser una entidad CON GUION (:1873), y aquí la única
+     * que lo es y no es un NPC es el jugador. El caso que lo pide es el sumo
+     * sacerdote de Edana: «Ask to be Healed» -> `say_heal` -> `attack_1` ->
+     * `applyeffect ent_lastspoke effects/effect_rejuv2 0 1000 $get(ent_me,id)`
+     * (edana/highpriest.script:94). Sin esto decía «let me help you with
+     * that...» y no curaba nada.
+     *
+     * El aplicador va con el asa que ESTE guion se da a sí mismo
+     * (`$get(ent_me,id)`): es la que el guion acaba de pasarle al efecto como
+     * parámetro, y el efecto le pregunta el nombre por ella.
+     */
+    aplicarEfecto(ref, ruta, params = [], { desde = null } = {}) {
+      if (!esElJugador(ref) || !aplicarEfecto) {
+        apuntar?.("applyeffect", `${ref} ${ruta}${aplicarEfecto ? " (objetivo sin guion)" : " (sin anfitrión de efectos)"}`);
+        return null;
+      }
+      const id = String(desde?.resolver?.("$get(ent_me,id)") ?? "0");
+      return aplicarEfecto(ruta, params, { aplicador: { id, propiedad: (p) => entorno.propiedad("ent_me", p) } });
+    },
+
     /** `$get(<ent>,<prop>)` — sólo las propiedades de `PROPIEDADES`. */
     propiedad(ref, prop) {
       const p = personaje();
@@ -443,6 +600,14 @@ export function entornoDe({
      */
     sonar(archivo, { volumen = null, corta = false } = {}) {
       apuntar?.("sonido", `${archivo}${corta ? " (corta el canal)" : volumen === null ? "" : ` @${volumen}`}`);
+    },
+
+    /**
+     * El 89b. `sound.play3d`/`svsound.play3d`: igual que `sonar`, NO llega al
+     * altavoz; se apunta archivo, volumen y punto (unidades del motor).
+     */
+    sonarEn(archivo, { volumen = null, origen = null } = {}) {
+      apuntar?.("sonido", `${archivo} @${volumen} en (${(origen ?? []).join(",")})`);
     },
 
     /** `setprop`: NO llega a nada — las propiedades vivas del NPC no se tocan. */
@@ -839,8 +1004,30 @@ export class GuionDeNpc {
     // El 81/82: los cuatro de `game_postspawn`, tal como los hornea el 82:
     // `{titulo, dmgmulti, hpmulti, params}`, los cuatro en cadena. Sin esto
     // el evento no se llama, que es como estaba.
-    nacer = null }) {
+    nacer = null,
+    // LOS EFECTOS: reenviado a `entornoDe` aquí abajo, por el 63.
+    aplicarEfecto = null,
+    // EL 91: la lista de eventos que la IA portada ya hace (`CIERRE_DE_BICHO`).
+    // Sólo la llevan los bichos con ficha de combate; sin ella el guion es el
+    // de siempre, el de un NPC al que se le habla. `nacimiento` dice de qué
+    // vida del bicho es este guion: un área que lo vuelve a sacar crea una
+    // entidad NUEVA en el motor (msmapents.cpp:1206-1230), y con ella un guion
+    // nuevo.
+    cierre = null, nacimiento = 0 }) {
     this.npc = npc;
+    this.nacimiento = nacimiento;
+    this.cierre = cierre ? new Set([...cierre].map((c) => (typeof c === "string" ? c : c.evento))) : null;
+    /**
+     * Lo que la costura ha hecho con este guion, para la sonda y las pruebas:
+     * `recibidos` son los eventos del motor que le han llegado, `cerrados` las
+     * llamadas a eventos de `CIERRE_DE_BICHO` que NO se ejecutaron, y
+     * `absorbidos` lo que el guion pidió al cuerpo mientras corría un evento
+     * de combate y no se hizo porque el cuerpo es de la IA (ver `absorbe`).
+     */
+    this.costuraCuenta = { recibidos: {}, cerrados: {}, absorbidos: {}, retirado: 0 };
+    /** Profundidad de eventos de combate en curso. Ver `costura`. */
+    this.enCostura = 0;
+    this.retirado = false;
     this.hablaElJugador = hablaElJugador;
     this.catalogo = catalogo;
     this.opciones = [];
@@ -849,10 +1036,20 @@ export class GuionDeNpc {
     // El entorno necesita saber a quién tiene delante, y eso cambia entre una
     // llamada y otra: se le da un hueco que este objeto rellena.
     const dueño = this;
+    // EL 91: el cuerpo es de la IA mientras corre un evento de combate. Ver
+    // `absorbe`. Fuera de la costura los dos ganchos pasan tal cual: un
+    // `playanim once nod` del menú sigue moviendo la cabeza.
+    const animarFiltrado = animar
+      ? (nombre, modo) => (dueño.absorbe("animar", nombre) ? undefined : animar(nombre, modo))
+      : null;
+    const destinoFiltrado = mandarADestino
+      ? (d, o) => (dueño.absorbe("setmovedest", d?.entidad ?? (d ? "punto" : "none")) ? false : mandarADestino(d, o))
+      : null;
     this.entorno = entornoDe({
-      npc, catalogo, suceso, animar, programar, azar, tiendas, entidades, borrarDelMundo,
+      npc, catalogo, suceso, animar: animarFiltrado, programar, azar, tiendas, entidades, borrarDelMundo,
       ventanaDeAviso, abrirTienda, trato,
-      guionDeOtro, todosLosGuiones, mandarADestino, animarAndando, lineaDeVision, unidadesPorMetro,
+      guionDeOtro, todosLosGuiones, mandarADestino: destinoFiltrado, animarAndando, lineaDeVision, unidadesPorMetro,
+      aplicarEfecto,
       // Las retrollamadas de la tienda (`<cb>_success` y compañía) son eventos
       // del propio guion, así que vuelven por aquí.
       llamarEvento: (nombre) => dueño.guion?.llamar(nombre, []),
@@ -867,12 +1064,93 @@ export class GuionDeNpc {
     // `menuitem.remove` — npcscript.cpp:1003. Por ID y **todas** las que
     // coincidan, que es lo que dice el comentario del motor.
     this.entorno.quitarOpcion = (id) => dueño.quitar(id);
+    /**
+     * `setstat <nombre> <v…>` EN UN MONSTRUO — npcscript.cpp:1305-1318. El 91.
+     *
+     *     if (!IsPlayer()) {
+     *       if (msInputStatName == "parry")
+     *         SetScriptVar("MONSTER_PARRY", atof(Params[1]));  }
+     *
+     * En un NPC SÓLO `parry` hace algo, y no toca ninguna estadística: pone la
+     * variable que lee su propio `game_damaged`
+     * (base_monster_shared.script:843). Lo destapó la costura: sin esto la
+     * araña de Gate City (`setstat parry 50 0 0`) tenía `MONSTER_PARRY` sin
+     * poner y su guion no tiraba nunca su dado de parry — o sea que el cierre
+     * de `game_parry` no tenía nada que cerrar y su control salía verde vacío.
+     *
+     * El valor va por `SetVar(float)`, que lo escribe con `_gcvt(v, 10)`
+     * (script.cpp:4785-4789): con MSVC eso da «50.» con el punto. Aquí se
+     * escribe «50»; los dos usos que tiene —un `>` y un `$rand`— leen el
+     * número y no la cadena, y la diferencia no se ha medido en Xash.
+     */
+    /**
+     * `$get(ent_me,dmgmulti)` — `RETURN_FLOAT(pMonster->m_DMGMulti)`,
+     * scriptcmds.cpp:1478, con el `"%.2f"` de `RETURN_FLOAT` (iscript.h:224).
+     * El 91: es lo único que le faltaba al `game_dodamage` de
+     * base_monster_shared (:1340, dentro de las ramas `NPC_DOT_*`) para correr
+     * entero. `m_DMGMulti` sale del `dmgmulti` del mapa, que es el PARAM2 de
+     * `game_postspawn` (msmonsterserver.cpp:286) y ya viene horneado en
+     * `nacer`. Sólo para el propio NPC: de otra entidad este guion no sabe nada
+     * y se sigue contestando «0», como antes.
+     */
+    this.entorno.propiedadesPropias = new Set(["dmgmulti"]);
+    const propiedadBase = this.entorno.propiedad;
+    this.entorno.propiedad = (ref, prop, resto) => {
+      if (String(prop) === "dmgmulti") {
+        return String(ref) === "ent_me" ? numDe(nacer?.dmgmulti ?? "1").toFixed(2) : "0";
+      }
+      return propiedadBase(ref, prop, resto);
+    };
+    this.entorno.ponerEstadistica = (nombre, valores = []) => {
+      if (String(nombre) !== "parry") return;
+      dueño.guion?.vars?.set("MONSTER_PARRY", String(numDe(valores[0])));
+    };
     this.guion = new Guion({
       eventos: ficha?.eventos ?? [],
       preload: ficha?.preload ?? [],
       entorno: this.entorno,
       nombre: npc?.script ?? "",
     });
+    /**
+     * ── EL 91: EL CIERRE, PUESTO ANTES DE NACER ──────────────────────────
+     *
+     * Se tapa `llamar` EN LA INSTANCIA, y no en la clase, porque es por donde
+     * pasan las tres maneras de llegar a un evento, las tres dentro del
+     * `case "callevent"` de guion.js: el `callevent` sin retardo
+     * (`this.llamar`), el que lleva retardo (lo programa con `this.llamar`
+     * dentro) y el `calleventloop`. Va antes del
+     * bloque sin nombre porque `npc_spawn` ya arranca el bucle de caza
+     * (`callevent NPC_SPAWN_PRED2 npcatk_hunt`, base_npc_attack_new.script:148).
+     *
+     * Devuelve si el evento EXISTE aunque no lo corra: así un `callevent` a un
+     * cerrado no se apunta además como «evento que no existe», que sería
+     * contar dos veces lo mismo y con la etiqueta equivocada.
+     *
+     * Y un guion RETIRADO —el de una vida anterior del bicho— no corre nada:
+     * sus eventos con retardo siguen en el reloj compartido y vencerán, pero
+     * la entidad que los pidió ya no existe en el motor.
+     */
+    if (this.cierre) {
+      const deVerdad = this.guion.llamar.bind(this.guion);
+      this._llamarDeVerdad = deVerdad;
+      const g = this.guion;
+      g.llamar = (nombre, params = []) => {
+        if (dueño.retirado) { dueño.costuraCuenta.retirado++; return false; }
+        if (dueño.cierre.has(nombre)) {
+          const c = dueño.costuraCuenta.cerrados;
+          c[nombre] = (c[nombre] ?? 0) + 1;
+          return g.eventos.some((e) => e.nombre === nombre);
+        }
+        return deVerdad(nombre, params);
+      };
+      /**
+       * Los eventos con `repeatdelay` que este guion trae y que NO corren.
+       * No es cosa del cierre: ningún guion de NPC arma sus repeticiones en
+       * este puerto (sólo el jugador, los efectos y los objetos llaman a
+       * `armarRepeticiones`). Se cuenta aquí para que se vea en el bicho.
+       */
+      this.repeticionesSinArmar = (ficha?.eventos ?? []).filter((e) => repeticionDe(e) !== null).length;
+    }
     // ── EL BLOQUE SIN NOMBRE SE EJECUTA ENTERO, Y ANTES (60) ─────────────
     //
     // Un `{ ... }` sin nombre de evento no es sólo una lista de constantes:
@@ -953,6 +1231,58 @@ export class GuionDeNpc {
       String(nacer?.params ?? "none"),
     ]);
   }
+
+  /**
+   * **UN EVENTO DE COMBATE DEL MOTOR, A ESTE GUION** — el 91.
+   *
+   * Lo llama la costura (`InteraccionesNpc.alCombate`) desde los sitios donde
+   * la IA portada ya ha decidido el golpe, con los parámetros del motor. Pasa
+   * POR ENCIMA del cierre a propósito: `game_parry` está cerrado para la
+   * llamada que el guion se haría a sí mismo con su propio dado, y abierto
+   * para la que hace la costura cuando el dado de la IA dice que para.
+   *
+   * Mientras corre, `enCostura` está arriba y el guion no mueve el cuerpo:
+   * ver `absorbe`.
+   *
+   * @returns si el guion tenía algún bloque con ese nombre.
+   */
+  costura(evento, params = []) {
+    if (this.retirado) { this.costuraCuenta.retirado++; return false; }
+    const r = this.costuraCuenta.recibidos;
+    r[evento] = (r[evento] ?? 0) + 1;
+    const llamar = this._llamarDeVerdad ?? ((n, p) => this.guion.llamar(n, p));
+    this.enCostura++;
+    try { return llamar(String(evento), params.map(String)); }
+    finally { this.enCostura--; }
+  }
+
+  /**
+   * **EL CUERPO ES DE LA IA** mientras corre un evento de combate — el 91.
+   *
+   * Medido: al recibir `game_death` los catorce guiones de combate piden
+   * `playanim critical ANIM_DEATH` (base_npc.script:185), que `Manada.matar`
+   * ya pone con `deUnaVez`; repetirlo rebobina la muerte. Y el zombi, al
+   * recibir `game_struck`, pide `playanim break` y un `setmovedest` para huir,
+   * que son de `reaccionAlGolpe`. Lo que el guion pida AL CUERPO dentro de la
+   * costura se cuenta aquí y no se hace. Lo demás —variables, sonidos que se
+   * apuntan, mensajes, `applyeffect`— corre entero.
+   *
+   * @returns `true` si lo ha absorbido (y entonces quien llama no lo hace).
+   */
+  absorbe(tipo, que) {
+    if (!this.cierre || this.enCostura <= 0) return false;
+    const a = this.costuraCuenta.absorbidos;
+    const k = `${tipo} ${que ?? ""}`.trim();
+    a[k] = (a[k] ?? 0) + 1;
+    return true;
+  }
+
+  /**
+   * El guion de una vida anterior del bicho deja de correr. `revivir` en el
+   * puerto es una entidad NUEVA en el motor (`CREATE_ENT` + `Spawn`,
+   * msmapents.cpp:1206-1230): sus variables, su botín y sus relojes no pasan.
+   */
+  retirar() { this.retirado = true; }
 
   /** `menuitem.register` — npcscript.cpp:940, con su orden por prioridad. */
   anotar(op) {

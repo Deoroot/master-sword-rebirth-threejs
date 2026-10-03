@@ -103,6 +103,13 @@ export const ACCIONES = [
   // de `kb_act.lst:41`. Faltaba: los paneles que teníamos no pasaban por esta
   // tabla, así que la F no existía. Ver `src/vgui/interactuar.js`.
   { clave: "interactuar", nombre: "Interact with NPC", cfg: "f", boton: false },
+  // ACEPTAR, el 89. `bind "ENTER" "accept"` (config.cfg:6) y su nombre de
+  // `kb_act.lst:44`. Es lo que pulsa quien está en una `msarea_transition`
+  // para viajar —el comando llega a `MSQuery`, multiplay_gamerules.cpp:1725-1732—
+  // y en el motor también acepta a un miembro de grupo, que aquí no existe.
+  // El chat no la pisa: sólo se queda el Enter mientras su cajetín está abierto
+  // (src/juego/chat.js:220), y se abre con `y`/`u`/`j`, como en el juego.
+  { clave: "aceptar", nombre: "Accept", cfg: "ENTER", boton: false },
   { clave: "opciones", nombre: "Options", cfg: "g", boton: false },
   { clave: "menu", nombre: "Main Menu", cfg: "ESCAPE", boton: false },
   { clave: "marcador", nombre: "Scoreboard", cfg: "TAB", boton: false },

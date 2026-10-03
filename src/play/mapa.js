@@ -78,8 +78,30 @@ export const MAPA_POR_DEFECTO = "gatecity";
  * carpeta `scripts/gertenheld_forest2` —la vecina es `gertenheld_cave`—, así
  * que este mapa no declara menús de NPC. `src/play/json.js` ya da por bueno
  * que ese archivo falte.
+ *
+ * ── EL CUARTO, DEL 88, Y EL PRIMERO QUE NO ES DE MASTER SWORD ──────────────
+ *
+ * `sala88` es NUESTRO: lo escribe `contenido/sala88.mjs` y lo compila VHLT
+ * (`npm run contenido -- sala88`). Está aquí para entrar por el menú, que es lo
+ * único que cuenta (CLAUDE.md §3), y no porque sea un mapa para jugar: dos
+ * salas, un pasillo y una rata. Como `gertenheld_forest2`, no está en
+ * `npm run hornear`, así que quien no lo compile y lo hornee y lo elija —o le
+ * toque en «< Random Map >»— verá la pantalla de error. Es el precio que ya se
+ * pagaba con el tercero.
+ *
+ * ── EL QUINTO, DEL 89: A DONDE LLEVA LA CLOACA DE EDANA ────────────────────
+ *
+ * `edanasewers` entra porque es el **destino de una `msarea_transition` de
+ * Edana** (`sewer_entrance`, `desttrans sewer_start`), y una transición que no
+ * llega a ningún sitio no se puede medir. Lo pidió el usuario: portar la regla
+ * Y hornear el mapa al que lleva. Trae 55 colocaciones —16 murciélagos, slimes,
+ * cofres, una araña, un vecino—, 13 guiones, su presentación y su sonido.
+ *
+ * Como `gertenheld_forest2`, **no trae `menus.json`** y por la misma razón: el
+ * juego no tiene carpeta `scripts/edanasewers` (sólo `edanasewers_old`, con un
+ * `map_startup`). Y como los dos de antes, no está en `npm run hornear`.
  */
-export const MAPAS_PORTADOS = Object.freeze(["gatecity", "edana", "gertenheld_forest2"]);
+export const MAPAS_PORTADOS = Object.freeze(["gatecity", "edana", "gertenheld_forest2", "sala88", "edanasewers"]);
 
 /**
  * LOS MAPAS QUE PUEDEN SALIR DETRÁS DEL MENÚ PRINCIPAL.

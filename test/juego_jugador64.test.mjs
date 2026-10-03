@@ -236,7 +236,7 @@ describe("`player/player` cargado de verdad (64)", () => {
   });
 
   // ── LO QUE NO SE CUENTA ──────────────────────────────────────────────────
-  test("los dos consejos que nadie puede disparar están nombrados, no olvidados", { skip: !hay }, () => {
+  test("los consejos que nadie puede disparar están nombrados, no olvidados (desde el 89, uno)", { skip: !hay }, () => {
     // El apartado 4: si hoy no hay quien dispare el evento, se declara
     // pendiente en vez de contarlo entre los verdes. Y se comprueba que el
     // evento SÍ está cargado, para que el día que haya grupos funcione solo.

@@ -348,14 +348,37 @@ export function extraerBicho(relativo, {
   // desplazamientos de canal tomados como absolutos, 2 de 36 y 354; sin animar,
   // 28 de 36 y 21. El bueno da 36 de 36 y cero. Entre un caso y otro no hay
   // nada, así que estos umbrales separan sin afinarlos.
-  if (!sinOraculoDeCaja) {
+  // ── UN MODELO SIN SECUENCIAS NO SE PUEDE JUZGAR, Y NO ES UN ERROR ────────
+  //
+  // El 89, al hornear `edanasewers`. El oráculo pregunta «¿cabe alguna
+  // secuencia en su caja?», y con CERO secuencias la respuesta es «0 de 0»: no
+  // hay nada que descomprimir y por tanto nada que pueda estar mal
+  // descomprimido. Pero el `!caben` lo leía como el fallo de descompresión y
+  // paraba el horneado entero.
+  //
+  // El caso es `models/null.mdl`: 1 672 bytes, **0 huesos, 0 secuencias y 0
+  // bodyparts**, caja nula. Es un modelo vacío A PROPÓSITO —lo usan 32 guiones
+  // del juego para entidades con lógica y sin cuerpo: trampas, monitores,
+  // efectos—, y en las cloacas lo trae `other/lure` (`setmodel null.mdl`,
+  // lure.script:10), dos veces. Gate City y Edana no tienen ninguno, así que el
+  // juez se escribió sin verlo nunca: *un control hereda el supuesto de la
+  // clase para la que se escribió* (el 69), y aquí el supuesto era «un bicho
+  // tiene al menos una animación».
+  //
+  // La condición es EXACTA, no un umbral: con una sola secuencia el oráculo
+  // vuelve a mandar entero, así que esto no afloja nada para un modelo de
+  // verdad.
+  if (!sinOraculoDeCaja && secuencias.length > 0) {
     if (!caben) {
       throw new Error(`${nombre}: ni una secuencia cabe en su caja. La descompresión está mal.`);
     }
     if (peorGlobal > 16) {
       throw new Error(`${nombre}: el peor vértice se sale ${peorGlobal.toFixed(1)} unidades de su caja.`);
     }
-  } else if (caben === secuencias.length && peorGlobal === 0) {
+  } else if (sinOraculoDeCaja && caben === secuencias.length && peorGlobal === 0) {
+    // (El `sinOraculoDeCaja &&` es del 89: sin él, el modelo vacío de arriba
+    // caía AQUÍ —0 de 0 «pasa limpio»— y se le reñía por pedir una exención
+    // que nadie había pedido. Esta rama es sólo para quien la pide.)
     // Y el control de la salida: si el modelo por el que se ha pedido saltarse
     // el juez lo pasa limpiamente, la razón es falsa y hay que quitarla.
     throw new Error(

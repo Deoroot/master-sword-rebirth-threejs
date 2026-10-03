@@ -28,12 +28,17 @@
 // `game_transition_entered` no los llama nadie. Se cargan igual —el día que
 // haya grupos funcionan sin tocar nada— pero **no se cuentan entre lo hecho**,
 // que es lo que manda el apartado 4 de CLAUDE.md cuando no hay segundo caso.
+//
+// CORRECCIÓN DEL 89, al lado: las transiciones ya existen, así que de los cuatro
+// consejos se disparan TRES. Sólo `game_party_join` sigue sin quien lo llame.
 
-import { Guion, entornoVacio } from "./guion.js";
+import { Guion, entornoVacio, enteroDe } from "./guion.js";
 import { Consejos } from "./consejos.js";
 import { RelojDeGuiones } from "./npcguion.js";
 import { desplazamientoDeVista } from "./efectosdeguion.js";
 import { habilidadDeGuion } from "./habilidad.js";
+import { propiedadesDe } from "../juego/stats.js";
+import { EfectosDeEntidad, BanderasDeEntidad, ResistenciasDeEntidad } from "./efectos.js";
 
 /**
  * Los eventos que el motor le manda al jugador y que este puerto SÍ dispara.
@@ -79,6 +84,10 @@ export const EVENTOS_DEL_JUGADOR = Object.freeze({
    *                                    genericitem.cpp:679-683
    */
   EMPUNA: "game_equipped",
+  // CORRECCIÓN DEL 89c, al lado: el título de esta lista dice «que este puerto
+  // SÍ dispara», y éste NO lo dispara nadie. Lo llama una prueba a mano. Por
+  // eso el «Your Parry value is now 2» del 64 —la línea con la que empieza
+  // este archivo— no sale nunca jugando. Ver `SIN_QUIEN_LOS_LLAME`.
   // ── EL 67: el jugador entra en el mundo, y el mapa se enciende ──────────
   /**
    * Te acaban de poner en el mapa. **Sin parámetros.**
@@ -116,7 +125,21 @@ export const EVENTOS_DEL_JUGADOR = Object.freeze({
  */
 export const SIN_QUIEN_LOS_LLAME = Object.freeze({
   game_party_join: "no hay grupos: el canal «party» del chat existe desde el 61 y nadie se une a nada",
-  game_transition_entered: "no hay transiciones entre mapas: se cambia de mapa por el menú, no pisando un `ms_trigger`",
+  // CORRECCIÓN DEL 89: aquí estaba también `game_transition_entered`, con «no
+  // hay transiciones entre mapas: se cambia de mapa por el menú». Dejó de ser
+  // verdad en el 89: lo dispara `src/play/transicion.js` al pisar una
+  // `msarea_transition`, y su consejo —y el `trans_message` de debajo— se ven
+  // en pantalla (`sondas/transicion89.mjs`). Se quita de la lista en vez de
+  // dejar el diagnóstico caducado, que es justo lo que el 79 enseñó a no hacer.
+  //
+  // ── EL 89c, contando ANTES de portar `drainstamina`, `addvelocity`,
+  // `removeitem`, `addgold` y `setstat`: casi todo su uso en el guion del
+  // jugador cuelga de estos cinco, y ninguno lo llama nadie aquí.
+  game_equipped: "lo declara EVENTOS_DEL_JUGADOR.EMPUNA desde el 66, pero NADIE lo llama en el juego: sólo `test/juego_objetos66.test.mjs`, a mano. Detrás van `update_parry` y su `setstat parry`, y además lee el objeto por `$get(<objeto>,handpref|scriptvar)`, que este entorno no resuelve: llamado hoy pondría el parry a 0",
+  game_leapback: "el salto atrás llega por `game_leap back <aguante>`, que el CLIENTE manda al pulsar dos veces atrás con `ms_doubletapdodge 1` (input.cpp:454-464, client.cpp:517-529). Este puerto no tiene el doble toque: su `drainstamina` y su `addvelocity` no corren",
+  game_leapleft: "como `game_leapback`, con el doble toque de izquierda; pide además Martial Arts por encima de 10, que un personaje nuevo no tiene",
+  game_leapright: "como `game_leapleft`, a la derecha",
+  game_player_got_from_store: "`comprar` lo DICE (src/play/tienda.js, `eventos`) y `comprarDeLaTienda` no lo manda: es la forma del 62. Detrás van el `addgold` de las bolsas de oro y el `removeitem`, y ninguna tienda portada vende `gold_pouch_*` (salen de cofres, global/server/treasure.script)",
 });
 
 /**
@@ -156,6 +179,29 @@ export class GuionDelJugador {
     // 63 se perdió justo aquí, con el parámetro en la firma y sin reenviar, y
     // las pruebas siguieron verdes porque llamaban al entorno a mano.
     mapa = null,
+    // EL 89. `game.players`, por el mismo camino y con el mismo aviso del 63.
+    jugadores = null,
+    // EL 89. `infomsg`: la ventana de arriba a la izquierda. Ver el entorno.
+    aviso = null,
+    // LOS EFECTOS: la `TablaDeEfectos` horneada (`npm run efectos:guion`). El
+    // jugador es el ANFITRIÓN de lo que le apliquen —la cura del sacerdote, el
+    // sentarse— y sin tabla un `applyeffect` sobre él se apunta. Firma Y uso
+    // abajo, por el 63.
+    efectos = null,
+    // EL 89c. Lo que el guion le cambia al jugador y no vive en `personaje`:
+    //   aguante  `{ leer, poner, maximo }` — `drainstamina`
+    //   fisica   `{ empujar(v, sumar), colocar(v) }`, v en UNIDADES y ejes
+    //            del motor — `setvelocity`/`addvelocity`/`setorigin`
+    //   cambio   `(que) => void` tras tocar `personaje` (oro, objetos,
+    //            habilidades), para guardarlo y remontar lo que haga falta
+    // Van en la firma Y en el entorno de abajo: el 63 otra vez.
+    aguante = null, fisica = null, cambio = null,
+    // EL 91. La puerta del DAÑO que le llega al jugador desde un guion —el
+    // `xdodamage` de un veneno—: `(golpe) => void`, con `golpe = { dano,
+    // tipo, acierto, atacante, infligidor }` y el daño YA multiplicado por sus
+    // resistencias. Quien la inyecta (`src/main.js`) la manda por el MISMO
+    // camino que el golpe de un bicho. Firma Y uso abajo, por el 63.
+    herir = null,
   } = {}) {
     this.personaje = personaje;
     this._ahora = ahora;
@@ -174,6 +220,14 @@ export class GuionDelJugador {
     this.noSoportados = [];
     /** Los nombres que el guion ha disparado con `usetrigger` (el 67). Para medir. */
     this.disparados = [];
+    // ── EL 91: LO QUE ES DE LA ENTIDAD Y NO DEL GUION ────────────────────
+    /** `m_scriptflags` (scriptcmds.cpp:5265). Los venenos se apuntan aquí. */
+    this.banderas = new BanderasDeEntidad({ esJugador: true });
+    /** `GenericTDM` y `TakeDamageModifiers` (msmonster.h:341-343). */
+    this.resistencias = new ResistenciasDeEntidad();
+    this._herir = herir;
+    /** Cada daño recibido por esta puerta, ya resistido. Para medir. */
+    this.heridas = [];
 
     const dueño = this;
     this.guion = new Guion({
@@ -185,12 +239,48 @@ export class GuionDelJugador {
       // `game.map.name` (el 83). Sin esta línea el gancho vive a `null` en
       // todas las partidas y la guarda del bono del gauntlet no se cumple.
       mapa,
+      // `game.players` (el 89): sin él, el consejo de la primera transición
+      // sale cortado — su «Press enter» va detrás de `game.players == 1`.
+      jugadores,
       // SOBRE `entornoVacio()`, no en vez de él. El intérprete pide ganchos
       // que el jugador no usa —el azar, las listas, el mundo— y si falta uno
       // no da un hueco: **revienta el evento entero a medias**, así que el
       // consejo de después no llega. Pasó con `azarFlotante`.
-      entorno: { ...entornoVacio(), ...entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparador }) },
+      entorno: { ...entornoVacio(), ...entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparador, aviso, aguante, fisica, cambio }) },
     });
+    // ── LOS EFECTOS: EL JUGADOR ES SU ANFITRIÓN ──────────────────────────
+    //
+    // Un efecto es otro guion que se AÑADE a `m_Scripts` del objetivo
+    // (scriptedeffects.cpp:27). Su `ent_me` es el jugador, y lo que el
+    // jugador oye lo oye también él (`CallScriptEvent` recorre todos,
+    // script.cpp:5932-5937): por eso `llamar` y `paso` de abajo los incluyen.
+    // Ver `src/play/efectos.js`.
+    this.efectos = new EfectosDeEntidad({
+      tabla: efectos,
+      ahora: () => this._ahora(),
+      anfitrion: {
+        // El mismo asa que le dan los NPC (`contextoDelJugador`, interacciones.js).
+        id: () => String(dueño.personaje?.id ?? "player"),
+        esJugador: true,
+        vivo: () => (dueño.personaje?.vida ?? 1) > 0,
+        entorno: () => dueño.guion.entorno,
+        llamar: (n, p) => dueño.llamar(n, p),
+        // ── EL 91 ──
+        // `entindex()`: en GoldSrc los jugadores son las entidades
+        // 1..maxClients, y en una partida de uno éste es la 1.
+        indice: () => 1,
+        // `GetFirstScriptVar`: el guion PROPIO del jugador (script.cpp:5949).
+        // `resolver` devuelve el nombre si no existe, como `GetVar` (:4741).
+        variable: (n) => dueño.guion.resolver(String(n)),
+        banderas: () => dueño.banderas,
+        resistencias: () => dueño.resistencias,
+        herir: (g) => dueño.recibirDano(g),
+      },
+    });
+    Object.assign(this.guion.entorno, this.efectos.ganchos({
+      base: { ...this.guion.entorno },
+      apuntar: (tipo, nombre) => this.noSoportados.push({ tipo, nombre }),
+    }));
     // ── EL ORDEN DEL MOTOR, QUE NO ES EL QUE UNO ESCRIBIRÍA ──────────────
     //
     // Primero se ARMAN los relojes y DESPUÉS corre el bloque sin nombre, y al
@@ -209,7 +299,11 @@ export class GuionDelJugador {
 
   /** `CallScriptEvent(<nombre>, params)`. Devuelve si algún evento respondió. */
   llamar(nombre, params = []) {
-    return this.guion.llamar(String(nombre), params.map((p) => String(p)));
+    const ps = params.map((p) => String(p));
+    const propio = this.guion.llamar(String(nombre), ps);
+    // Y a sus efectos, que son guiones de la misma entidad (script.cpp:5932-5937).
+    const deEfectos = this.efectos?.llamar(String(nombre), ps) ?? false;
+    return propio || deEfectos;
   }
 
   /**
@@ -222,6 +316,26 @@ export class GuionDelJugador {
    */
   recibir(que, cantidad) { this._dar?.(que, cantidad); }
 
+  /**
+   * EL 91. Un golpe que ya ha ENTRADO (`golpeDirecto`, `efectos.js`) llega al
+   * jugador. Aquí sólo se le aplican sus resistencias —el `GenericTDM` y los
+   * `takedmg` de su guion, `CMSMonster::TraceAttack`,
+   * msmonsterserver.cpp:2269-2281— y se manda por la puerta que inyecta el
+   * juego. El escudo, el parry, el mensaje, `game_damaged` y restar la vida
+   * son de esa puerta, que es la de un golpe de bicho (`src/main.js`).
+   *
+   * El ORDEN del motor es escudo -> parry -> resistencias; aquí las
+   * resistencias van antes. Para un veneno da igual —ni el escudo ni el
+   * parry paran nada con «effect» o «poison» en el tipo (escudo.js,
+   * parry.js)—, y por eso se deja dicho y no arreglado.
+   */
+  recibirDano(g) {
+    const dano = this.resistencias.multiplicar(g.dano, g.tipo);
+    this.heridas.push({ t: this._ahora(), dano, tipo: g.tipo, de: g.atacante?.nombre ?? null });
+    if (!this._herir) { this.noSoportados.push({ tipo: "daño", nombre: `${g.comando ?? "?"} sin puerta de daño` }); return; }
+    this._herir({ ...g, dano });
+  }
+
   /** El paso del reloj: los eventos con `repeatdelay`. */
   paso(dt = 0) {
     // Los dos relojes, y son distintos: `repeatdelay` se mide contra el reloj
@@ -229,7 +343,9 @@ export class GuionDelJugador {
     // anterior. Se mueven los dos aquí para que quien llama no tenga que saberlo.
     const a = this.guion.pasoDeRepeticiones(this._ahora());
     const b = this.reloj.paso(dt);
-    return a + b;
+    // Los efectos llevan sus propios relojes: cada `CScript` tiene los suyos.
+    const c = this.efectos?.paso(dt) ?? 0;
+    return a + b + c;
   }
 
   /** Los consejos ya vistos, para guardarlos en el personaje. */
@@ -255,9 +371,208 @@ export class GuionDelJugador {
  * más corto a propósito: el jugador no tiene menú de interacción, ni tienda, ni
  * IA. Lo que sí tiene y un NPC no es **a quién se le enseña un consejo**.
  */
-function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparador }) {
+/**
+ * `GetSubSkillByName` — stats.cpp:69-80. «prof» es alias de la primera; luego
+ * `SkillTypeList` (stats.cpp:36-41) y `SpellTypeList` (:43-50), y el índice es
+ * la posición EN SU LISTA: `power` y `lightning` son los dos el 2.
+ */
+export function indiceDeSubestadistica(nombre) {
+  const n = String(nombre ?? "").toLowerCase();
+  if (n === "prof") return 0;
+  const armas = ["proficiency", "balance", "power"].indexOf(n);
+  if (armas >= 0) return armas;
+  return ["fire", "ice", "lightning", "divination", "affliction"].indexOf(n);
+}
+
+function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparador, aviso, aguante, fisica, cambio }) {
   const yo = dueño;
+  // Las referencias que en el guion del jugador son ÉL. Son las mismas que
+  // acepta `llamarExterno` más abajo, más `player`, que es su `jugador.ref`.
+  const esYo = (ref) => ["ent_me", "ent_owner", "ent_currentplayer", "player"]
+    .includes(String(ref ?? "").toLowerCase());
+  const apuntar = (tipo, nombre) => yo.noSoportados.push({ tipo, nombre: String(nombre) });
   return {
+    // ── EL 89c: LO QUE CAMBIA EL ESTADO DEL JUGADOR ───────────────────────
+    //
+    // Cada uno con la regla del motor aquí y el estado inyectado. Lo que no
+    // es el jugador —un monstruo, otro jugador— se apunta: no hay a quién
+    // dárselo desde este entorno, y un `=> {}` lo escondería.
+
+    /**
+     * `drainstamina <ref> <n>`, con `n` ya truncado por el intérprete
+     * (`WRITE_LONG` de un `float`, scriptcmds.cpp:2996-2998). La regla es la
+     * del CLIENTE, que es quien resta:
+     *
+     *     player.Stamina -= flAddAmt;
+     *     player.Stamina = V_max(player.Stamina, 0);
+     *     player.Stamina = V_min(player.Stamina, MaxStamina);
+     *                                          clplayer.cpp:131-136
+     *
+     * En el guion del jugador corre de verdad en `activate_stuff`
+     * (`drainstamina ent_me -1000`, player_main.script:147): un segundo
+     * después de entrar, el aguante se llena.
+     */
+    drenarAguante(ref, n) {
+      if (!esYo(ref)) { apuntar("drainstamina a otro", ref); return; }
+      if (!aguante) { apuntar("drainstamina sin aguante", ref); return; }
+      let v = aguante.leer() - n;
+      v = Math.max(v, 0);
+      v = Math.min(v, aguante.maximo());
+      aguante.poner(v);
+    },
+
+    /**
+     * `gold <n>` y `addgold <n>`: el oro de quien corre el guion.
+     *
+     *     m_Gold = atoi(Params[0]);                       npcscript.cpp:237
+     *     GiveGold(iGoldAmount);                           npcscript.cpp:249
+     *
+     * `gold` pone a pelo, sin tope: un negativo se queda negativo. `addgold`
+     * pasa por `CMSMonster::GiveGold`, que no deja bajar de cero
+     * (`V_max(-m_Gold, iAmount)`, msmonstershared.cpp:583-589).
+     *
+     * Y **SIN MENSAJE**, aunque `CBasePlayer::GiveGold` imprima «You recieve %i
+     * gold coins» (player.cpp:5694-5698): `GiveGold` NO es virtual
+     * (msmonster.h:423, player.h:575), y la llamada sale de dentro de un
+     * método de `CMSMonster`, así que el compilador la ata a la versión de
+     * `CMSMonster`. Un mensaje plausible en su sitio es el 65.
+     */
+    oroPropio(modo, n) {
+      const p = yo.personaje;
+      if (!p) { apuntar(modo === "poner" ? "gold sin personaje" : "addgold sin personaje", n); return; }
+      const actual = Number(p.oro) || 0;
+      p.oro = modo === "poner" ? n : actual + Math.max(-actual, n);
+      cambio?.("oro");
+    },
+
+    /**
+     * `removeitem <nombre>` — npcscript.cpp:621-634, con «Thothie - this
+     * doesn't work» encima, y se entiende al ver con qué lo llama el guion del
+     * jugador: `removeitem PARAM1` con PARAM1 = una ENTIDAD (`EntToString`,
+     * player.cpp:5940), y `GetItem` busca por subcadena del NOMBRE —
+     * `strstr(ItemName, nombre)`, manos primero y luego dentro de las mochilas
+     * (msmonstershared.cpp:196-221)—. Una entidad no es subcadena de ningún
+     * nombre: en el motor esa línea no quita nada, y quien quita es el
+     * `deleteent` de debajo.
+     *
+     * Aquí la mochila es una lista plana con las manos apuntando a ella, así
+     * que «dentro de las mochilas» es «el resto de la lista». Lo que NO se
+     * porta: los objetos PUESTOS (armaduras) que no son mochila no entran en
+     * la búsqueda del motor, y aquí no se distinguen.
+     */
+    quitarObjeto(nombre) {
+      const p = yo.personaje;
+      if (!p) { apuntar("removeitem sin personaje", nombre); return; }
+      const objetos = Array.isArray(p.objetos) ? p.objetos : [];
+      const casa = (id) => String(id ?? "").includes(nombre);   // `strstr`
+      let quitado = null;
+      for (const mano of ["derecha", "izquierda"]) {
+        const id = p.manos?.[mano];
+        if (id && casa(id)) {
+          quitado = objetos.find((o) => (o.uid ?? o.id) === id || o.id === id) ?? null;
+          p.manos[mano] = null;
+          break;
+        }
+      }
+      if (!quitado) {
+        const enMano = new Set(Object.values(p.manos ?? {}).filter(Boolean));
+        quitado = objetos.find((o) => !enMano.has(o.uid ?? o.id) && !enMano.has(o.id) && casa(o.id)) ?? null;
+      }
+      if (!quitado) return;                           // `if (pItem)`: nada
+      p.objetos = objetos.filter((o) => o !== quitado);
+      cambio?.("objetos");
+    },
+
+    /**
+     * `setvelocity`/`addvelocity` sobre el jugador — scriptcmds.cpp:7155-7214.
+     *
+     * La resistencia al empuje y `m_nopush` sólo miran a un MONSTRUO que no
+     * sea quien llama (:7184-7200), y el jugador que se empuja a sí mismo es
+     * quien llama: sin reducción, con `override` o sin él. Lo único que
+     * queda es `if (!pEntity->IsAlive()) abort_push` (:7203).
+     */
+    velocidad(ref, v, { sumar = false } = {}) {
+      if (!esYo(ref)) { apuntar(sumar ? "addvelocity a otro" : "setvelocity a otro", ref); return; }
+      if (!fisica) { apuntar("velocidad sin física", ref); return; }
+      if (!((Number(yo.personaje?.vida) || 0) > 0)) return;   // `IsAlive`
+      fisica.empujar(v, sumar);
+    },
+
+    /**
+     * `setorigin` sobre el jugador — scriptcmds.cpp:4508-4528:
+     * `pev->origin = StringToVec(...)` a pelo. Sin mirar si está vivo, sin
+     * trazar y sin tocar la velocidad. El `origin` es el CENTRO de la caja,
+     * no los pies; pasarlo a la escena es de quien inyecta `fisica`.
+     */
+    ponerOrigen(ref, v) {
+      if (!esYo(ref)) { apuntar("setorigin a otro", ref); return; }
+      if (!fisica) { apuntar("setorigin sin física", ref); return; }
+      fisica.colocar(v);
+    },
+
+    /**
+     * `setstat <est> <valores...>` en un JUGADOR — npcscript.cpp:1324-1355.
+     *
+     * Dos formas. Sin punto busca la estadística por nombre (`FindStat`, sin
+     * mayúsculas, msmonstershared.cpp:505-512) y le pone las subestadísticas
+     * EN ORDEN, tantas como valores traiga, con `atoi` y **sin tope**. Con
+     * punto —`swordsmanship.power 5`— pone una sola y **con** tope
+     * (`V_min(value, STATPROP_MAX_VALUE)`, 100).
+     *
+     * Los nombres son los `DllName` (stats.cpp:226-240) y el orden de las
+     * subestadísticas el de `propiedadesDe`, que es el de `SkillTypeList` y
+     * `SpellTypeList`. Los atributos (`Strength`…) también son estadísticas
+     * en el motor, pero aquí se derivan y no se guardan: se apunta.
+     */
+    ponerEstadistica(nombre, valores) {
+      const p = yo.personaje;
+      if (!p?.habilidades) { apuntar("setstat sin personaje", nombre); return; }
+      const n = String(nombre);
+      const punto = n.indexOf(".");
+      const clave = (punto < 0 ? n : n.slice(0, punto)).toLowerCase();
+      const hab = p.habilidades[clave];
+      if (!hab) { apuntar("setstat", n); return; }        // «stat %s not found!»
+      // El ORDEN es el del motor y no el de las claves del documento, que
+      // depende de cómo se guardó.
+      const props = propiedadesDe(clave);
+      const sub = (k) => (hab[k] ??= { valor: 0, exp: 0 });
+      if (punto < 0) {
+        for (let i = 0; i < props.length && i < valores.length; i++) {
+          sub(props[i]).valor = enteroDe(valores[i]);
+        }
+      } else {
+        const i = indiceDeSubestadistica(n.slice(punto + 1));
+        // El motor indexa sin mirar el tamaño (:1349): `parry.power` escribiría
+        // fuera. Eso no se porta; se apunta.
+        if (i < 0 || i >= props.length) { apuntar("setstat", n); return; }
+        sub(props[i]).valor = Math.min(enteroDe(valores[0]), 100);
+      }
+      cambio?.("habilidades");
+    },
+
+    // ── EL 91: LAS BANDERAS Y LAS RESISTENCIAS DEL JUGADOR ────────────────
+    /** `scriptflags`/`$get_scriptflag` sobre sí mismo. De otro, se apunta (lo hace el intérprete). */
+    banderas(ref) { return esYo(ref) ? yo.banderas : null; },
+    /** `$get_takedmg(<él>,<tipo>)` — script.cpp:2569-2592. */
+    recibeDano(ref, tipo) {
+      if (esYo(ref)) return yo.resistencias.leer(tipo);
+      apuntar("$get_takedmg de otro", ref);
+      return "-1";
+    },
+    /**
+     * `takedmg <tipo|all> <mult> [adjust]` — npcscript.cpp:1057-1104. Con
+     * `all` además deja `MSC_ARMOR_ALL` en su guion (`SetScriptVar` con
+     * `_gcvt(…, 10)`, script.cpp:4785-4789: NO MEDIDO el formato exacto de
+     * `_gcvt`; aquí, diez cifras significativas sin ceros de cola), y siempre
+     * avisa con `game_set_takedmg <tipo> <mult con %f> [adjust]` (:1096-1101).
+     */
+    ponerRecibeDano(tipo, mult, extra = null) {
+      yo.resistencias.poner(tipo, mult);
+      const m = Math.fround(mult);
+      if (tipo === "all") yo.guion.vars.set("MSC_ARMOR_ALL", String(Number(m.toPrecision(10))));
+      yo.llamar("game_set_takedmg", [tipo, m.toFixed(6), ...(extra !== null ? [extra] : [])]);
+    },
+
     jugador: {
       get ref() { return "player"; },
       get personaje() { return yo.personaje; },
@@ -340,7 +655,9 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
     llamarExterno(ref, nombre, params = []) {
       const r = String(ref ?? "").toLowerCase();
       if (r === "ent_me" || r === "ent_owner" || r === "ent_currentplayer") {
-        yo.guion.llamar(String(nombre), params.map(String));
+        // `yo.llamar` y no `yo.guion.llamar`: es `CallScriptEvent`, que llega
+        // también a los EFECTOS que lleva puestos (script.cpp:5932-5937).
+        yo.llamar(String(nombre), params.map(String));
         return;
       }
       yo.noSoportados.push({ tipo: "callexternal", nombre: `${ref} ${nombre}` });
@@ -350,6 +667,23 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
     // un `programar` vacío el efecto se queda puesto en el primer valor y no
     // vuelve. Era un no-op y la prueba del aterrizaje lo cazó.
     programar: (s, que) => yo.reloj.programar(s, que),
+    // ── `infomsg`, que SÍ tiene: el 89 ────────────────────────────────────
+    //
+    // `infomsg <ent_me|all> <título> <texto>` es `SendHUDMsg` (scriptcmds.cpp:4058)
+    // y va a la ventana de arriba a la izquierda. El intérprete lo manda a
+    // `aviso`, y aquí no había: caía en el `aviso: () => {}` de `entornoVacio`,
+    // y al lado un `ventanaDeAviso: () => {}` bajo el letrero de «lo que el
+    // jugador no tiene». **Catorce `infomsg` del guion del jugador no salían
+    // nunca**, entre ellos el «Travel to next area (…)» / «This leads to …» de
+    // la transición, que es lo que el usuario enseñó en sus dos capturas del
+    // juego original. Es el `=> {}` del 66 y del 81 otra vez: un gancho vacío
+    // donde una regla vive sin correr.
+    //
+    // `ent_me` y `all` llegan los dos a esta pantalla: aquí sólo hay un jugador
+    // mirándola. La presentación del mapa NO viene por aquí —la pinta
+    // `src/play/intro.js`, que lee `mapa.json`—, y que no salga dos veces lo
+    // vigila `sondas/transicion89.mjs`.
+    aviso: (_quien, titulo, texto) => aviso?.(String(titulo ?? ""), String(texto ?? "")),
     // Lo que el jugador no tiene. Se dejan vacíos en vez de omitirlos para que
     // el intérprete no tenga que preguntar si existen.
     anadirOpcion: () => {}, quitarOpcion: () => {}, abrirMenu: () => {},

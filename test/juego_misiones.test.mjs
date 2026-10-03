@@ -330,7 +330,19 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
     // en el motor y que no usa ni uno de los 2 884 guiones, y puso `exitevent`
     // —el que de verdad corta un evento, 108 líneas en 53 ficheros— y
     // `returndata`, el alias de `return`. Ver `test/gauntlet83.test.mjs`.
-    assert.equal(COMANDOS.size, 78);
+    // El 89b sumó doce, los pequeños del intérprete que pedía el guion del
+    // jugador: ver `test/comandos89b.test.mjs`, que los nombra uno a uno.
+    // El 89c sumó nueve, los que cambian el estado del jugador
+    // (`test/jugador89c.test.mjs`), y los efectos del 89 tres más
+    // (`applyeffect`, `removeeffect`, `removescript`). Escrito como suma para
+    // que se vea de quién es cada parte.
+    // El 91 sumó cuatro, los que pedía el veneno: `dodamage` y `xdodamage`
+    // (las dos formas de hacer daño desde un guion), `scriptflags` y
+    // `takedmg`. Ver `test/veneno91.test.mjs`.
+    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4);
+    for (const c of ["dodamage", "xdodamage", "scriptflags", "takedmg"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es del 91`);
+    }
     assert.equal(COMANDOS.has("exit"), false, "`exit` no es un comando del motor (el 83)");
     for (const c of ["exitevent", "returndata"]) {
       assert.ok(COMANDOS.has(c), `falta ${c}, que es del 83`);
@@ -375,8 +387,15 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
       assert.ok(COMANDOS.has(`g_${c}`), `falta la global de ${c}`);
     }
   });
-  test("y 21 getters", () => {
-    assert.equal(GETTERS.size, 21);
+  test("y 28 getters", () => {
+    // 21 hasta el 90; el 91 sumó seis para los venenos: `$get_takedmg`,
+    // `$math`, `$string_upto` y su gemelo `$string_from` (la MISMA función,
+    // script.cpp:98 y :119), `$get_scriptflag` y `$pass`; y uno más que pidió
+    // el censo de los bichos, `$can_damage`.
+    assert.equal(GETTERS.size, 21 + 6 + 1);
+    for (const g of ["$get_takedmg", "$math", "$string_upto", "$string_from", "$get_scriptflag", "$pass", "$can_damage"]) {
+      assert.ok(GETTERS.has(g), `falta ${g}, que es del 91`);
+    }
     // El 83: los dos de la guarda del bono del gauntlet. Entran juntos porque
     // por separado no sirven de nada — la guarda es
     // `$get_find_token(MAPS_GAUNTLET_START,$lcase(game.map.name)) == -1`.

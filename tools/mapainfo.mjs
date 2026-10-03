@@ -29,13 +29,16 @@ import { join } from "node:path";
 import { leerBsp, leerEntidades } from "../src/bsp/lector.js";
 import { resolverMapa, presentacion } from "../src/play/intro.js";
 
-import { mapaDeArgv, posicionalesDe, salidaDe, enSalida, MAPA_POR_DEFECTO } from "./mapa.mjs";
+import { mapaDeArgv, posicionalesDe, salidaDe, enSalida, bspDe, MAPA_POR_DEFECTO } from "./mapa.mjs";
 // Conserva `mapainfo edana`, además de la opción común `--mapa edana`.
 const MAPA = mapaDeArgv(process.argv.slice(2), posicionalesDe()[0] ?? MAPA_POR_DEFECTO);
 const ASSETS = process.env.MSR_ASSETS ?? "../MSC/assets/msr";
 const SCRIPTS = process.env.MSR_SCRIPTS ?? "../MSC/MSCScripts/scripts";
 
-const RUTA_BSP = join(ASSETS, "maps", `${MAPA}.bsp`);
+// Desde el 88, sin `MSR_ASSETS` el `.bsp` lo busca `bspDe`, que también conoce
+// los mapas nuestros de `build/contenido/maps`. Antes la ruta del juego estaba
+// escrita aquí y este paso era el único de los siete que no los encontraba.
+const RUTA_BSP = process.env.MSR_ASSETS ? join(ASSETS, "maps", `${MAPA}.bsp`) : bspDe(MAPA);
 const RUTA_GUION = join(SCRIPTS, MAPA, "map_startup.script");
 
 if (!existsSync(RUTA_BSP)) {

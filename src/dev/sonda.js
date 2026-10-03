@@ -45,6 +45,7 @@ import { CINTURA } from "../play/manada.js";
 import { choques, enPantallaCompleta, hayAtrapaTeclado, tecladoAtrapado }
   from "../juego/navegador.js";
 import { relacionDeRazas } from "../bsp/razas.js";
+import { aplicadorDeBicho } from "../play/efectos.js";
 
 /**
  * Arma `window.probe`.
@@ -607,6 +608,12 @@ export function montarSonda(S) {
     fisica: {
       perfil: () => S.perfil,
       aguante: () => S.aguante,
+      /**
+       * El 89c. Al entrar el aguante ya está lleno, y lo que llena
+       * `activate_stuff` un segundo después es lo mismo: sin vaciarlo antes,
+       * el control leería el valor de reposo (CLAUDE.md §4).
+       */
+      ponerAguante: (v) => { S.aguante = Number(v); return S.aguante; },
       corriendo: () => S.corriendo,
       /** Lo que el modelo dice que deberia andar este personaje, en unidades. */
       vitales() {
@@ -2394,6 +2401,31 @@ export function montarSonda(S) {
       /** Volver a mirar la mochila, que es la costura entre comprar y correr. */
       sincronizar: () => S.sincronizarObjetosVivos?.() ?? 0,
     },
+    /**
+     * EL 91: EL VENENO. Ponerle un efecto al jugador con UN BICHO DE VERDAD de
+     * la manada como atacante, por la misma puerta que usa el juego
+     * (`guionJugador.efectos.aplicar`, la que reciben las interacciones como
+     * `aplicarEfecto`). El bicho se ve por `aplicadorDeBicho`, que es lo que
+     * usará el guion de un bicho el día que corra (otra sesión). La sonda NO
+     * resta vida ni llama al daño: eso lo hace el efecto por `golpear`.
+     */
+    veneno: {
+      /** El índice en la manada del primer bicho VIVO con ese guion. */
+      bicho: (script) => (S.bichos?.instancias ?? []).findIndex((i) => i.ficha?.script === script && !i.muerto && !i.dormido),
+      aplicar(ruta, { duracion = "5", dano = "3", indice = 0 } = {}) {
+        const i = S.bichos?.instancias?.[indice];
+        if (!i || !S.guionJugador) return null;
+        const ap = aplicadorDeBicho(i, { indice, razas: S.tablaDeRazas ?? null });
+        const ef = S.guionJugador.efectos.aplicar(String(ruta), [String(duracion), ap.id, String(dano), "none"], { aplicador: ap });
+        return { puesto: Boolean(ef), id: ef?.id ?? null, atacante: ap.nombre, asa: ap.id, t: S.guionJugador._ahora() };
+      },
+      activos: () => S.guionJugador?.efectos?.activos ?? [],
+      /** Lo que ha llegado por la puerta del daño, ya resistido. */
+      heridas: () => (S.guionJugador?.heridas ?? []).map((h) => ({ ...h })),
+      banderas: () => (S.guionJugador?.banderas?.lista ?? []).map((b) => ({ ...b })),
+      noSoportados: () => (S.guionJugador?.efectos?.lista ?? []).flatMap((e) =>
+        [...e.guion.noSoportados, ...e.noSoportados].map((x) => `${e.ruta}: ${x.tipo} ${x.nombre}`)),
+    },
     teclas: {
       mapa: () => ({ ...S.teclas.mapa }),
       nombre: (c) => nombreDeTecla(c),
@@ -2490,6 +2522,42 @@ export function montarSonda(S) {
      * hostil no te vea, que te vea y no se mueva, que llegue y no pegue, o que
      * te pegue el pueblo entero. Las cinco se ven igual de bien en una captura.
      */
+    // ── EL 91: LA COSTURA ENTRE LA IA Y EL GUION DE CADA BICHO ──────────────
+    //
+    // Sólo lectura. Lo que se lee es lo que el GUION ha recibido y cerrado
+    // (`GuionDeNpc.costuraCuenta`), no lo que la IA cree que ha mandado: un
+    // contador del lado que envía no mide que haya llegado (el 67).
+    costura: {
+      /** La de un bicho por su guion (`monsters/giantrat`) y orden, o `null`. */
+      de(guion, n = 0) {
+        const l = (S.bichos?.instancias ?? []).filter((i) => i.ficha?.script === guion);
+        const i = l[n] ?? null;
+        if (!i) return null;
+        const g = S.guionesVivos?.get?.(i.id) ?? null;
+        return {
+          id: i.id, guion, vivo: !i.muerto, dormido: Boolean(i.dormido), nacimientos: i.nacimientos ?? 0,
+          conGuion: Boolean(g), conCierre: Boolean(g?.cierre), retirado: Boolean(g?.retirado),
+          recibidos: { ...(g?.costuraCuenta?.recibidos ?? {}) },
+          cerrados: { ...(g?.costuraCuenta?.cerrados ?? {}) },
+          absorbidos: { ...(g?.costuraCuenta?.absorbidos ?? {}) },
+          // Lo que el guion del mod hace con lo que recibe: la variable que su
+          // anti-atasco mueve en `game_dodamage` (base_anti_stuck.script:386-400).
+          fallosSeguidos: g?.guion?.buscarVar?.("AS_MISS_COUNT")?.valor ?? null,
+          // Los `game_dodamage` del rastro, con sus parámetros, los últimos.
+          dodamage: (g?.guion?.rastro ?? []).filter((r) => r.evento === "game_dodamage").slice(-6).map((r) => [...r.params]),
+        };
+      },
+      /** Lo de toda la partida: nacidos, renacidos y lo que no llegó. */
+      partida() {
+        const m = S.bichos?.manada ?? null;
+        return {
+          ...(S.costuraDeBichos ?? {}),
+          enchufada: Boolean(m?.oyente),
+          sinOyente: m?.costuraSinOyente ?? null,
+          fallos: m?.costuraFallos ?? null,
+        };
+      },
+    },
     ia: {
       /**
        * QUIEN ESTA EN EL MUNDO Y QUIEN NO, de solo lectura.

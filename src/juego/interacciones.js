@@ -1,7 +1,10 @@
 // Las conversaciones pertenecen a la partida, no al dibujo ni al panel.
 // Extraído de main.js: conserva el camino de msmonsterserver.cpp:2884-3013.
 // No importa DOM ni Three; la selección del objetivo sigue junto al combate.
-import { GuionDeNpc, RelojDeGuiones } from "../play/npcguion.js";
+import { GuionDeNpc, RelojDeGuiones, CIERRE_DE_BICHO, comoF, aMotor, paramsDeDodamage } from "../play/npcguion.js";
+// El 91: el nombre de la habilidad como lo manda el motor en PARAM6 de
+// `game_damaged` (`pStat->m_Name`, msmonsterserver.cpp:2290-2304).
+import { HABILIDADES } from "./stats.js";
 import { Entidades } from "../play/entidades.js";
 import { Tiendas, Comercio } from "../play/tienda.js";
 import { opcionesDe, opcionesDelJugador } from "../play/opciones.js";
@@ -10,6 +13,25 @@ import { descripcionDeObjeto, perdonar } from "../play/menujugador.js";
 // El 79: la voz del jugador se monta y se mide con LA MISMA regla que el chat
 // del 61. Dos copias del alcance serían dos mundos — la lección del 63.
 import { frase, sinComillas, tieneContenido, distancia2D, HABLA, RANGO_LOCAL } from "../play/chat.js";
+
+/**
+ * ¿Lleva este bicho FICHA DE COMBATE? — el 91.
+ *
+ * Todos los bichos horneados llevan `ia` (hasta el alcalde: es lo que les da
+ * un `Cazador` que decide si atacar, y con `relacion` amistosa no ataca).
+ * Lo que distingue a quien pelea es el DAÑO: `ATTACK_DAMAGE` y sus primos,
+ * leídos por `tools/bicho.mjs`. Ver la cuenta por mapa en
+ * doc/BICHOS_GUION_91.md; los tres ballesteros zombis de Gate City NO entran
+ * —disparan, y su daño va en el proyectil—, y eso queda dicho allí.
+ *
+ * Sólo éstos nacen con guion y con `CIERRE_DE_BICHO`. A un NPC sin daño se le
+ * sigue creando el guion cuando alguien le habla, como desde el 33, y sin
+ * cierre: sus escenas usan `npcatk_suspend_ai` y compañía a su manera.
+ */
+export const esDeCombate = (i) => Boolean(i?.ficha?.ia?.dano);
+
+/** «jugador» o «j3»: un objetivo que es un jugador. Igual que `esJugador` de manada.js. */
+const esUnJugador = (id) => id === "jugador" || /^j\d+$/.test(String(id ?? ""));
 
 export class InteraccionesNpc {
   constructor({ sesion, guiones = null, menus = null, catalogo = null,
@@ -51,8 +73,12 @@ export class InteraccionesNpc {
     //
     // Si falta `emociones` NO se finge: se apunta y se dice. Un `?.()` callado
     // aquí sería el `=> {}` del 66 otra vez, en el sitio exacto del fallo.
-    emociones = null, enLaMano = null, verDescripcion = null } = {}) {
-    Object.assign(this, { sesion, guiones, menus, catalogo, npcPorId, suceso, animar, borrarDelMundo, ventanaDeAviso, abrirTienda, comoEstaElCliente, losNpc, dondeEstaElJugador, unidadesPorMetro, mandarADestino, lineaDeVision, emociones, enLaMano, verDescripcion });
+    emociones = null, enLaMano = null, verDescripcion = null,
+    // LOS EFECTOS: `(ruta, params, {aplicador})` que se lo pega AL JUGADOR
+    // (`src/play/efectos.js`). Lo tiene `src/main.js`, que es quien tiene el
+    // guion del jugador. Se reenvía a cada `GuionDeNpc` en `guionDe` (el 63).
+    aplicarEfecto = null } = {}) {
+    Object.assign(this, { sesion, guiones, menus, catalogo, npcPorId, suceso, animar, borrarDelMundo, ventanaDeAviso, abrirTienda, comoEstaElCliente, losNpc, dondeEstaElJugador, unidadesPorMetro, mandarADestino, lineaDeVision, emociones, enLaMano, verDescripcion, aplicarEfecto });
     /**
      * Las opciones que se le mandaron al jugador en la última apertura de SU
      * menú, para poder resolver el índice que vuelve.
@@ -112,6 +138,143 @@ export class InteraccionesNpc {
     // alguien pregunta por un nombre. No se puede hacer aquí porque `losNpc`
     // todavía no devuelve nada: la manada se monta después que esto.
     this.nombresPuestos = false;
+    /**
+     * EL 91: la manada cuyos golpes llegan a los guiones, y lo que se ha
+     * quedado por el camino. `sinGuion` son golpes a un bicho de combate sin
+     * guion horneado; `noDeCombate` golpes a un NPC sin ficha de combate, que
+     * en el motor también reciben `game_struck` y aquí todavía no (se dice).
+     */
+    this.manadaEnchufada = null;
+    this.costura = { sinGuion: 0, noDeCombate: 0, nacidos: 0, renacidos: 0 };
+  }
+
+  /**
+   * **LA COSTURA SE ENCHUFA** — el 91. Quien monta la manada llama a esto una
+   * vez; desde entonces los bichos de combate nacen con su guion (`paso`) y
+   * los golpes le llegan (`alCombate`).
+   *
+   * No se hace en el constructor porque la manada se monta DESPUÉS que esta
+   * clase (ver `ponerNombresDeNpc`), y en el servidor de `src/red/` todavía no
+   * se llama: allí la manada no tiene oyente y lo cuenta en
+   * `costuraSinOyente`.
+   */
+  enchufarA(manada) {
+    if (!manada || this.manadaEnchufada === manada) return false;
+    this.manadaEnchufada = manada;
+    manada.oyente = (s) => this.alCombate(s);
+    return true;
+  }
+
+  /**
+   * **LOS BICHOS DE COMBATE NACEN CON SU GUION** — el 91.
+   *
+   * En el motor el guion se carga con la entidad y `spawn`/`game_spawn`
+   * corren al aparecer (global.cpp:435-437). Aquí el guion de un NPC se
+   * creaba la primera vez que alguien le hablaba, y a un goblin no le habla
+   * nadie: su guion no existía nunca. Un bicho dormido (la ficha de un área)
+   * todavía no ha nacido, y uno que vuelve a salir (`revivir`) es otra
+   * entidad: se le rehace, y `guionDe` se encarga de retirar el de antes.
+   *
+   * @returns cuántos han nacido en esta pasada.
+   */
+  nacerBichos() {
+    if (!this.manadaEnchufada) return 0;
+    let n = 0;
+    for (const i of this.losNpc?.() ?? []) {
+      if (!esDeCombate(i) || i.dormido || i.muerto) continue;
+      const g = this.guionesVivos.get(i.id);
+      if (g !== undefined && (g === null || g.nacimiento === (i.nacimientos ?? 0))) continue;
+      if (this.guionDe(i)) n++;
+    }
+    return n;
+  }
+
+  /**
+   * **UN GOLPE, AL GUION DEL BICHO** — el 91. `s` viene de `Manada._costura`.
+   *
+   * La IA ya ha decidido todo; esto sólo le cuenta al guion lo que el motor le
+   * contaría, con sus parámetros en orden y su formato:
+   *
+   *   `danaAOtro`  -> `game_damaged_other` (giattack.cpp:1755-1762)
+   *   `hizoDano`   -> `game_dodamage` (giattack.cpp:2036-2045)
+   *   `recibe`     -> `game_damaged` (msmonsterserver.cpp:2275-2311), y luego
+   *                   o `game_parry` (lo decidió `parryDelBicho`) o
+   *                   `game_damaged_end` + `game_struck` (:2321-2323, :2385)
+   *   `muere`      -> `game_predeath` y `game_death` (:2580, :2605)
+   */
+  alCombate(s) {
+    const i = s?.i ?? null;
+    if (!i) return;
+    if (!esDeCombate(i)) { this.costura.noDeCombate++; return; }
+    const g = this.guionDe(i);
+    if (!g) { this.costura.sinGuion++; return; }
+    const jugador = this.contextoDelJugador();
+    // `EntToString` del jugador: en este puerto su asa es el id del
+    // personaje, la misma que ve el guion en `ent_lastspoke` (el 45).
+    const ref = (id) => (esUnJugador(id) ? jugador.ref : "none");
+    // Como `oir`: el guion tiene que saber quién es el jugador de ahora para
+    // que `$get(<su asa>,…)` lo encuentre.
+    g.jugador = { ...(g.jugador ?? {}), personaje: jugador.personaje, ref: jugador.ref };
+    const U = this.unidadesPorMetro ?? 39.37;
+    const tipo = i.ficha?.ia?.tipoDano || "generic";
+    switch (s.que) {
+      case "danaAOtro":
+        // PARAM4 es el `dmgevent` del ataque, o «(none)» (:1759). Los ataques
+        // que la IA decide no pasan por un `xdodamage` con `dmgevent:`, así
+        // que es «(none)»; el `bite_dodamage` de las arañas está pendiente.
+        //
+        // Y ANTES, `StoreEntity(pTarget, ENT_LASTSTRUCKBYME)` (:1754-1756):
+        // desde aquí `ent_laststruckbyme` es el jugador para este guion. Es lo
+        // que lee el empujón del jabalí (boar_base.script:93) y su aturdimiento
+        // (:178-183).
+        g.entorno.golpeadoPorMi = ref(s.objetivo);
+        g.costura("game_damaged_other", [ref(s.objetivo), comoF(s.dano), tipo, "(none)"]);
+        return;
+      case "hizoDano": {
+        const alto = i.ficha?.ia?.alto ?? i.ficha?.alto ?? 0;
+        const pies = i.donde ?? [0, 0, 0];
+        // El ojo del monstruo es su alto entero sobre los pies
+        // (`view_ofs = m_Height`, msmonsterserver.cpp:250, el 81).
+        const ojo = aMotor([pies[0], pies[1] + alto / U, pies[2]], U);
+        // El `Center()` del jugador: su origen, que en GoldSrc está a media
+        // caja, 36 sobre los pies de pie (la caja es de 72). Agachado sería
+        // otro número y no se distingue: queda dicho.
+        const p = esUnJugador(s.objetivo) ? (this.dondeEstaElJugador?.() ?? null) : null;
+        const centro = p ? aMotor([p[0], p[1] + 36 / U, p[2]], U) : null;
+        g.costura("game_dodamage", paramsDeDodamage({
+          acierto: s.acierto, objetivo: ref(s.objetivo), desde: ojo, hasta: centro ?? ojo, tipo, dano: s.dano,
+        }));
+        return;
+      }
+      case "recibe": {
+        const quien = ref(s.quien);
+        const hab = String(s.cubo ?? "").split(".")[0];
+        const habilidad = HABILIDADES.find((h) => h.clave === hab)?.nombre ?? "none";
+        // PARAM5 es el INFLICTOR —el arma—, que en este puerto no es una
+        // entidad con asa. Se manda el jugador, que es el atacante: queda
+        // dicho como aproximación en doc/BICHOS_GUION_91.md.
+        g.costura("game_damaged", [quien, comoF(s.dano), String(s.tipo ?? ""),
+          String(Math.trunc(Number(s.acierto) || 0)), quien, habilidad]);
+        if (s.parado) {
+          // La regla del guion: `callevent game_parry ATTACKER_ID` y
+          // `return 0` (base_monster_shared.script:854-856). El cero de la
+          // vuelta llega a `game_damaged_end` y no hay `game_struck`, porque
+          // un daño cero no pasa por `TakeDamage`.
+          g.costura("game_parry", [quien]);
+          g.costura("game_damaged_end", [quien, comoF(0)]);
+          return;
+        }
+        g.costura("game_damaged_end", [quien, comoF(s.dano)]);
+        g.costura("game_struck", [comoF(s.dano)]);
+        return;
+      }
+      case "muere":
+        g.costura("game_predeath", []);
+        g.costura("game_death", []);
+        return;
+      default:
+        return;
+    }
   }
 
   /**
@@ -234,7 +397,17 @@ export class InteraccionesNpc {
   guionDe(instancia) {
     if (!instancia || !this.guiones) return null;
     const clave = instancia.id;
-    if (this.guionesVivos.has(clave)) return this.guionesVivos.get(clave);
+    // EL 91: un bicho de combate que ha vuelto a nacer es otra entidad. El
+    // guion de su vida anterior se retira (sus relojes pendientes ya no
+    // corren) y se le hace uno nuevo, con su `game_spawn` y su botín.
+    const combate = esDeCombate(instancia);
+    if (this.guionesVivos.has(clave)) {
+      const viejo = this.guionesVivos.get(clave);
+      if (!combate || viejo === null || viejo.nacimiento === (instancia.nacimientos ?? 0)) return viejo;
+      viejo.retirar();
+      this.guionesVivos.delete(clave);
+      this.costura.renacidos++;
+    }
     const ficha = this.guiones.guiones?.[instancia.ficha?.script ?? ""] ?? null;
     if (!ficha) { this.guionesVivos.set(clave, null); return null; }
     /**
@@ -273,6 +446,13 @@ export class InteraccionesNpc {
         script: instancia.ficha?.script ?? "",
         // La posición cambia al caminar: no capturar una copia al hablar.
         get origen() { return (instancia.donde ?? []).join(" "); },
+        // EL 91: `$get(ent_me,hp)` y `maxhp` leen esto (scriptcmds.cpp:960,
+        // y la rama de `pMonster`, :1388-1391) y NADIE lo pasaba: valían «0»
+        // para todos los NPC desde el 46. El 62 otra vez —un parámetro con
+        // valor por omisión—, y lo destapó el guion del zombi preguntando por
+        // su vida al recibir un golpe. Con getter, porque la vida cambia.
+        get vida() { return instancia.vida ?? 0; },
+        get vidaMax() { return instancia.vidaMaxima ?? 0; },
       },
       catalogo: this.catalogo,
       tiendas: this.tiendas,
@@ -300,7 +480,13 @@ export class InteraccionesNpc {
       // El 79: una opción de menú de tipo `say` hace hablar AL JUGADOR, y
       // hablar es llegar a los oídos de alrededor — no imprimir una línea.
       hablaElJugador: (texto, { desde } = {}) => this.hablaElJugador(texto, { desde }),
+      // `applyeffect` sobre el jugador: la cura del sumo sacerdote de Edana.
+      aplicarEfecto: this.aplicarEfecto ? (ruta, params, o) => this.aplicarEfecto(ruta, params, o) : null,
+      // EL 91: el cierre y de qué vida es. Ver `esDeCombate`.
+      cierre: combate ? CIERRE_DE_BICHO : null,
+      nacimiento: instancia.nacimientos ?? 0,
     });
+    if (combate) this.costura.nacidos++;
     caja.guion = g;
     this.guionesVivos.set(clave, g);
     return g;
@@ -534,6 +720,9 @@ export class InteraccionesNpc {
       const quien = this.npcPorId?.(fin.vendedor);
       this.guionDe(quien)?.guion?.llamar?.(fin.evento, []);
     }
+    // EL 91: los que acaban de nacer, con su guion. Antes del reloj, para que
+    // sus `callevent` con retardo empiecen a contar desde ahora.
+    this.nacerBichos();
     return this.reloj.paso(dt);
   }
 }

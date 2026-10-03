@@ -426,6 +426,302 @@ export function partirTokens(texto) {
 }
 
 /**
+ * `StringToVec` — sharedutil.cpp:115-124. El 89b.
+ *
+ *     if (sscanf(String, "(%f,%f,%f)", ...) < 3)
+ *       if (sscanf(String, "(%f,%f)", ...) < 2)
+ *         return g_vecZero;
+ *
+ * Se emula el `sscanf` y no una expresión regular «bonita», porque lo que
+ * decide es lo que `sscanf` acepta y lo que no:
+ *
+ *   - el `(` es literal y va el PRIMERO: con un espacio delante no casa nada
+ *     y el vector vale CERO;
+ *   - `%f` sí se salta blancos delante del número, pero la `,` es literal y
+ *     no: «(1 ,2,3)» se queda en un número y vale cero;
+ *   - el `)` del final **no se comprueba**: «(1,2,3» son tres números;
+ *   - y lo que no es un vector —un nombre de variable sin poner, que es lo
+ *     que devuelve `GetVar`— vale (0,0,0), no un error.
+ *
+ * LO QUE NO SE PORTA, dicho: en la forma de dos números el motor no toca la
+ * `z`, y `Vector() {}` no inicializa (src/game/server/hl/vector.h:67), así que
+ * la `z` es lo que hubiera en la pila. Aquí es 0, como en `src/bsp/script.js`.
+ *
+ * Los tres van por `Math.fround` porque `Vector` es de `float`.
+ */
+export function vectorDeTexto(texto) {
+  const s = String(texto ?? "");
+  const leer = (k) => {
+    const v = [];
+    if (s[0] !== "(") return v;
+    let i = 1;
+    for (let n = 0; n < k; n++) {
+      while (i < s.length && /\s/.test(s[i])) i++;            // `%f` salta blancos
+      const m = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(s.slice(i));
+      if (!m) break;
+      v.push(Math.fround(parseFloat(m[0])));
+      i += m[0].length;
+      if (n < k - 1) { if (s[i] !== ",") break; i++; }        // la `,` es literal
+    }
+    return v;
+  };
+  const tres = leer(3);
+  if (tres.length >= 3) return tres;
+  const dos = leer(2);
+  if (dos.length < 2) return [0, 0, 0];
+  return [dos[0], dos[1], 0];
+}
+
+/**
+ * `VecToString` — sharedutil.cpp:106-114: `"(%.2f,%.2f,%.2f)"`.
+ *
+ * Dos decimales SIEMPRE, que es lo que vuelve a leer el guion: un
+ * `vectoradd` sobre «(1,2,3)» deja «(1.00,2.00,3.00)» aunque no sume nada, y un
+ * `if ( V equals (1,2,3) )` de después ya no casa. Y `printf` imprime el signo
+ * del cero negativo («-0.00»), que `toFixed` se come.
+ *
+ * NO MEDIDO: los empates exactos en la tercera cifra (0,125). `toFixed` sube y
+ * el `printf` de glibc va al par; cuál de los dos usa el servidor depende de
+ * dónde se compile, y no se ha comprobado.
+ */
+export function textoDeVector(v) {
+  const f = (x) => (Object.is(x, -0) ? "-0.00" : Math.fround(x).toFixed(2));
+  return `(${f(v[0])},${f(v[1])},${f(v[2])})`;
+}
+
+/**
+ * `RETURN_FLOAT` — iscript.h:224-228: `"%.2f"` de un `float`. El 91.
+ *
+ * Es lo que devuelve `$math`, y eso tiene consecuencias que se ven: el fin de
+ * un efecto es `$math(add,EFFECT_STARTED,EFFECT_DURATION)`
+ * (effects/base_effect.script:67), o sea **con dos decimales**, y la
+ * comparación `game.time >= L_END_TIME` de detrás compara contra el número
+ * redondeado. Mismo aviso que `textoDeVector` para los empates exactos.
+ */
+export function flotanteDelMotor(x) {
+  const n = Number(x);
+  const v = Math.fround(Number.isNaN(n) ? 0 : n);
+  return Object.is(v, -0) ? "-0.00" : v.toFixed(2);
+}
+
+/**
+ * `$math(<op>,<a>,<b>[,<c>])` — `ScriptGetter_MathReturn`, script.cpp:3271-3401.
+ *
+ * Lo que no se adivina, en el orden en que aparece:
+ *
+ *   1. Con menos de tres parámetros sólo existen `sqrt` y `sin` (:3279-3296);
+ *      cualquier otra cosa avisa y devuelve «0».
+ *   2. Las operaciones se eligen con `starts_with` (:3348-3394), así que
+ *      «addition» es `add` y «multiplyx» es `multiply`.
+ *   3. `divide` por cero —O DE cero— da 0, no infinito (:3365).
+ *   4. `intdivide` y `mod` truncan los DOS lados a `int` antes (:3343-3344).
+ *   5. `vectormultiply` decide con `isdigit` del primer carácter si el
+ *      segundo es un número o un vector (:3336): «-2» se lee como vector y da
+ *      cero. Es la misma rareza que el `vectormultiply` del 89b.
+ *   6. Una operación que no está devuelve «0» (:3396-3400).
+ *   7. El resultado es `RETURN_FLOAT`, «%.2f» — ver `flotanteDelMotor`.
+ */
+export function mathDelMotor(p) {
+  const ps = p.map((x) => String(x ?? ""));
+  if (ps.length < 3) {
+    if (ps[0] === "sqrt" && ps.length > 1) return flotanteDelMotor(Math.fround(Math.sqrt(numDe(ps[1]))));
+    if (ps[0] === "sin" && ps.length > 1) return flotanteDelMotor(Math.sin(numDe(ps[1])));
+    return "0";
+  }
+  const op = ps[0];
+  const eje = (v, cual, n) => [cual === "x" ? n : v[0], cual === "y" ? n : v[1], cual === "z" ? n : v[2]];
+  if (op === "vectoradd") {
+    const a = vectorDeTexto(ps[1]);
+    // Con un eje que no sea x/y/z, `Result` se queda sin inicializar (:3311);
+    // aquí vale cero y se dice.
+    if (ps.length >= 4) {
+      if (!["x", "y", "z"].includes(ps[2])) return textoDeVector([0, 0, 0]);
+      const s = eje([0, 0, 0], ps[2], numDe(ps[3]));
+      return textoDeVector([a[0] + s[0], a[1] + s[1], a[2] + s[2]]);
+    }
+    const b = vectorDeTexto(ps[2]);
+    return textoDeVector([a[0] + b[0], a[1] + b[1], a[2] + b[2]]);
+  }
+  if (op === "vectormultiply") {
+    const a = vectorDeTexto(ps[1]);
+    if (ps.length >= 4) {
+      if (!["x", "y", "z"].includes(ps[2])) return textoDeVector([0, 0, 0]);
+      const m = eje([0, 0, 0], ps[2], numDe(ps[3]));        // `VecMultiply` con ceros: anula los otros dos
+      return textoDeVector([a[0] * m[0], a[1] * m[1], a[2] * m[2]]);
+    }
+    if (/^[0-9]/.test(ps[2])) { const k = numDe(ps[2]); return textoDeVector([a[0] * k, a[1] * k, a[2] * k]); }
+    const b = vectorDeTexto(ps[2]);
+    return textoDeVector([a[0] * b[0], a[1] * b[1], a[2] * b[2]]);
+  }
+  const m1 = Math.fround(numDe(ps[1]));
+  const m2 = Math.fround(numDe(ps[2]));
+  const i1 = Math.trunc(m1);
+  const i2 = Math.trunc(m2);
+  let r;
+  if (op.startsWith("add")) r = m1 + m2;
+  else if (op.startsWith("subtract")) r = m1 - m2;
+  else if (op.startsWith("multiply")) r = m1 * m2;
+  else if (op.startsWith("divide")) r = m1 === 0 || m2 === 0 ? 0 : m1 / m2;
+  else if (op.startsWith("intdivide")) r = i1 === 0 || i2 === 0 ? 0 : Math.trunc(i1 / i2);
+  else if (op.startsWith("mod")) r = i1 === 0 || i2 === 0 ? 0 : i1 % i2;
+  else if (op.startsWith("capvar")) {
+    if (ps.length < 4) r = 0;
+    else {
+      r = numDe(ps[1]);
+      const lo = numDe(ps[2]);
+      const hi = numDe(ps[3]);
+      if (r < lo) r = lo; else if (r > hi) r = hi;
+    }
+  } else return "0";
+  return flotanteDelMotor(r);
+}
+
+/**
+ * `$string_upto(<cadena>,<busca>[,<desde>])` y `$string_from(...)` — LA MISMA
+ * función, `ScriptGetter_StringUpToOrFrom` (script.cpp:4116-4152), que se
+ * separa por el nombre. Con `msstring::thru_substr` (stackstring.cpp:109-113).
+ *
+ * Las rarezas, que se portan porque deciden ramas:
+ *
+ *   - **Si no encuentra lo que busca, devuelve «0»**, no la cadena entera: el
+ *     trozo sale igual que la cadena, no entra en la primera rama, y la
+ *     segunda sólo casa si la cadena EMPIEZA por lo buscado (:4144). O sea que
+ *     `$string_upto(abc,_)` vale «0». `base_dot` lo llama sólo tras un
+ *     `contains '_effect'` (effects/base_dot.script:124-127), por eso no se ve.
+ *   - Con `<desde>`, el trozo empieza en `desde` pero `$string_from` corta
+ *     contando desde el principio de la cadena entera (:4141).
+ */
+export function cadenaHasta(nombre, p) {
+  if (p.length < 2) return "0";
+  const s = String(p[0]);
+  const busca = String(p[1]);
+  const desde = p.length >= 3 ? Math.max(0, Math.min(enteroDe(p[2]), s.length)) : 0;   // `atoi`
+  const resto = s.slice(desde);
+  const k = resto.indexOf(busca);                    // `strstr`; con «» da 0, como C
+  const trozo = k >= 0 ? resto.slice(0, k) : resto;
+  const hasta = nombre === "$string_upto";
+  if (trozo !== s) {
+    if (hasta) return trozo;
+    if (trozo.length + busca.length >= s.length) return "";
+    return s.slice(trozo.length + busca.length);
+  }
+  if (s.startsWith(busca)) return hasta ? "" : s.slice(busca.length);
+  return "0";
+}
+
+/**
+ * LAS DOS FORMAS DE HACER DAÑO DESDE UN GUION, partidas como el motor. El 91.
+ *
+ * Devuelve `null` si faltan parámetros (`ERROR_MISSING_PARMS`) o un objeto
+ * con la forma y los números, SIN decidir nada del mundo: quién existe, a quién
+ * se le acierta y cuánto le duele es del gancho `hacerDano` del entorno. Se
+ * parte entero aunque hoy sólo se use la forma directa —la de los venenos—
+ * porque el guion de un BICHO lo usará con las otras, y el parseo tiene que
+ * ser el mismo para los dos.
+ *
+ * ── `xdodamage` — scriptcmds.cpp:7336-7466 (`CScript`, de cualquier guion) ──
+ *
+ *     XDODAMAGE <objetivo|(origen)> <alcance|aoe|(destino)|direct> <daño>
+ *               <acierto|caída> <atacante> <infligidor> <habilidad|none> <tipo> [banderas]
+ *
+ *   - Siete parámetros como mínimo (:7342), pero LEE EL OCTAVO (`Params[7]`,
+ *     el tipo) sin mirar (:7362), y las banderas las lee de `Params[8]` en
+ *     cuanto hay OCHO (`if( Params.size() >= 8 )`, :7366): con ocho lee una
+ *     casilla más allá del final de la lista. Es el caso de `base_dot`
+ *     (effects/base_dot.script:64). Aquí, sin noveno no hay banderas.
+ *   - Cuatro formas, por la PRIMERA LETRA de los dos primeros (:7385-7428):
+ *     `(`+no`(` es en radio, `(`+`(` de punto a punto, `direct` directo, y lo
+ *     demás una traza hacia delante.
+ *   - Los multiplicadores son DEL ATACANTE (`Params[4]` hecho `CMSMonster`,
+ *     :7348-7349), y el de acierto **no sirve**: se aplica a
+ *     `flHitPercentage` (:7363) antes de que cada forma lo pise con
+ *     `atof(Params[3])`. En radio el acierto es siempre 100 (:7397).
+ *
+ * ── `dodamage` — npcscript.cpp:1107-1238 (`CMSMonster`, sólo de un monstruo) ─
+ *
+ *     Normal:  <objetivo> <alcance> <daño> <acierto> [tipo]
+ *     Directo: <objetivo> direct <daño> <acierto> <atacante> [tipo]
+ *     Radio:   <origen> <radio> <daño> <acierto> [atenuación] [banderas] [tipo]
+ *
+ *   - El tipo por omisión es «generic» (:1117). Y en la directa con CINCO
+ *     parámetros el tipo es **el asa del atacante**: `Params[4]` se lee como
+ *     tipo (:1125-1127) y sólo el sexto lo pisa (:1139-1140).
+ *   - El atacante es quien corre el guion, o su `ENT_EXPOWNER` si tiene
+ *     (:1118-1120), y fuera del radio `Params[4]` lo sustituye SI EXISTE
+ *     (:1189-1194) — en la directa también.
+ *   - El alcance de la traza suma la media anchura de los dos (:1146-1157).
+ *   - Los multiplicadores son de QUIEN CORRE el guion, y aquí el de acierto
+ *     sí cuenta (:1163-1168).
+ *   - Es de `CMSMonster`, y el jugador también lo es: un efecto pegado al
+ *     jugador que hiciera `dodamage` lo haría COMO el jugador.
+ */
+export function leerDano(nombre, p) {
+  const ps = p.map((x) => String(x ?? ""));
+  const empiezaVector = (s) => String(s ?? "")[0] === "(";
+  if (nombre === "xdodamage") {
+    if (ps.length < 7) return null;
+    const d = {
+      comando: "xdodamage",
+      dano: numDe(ps[2]),
+      atacante: ps[4],
+      infligidor: ps[5],
+      habilidad: ps[6],
+      tipo: ps[7] ?? "",
+      multiplicaDe: "atacante",
+      multiplicaAcierto: false,
+      evento: null,
+      sinCalcomania: false,
+    };
+    // Las banderas, partidas como `TokenizeString(..., ";")` (:7369).
+    if (ps.length >= 9) {
+      for (const b of partirTokens(ps[8])) {
+        if (b.startsWith("dmgevent:")) d.evento = b.slice(9);
+        if (b.startsWith("nodecal")) d.sinCalcomania = true;
+      }
+    }
+    if (empiezaVector(ps[0]) && !empiezaVector(ps[1])) {
+      return { ...d, forma: "radio", origen: vectorDeTexto(ps[0]), alcance: numDe(ps[1]), atenuacion: numDe(ps[3]), acierto: 100, reflectivo: true };
+    }
+    if (empiezaVector(ps[0]) && empiezaVector(ps[1])) {
+      return { ...d, forma: "vector", origen: vectorDeTexto(ps[0]), destino: vectorDeTexto(ps[1]), acierto: numDe(ps[3]) };
+    }
+    if (ps[1] === "direct") return { ...d, forma: "directo", objetivo: ps[0], acierto: numDe(ps[3]) };
+    // La traza: `flRange` lleva la media anchura del atacante (:7425-7427) y
+    // `flDamageRange` no (:7431). Se dan los dos números; el gancho decide.
+    return { ...d, forma: "traza", objetivo: ps[0], alcance: numDe(ps[1]), sumaMediaAnchuraDelAtacante: true, acierto: numDe(ps[3]) };
+  }
+  if (nombre === "dodamage") {
+    if (ps.length < 4) return null;
+    const d = {
+      comando: "dodamage",
+      dano: numDe(ps[2]),
+      acierto: numDe(ps[3]),
+      // `this`, o su `ENT_EXPOWNER` si lo tiene: lo resuelve el gancho.
+      atacante: null,
+      infligidor: null,
+      habilidad: null,
+      tipo: "generic",
+      multiplicaDe: "yo",
+      multiplicaAcierto: true,
+    };
+    if (ps.length >= 5 && !empiezaVector(ps[0])) d.tipo = ps[4];
+    if (empiezaVector(ps[0])) {
+      return {
+        ...d, forma: "radio", origen: vectorDeTexto(ps[0]), alcance: numDe(ps[1]),
+        atenuacion: ps.length >= 5 ? numDe(ps[4]) : 1,
+        reflectivo: ps.length >= 6 && ps[5].includes("reflective"),
+        tipo: ps.length >= 7 ? ps[6] : d.tipo,
+      };
+    }
+    // Fuera del radio, el quinto parámetro también es el atacante, si existe.
+    if (ps.length >= 5) d.atacante = ps[4];
+    if (ps[1] === "direct") return { ...d, forma: "directo", objetivo: ps[0], tipo: ps.length >= 6 ? ps[5] : d.tipo };
+    return { ...d, forma: "traza", objetivo: ps[0], alcance: numDe(ps[1]), sumaMediaAnchuraDeLosDos: true };
+  }
+  return null;
+}
+
+/**
  * Los comandos portados. La clave es el nombre del script; el valor, qué hace.
  *
  * **Esta lista ES el experimento.** Cada uno con su cita, y lo que no está no
@@ -508,6 +804,47 @@ export const COMANDOS = new Set([
   // las entidades del `.bsp`, y sin él media Edana no arranca. Ver `usetrigger`
   // más abajo.
   "usetrigger",                                   // scriptcmds.cpp:113 / :7054
+  // ── el 89c: los que cambian el ESTADO del jugador desde su guion ─────────
+  //
+  // El intérprete NO decide nada de ellos: llama a un gancho del entorno y,
+  // si el entorno no lo tiene, lo APUNTA (no hay `=> {}` en `entornoVacio`
+  // para éstos, por el 66 y el 81). Quién los tiene y por qué, en
+  // `src/play/guionjugador.js`.
+  "drainstamina",                                 // scriptcmds.cpp:177 / :2988
+  "gold", "addgold",                              // npcscript.cpp:31-32 / :234-252
+  "removeitem",                                   // npcscript.cpp:49 / :621
+  "setvelocity", "addvelocity",                   // scriptcmds.cpp:142-143 / :7155
+  "setorigin",                                    // scriptcmds.cpp:144 / :4508
+  "setstat",                                      // npcscript.cpp:54 / :1305
+  "noxploss",                                     // NO EXISTE en el motor: ver su `case`
+  // ── el 89b: los pequeños del intérprete que más pide el guion del jugador ─
+  //
+  // Puros de cadenas y vectores, más los dos sonidos «del servidor». Los
+  // `svplay*` son LA MISMA función que `playsound` (scriptcmds.cpp:148-151) y
+  // `sound.play3d` la misma que `svsound.play3d` (:152-153): se cuentan los
+  // cuatro porque el motor los registra con su nombre. Ver cada `case`.
+  "svplaysound", "svplayrandomsound",             // scriptcmds.cpp:150-151 / :4686
+  "sound.play3d", "svsound.play3d",               // scriptcmds.cpp:152-153 / :6698
+  "vectoradd", "vectormultiply", "vectorset",     // scriptcmds.cpp:106-109 / :7073-7144
+  "strconc",                                      // scriptcmds.cpp:71 / :6813
+  "token.add", "token.del",                       // scriptcmds.cpp:123-124 / :6865-6911
+  "token.set", "token.scramble",                  // scriptcmds.cpp:125-126 / :6917-6987
+  // ── los EFECTOS: un efecto es otro guion pegado a la entidad ──────────────
+  // 825 `applyeffect` en los 2 884 guiones. La regla vive en
+  // `src/play/efectos.js`; aquí sólo se reparte al gancho, y sin gancho se APUNTA.
+  "applyeffect",                                  // scriptcmds.cpp:156 / :1865
+  "removeeffect",                                 // scriptcmds.cpp:210 / :5068
+  "removescript",                                 // scriptcmds.cpp:147 / :5114
+  // ── EL 91: el veneno. Lo que piden los `effects/dot_*` ────────────────────
+  // Medido corriendo `effects/dot_poison` sobre el jugador: sin éstos el
+  // efecto se quitaba diciendo «You resist the poison.», una frase que el
+  // juego no diría (el 65). Las DOS formas de hacer daño se parten enteras,
+  // como el motor; qué forma llega a hacer daño lo decide el gancho
+  // `hacerDano`, y lo que no, se apunta. Ver `leerDano` más abajo.
+  "dodamage",                                     // npcscript.cpp:68 / :1107-1238 (de CMSMonster)
+  "xdodamage",                                    // scriptcmds.cpp:81 / :7336-7466
+  "scriptflags",                                  // scriptcmds.cpp:191 / :5265-5451
+  "takedmg",                                      // npcscript.cpp:1057-1104 (de CMSMonster)
 ]);
 
 /** Los `$getters` portados. `m_GlobalGetterHash`, script.cpp:41-170. */
@@ -538,6 +875,16 @@ export const GETTERS = new Set([
   // y se distinguen por cómo TERMINA el nombre. Ver `src/play/listas.js`.
   "$get_array", "$get_arrayfind", "$get_array_amt", "$get_array_exists",
   "$g_get_array", "$g_get_arrayfind", "$g_get_array_amt", "$g_get_array_exists",
+  // ── EL 91: los de `effects/base_dot` y `effects/base_effect` ────────────
+  "$get_takedmg",     // script.cpp:65  / :2569-2592 — el multiplicador, del ANFITRIÓN
+  "$math",            // script.cpp:144 / :3271-3401 — «%.2f», como todo `RETURN_FLOAT`
+  "$string_upto",     // script.cpp:119 / :4116-4152
+  "$string_from",     // script.cpp:98  — la MISMA función, se separa por el nombre
+  "$get_scriptflag",  // script.cpp:124 / :2322-2510
+  "$pass",            // script.cpp:151 / :990-994
+  // Pedido por el censo de los bichos (otra sesión, `doc/CENSO_BICHOS_91.md`):
+  // `game_struck` lo usa en 544 guiones. Ver su `case`.
+  "$can_damage",      // script.cpp:67  / :662-684
 ]);
 
 /** Las propiedades de `$get(<ent>,<prop>)` que este puerto sabe contestar. */
@@ -585,7 +932,13 @@ export class Guion {
    * @param entorno   los ganchos al juego. Ver `entornoVacio()`.
    * @param preload   los `setvar`/`const` de la cabecera.
    */
-  constructor({ eventos = [], entorno = null, preload = [], nombre = "", ahora = () => 0, mapa = null } = {}) {
+  constructor({ eventos = [], entorno = null, preload = [], nombre = "", ahora = () => 0, mapa = null, jugadores = null } = {}) {
+    /**
+     * `UTIL_NumPlayers()`, lo que contesta `game.players` (script.cpp:4595-4605).
+     * El 89, por la misma vía que el `mapa` del 83: inyectado, y quien no lo
+     * ponga se queda como antes. Ver la nota larga donde se resuelve.
+     */
+    this.jugadores = jugadores;
     /** `gpGlobals->time`. Lo pone quien tenga reloj; sin él, cero. */
     this.ahora = ahora;
     /**
@@ -717,6 +1070,29 @@ export class Guion {
     // no como la cadena vacía: un mapa sin nombre no es «ningún mapa», y
     // confundirlos convertiría un `equals` falso en uno verdadero.
     if (t === "game.map.name") return this.mapa?.() ?? t;
+    // ── EL 89: `game.players`, que son 193 usos en los 2 884 guiones ──────
+    //
+    //     else if (Name.starts_with("players"))
+    //       if (Name.contains("totalhp")) RETURN_FLOAT(UTIL_TotalHP())
+    //       else if (Name.contains("avghp")) RETURN_FLOAT(UTIL_AvgHP())
+    //       else if (... "playersnb" || "noafk") RETURN_INT(UTIL_NumActivePlayers())
+    //       else RETURN_INT(UTIL_NumPlayers())           script.cpp:4595-4605
+    //
+    // Lo destapó el consejo de la primera transición: `help/first_transition`
+    // añade «.|Press enter to travel to this area» detrás de un
+    // `if ( game.players == 1 )`, y sin esto el consejo salía CORTADO, sin decir
+    // qué tecla pulsar. Se resuelven el número y las dos variantes que cuentan
+    // jugadores; `totalhp` y `avghp` —31 usos— no, porque piden la vida de todos.
+    //
+    // Y SÓLO lo recibe el guion del jugador, como el `mapa` del 83. Los guiones
+    // de NPC de los mapas que se juegan lo usan mucho —19 veces en Gate City, 9
+    // en Edana, más 36 `totalhp`/`avghp` en cada uno, que es escalar la
+    // dificultad con la gente—, y darles el número cambia cómo pelean en todos
+    // los mapas: eso pide su propio experimento y sus medidas, no colarse en
+    // éste. Hasta entonces, para ellos sigue siendo su propio nombre.
+    if (t === "game.players" || t === "game.players.noafk" || t === "game.players.playersnb") {
+      return this.jugadores ? String(this.jugadores()) : t;
+    }
     // 5. variables.
     const v = this.buscarVar(t);
     if (v) return v.valor;
@@ -752,6 +1128,39 @@ export class Guion {
       // script.cpp:2175 — y **"0" cuando la misión no está puesta**, no vacío.
       case "$get_quest_data": return e.leerMision(a[0], a[1]) ?? "0";
       case "$int": return String(enteroDe(a[0]));                       // script.cpp:3075
+      // ── EL 91 ────────────────────────────────────────────────────────────
+      // `$math(<op>,<a>,<b>[,<c>])`, `$string_upto/from` y `$pass` son de
+      // cadenas y números: la regla entera está en las funciones de abajo,
+      // sin gancho. `$get_takedmg` y `$get_scriptflag` son de la ENTIDAD y van
+      // a su gancho; sin él, se apunta y se devuelve el texto entero, que es
+      // lo que el motor hace con un getter que no conoce (script.cpp:4741).
+      case "$math": return mathDelMotor(a);
+      case "$string_upto": case "$string_from": return cadenaHasta(nombre, a);
+      // `$pass(<x>)` — script.cpp:990-994: devuelve el primer parámetro, que
+      // ya llega resuelto (script.cpp:4418). Existe para pasar un `PARAMn` de
+      // un evento a otro sin que se resuelva dos veces.
+      case "$pass": return a.length ? String(a[0]) : "";
+      case "$get_takedmg": {
+        if (!e.recibeDano) { this.anotarNoSoportado("getter", `${nombre} (sin gancho)`); return texto; }
+        return String(e.recibeDano(String(a[0] ?? ""), String(a[1] ?? "")) ?? "-1");
+      }
+      // `$can_damage(<objetivo>,[quien])` — script.cpp:662-684. OJO, que el
+      // comentario de encima (:658) dice «1 si <objetivo> puede herir a
+      // [quien]» y el CÓDIGO hace lo contrario: `ThisEnt->CanDamage(ThatEnt)`
+      // con `ThisEnt` = [quien] o el que llama y `ThatEnt` = <objetivo>. Manda
+      // el código. Si alguno de los dos no existe, «0» (:681).
+      case "$can_damage": {
+        if (!a.length) return "0";
+        if (!e.puedeHerir) { this.anotarNoSoportado("getter", `${nombre} (sin gancho)`); return texto; }
+        const r = e.puedeHerir(a.length >= 2 ? String(a[1]) : "ent_me", String(a[0]));
+        if (r === null || r === undefined) { this.anotarNoSoportado("getter", `${nombre} (entidad desconocida)`); return "0"; }
+        return r ? "1" : "0";
+      }
+      case "$get_scriptflag": {
+        const b = e.banderas?.(String(a[0] ?? "")) ?? null;
+        if (!b) { this.anotarNoSoportado("getter", `${nombre} (entidad sin banderas)`); return texto; }
+        return b.leer(String(a[1] ?? ""), String(a[2] ?? ""), { apuntar: (x) => this.anotarNoSoportado("getter", x) });
+      }
       case "$rand": return String(e.azar(enteroDe(a[0]), enteroDe(a[1]))); // script.cpp:3547
       // `$randf`: el MISMO getter, y lo que los separa es **una letra en la
       // posición 5 del nombre**: `if (ParserName.c_str()[5] == 'f')`
@@ -842,7 +1251,12 @@ export class Guion {
         // `skill.<escuela>.<sub>` no es un nombre fijo: es una FAMILIA, y el
         // motor la reconoce por el prefijo (`Prop.starts_with("skill.")`,
         // scriptcmds.cpp:1651). Es lo que gradúa casi todo efecto de objeto.
-        if (!prop.startsWith("skill.") && !PROPIEDADES.has(prop)) {
+        // EL 91: o que el entorno diga que la sabe contestar. Es para las que
+        // sólo tiene sentido contestar donde hay con qué —`scriptvar`,
+        // `relationship`, `index` en el entorno de un EFECTO—: meterlas en
+        // `PROPIEDADES` haría que el entorno de un NPC, que no las sabe,
+        // contestara «0» callado en vez de apuntarlas.
+        if (!prop.startsWith("skill.") && !PROPIEDADES.has(prop) && !e.propiedadesPropias?.has?.(prop)) {
           this.anotarNoSoportado("propiedad", `$get(,${prop})`);
           return "0";
         }
@@ -1386,8 +1800,28 @@ export class Guion {
       // Dos casos más que se ven jugando: **volumen 0 no es silencio, es
       // «corta ese canal»** (:4775), que es como se paran los sonidos en
       // bucle; y un sonido llamado literalmente `none` **se salta** (:4751).
+      //
+      // ── EL 89b: `svplaysound` Y `svplayrandomsound` ─────────────────────
+      //
+      // Están registrados con la MISMA función (scriptcmds.cpp:148-151), y el
+      // cuerpo mira el nombre en tres sitios:
+      //
+      //   1. `Cmd.Name().starts_with("sv")` (:4725) elige `EMIT_SOUND2` sobre
+      //      la entidad —el sonido la SIGUE y puede hacer bucle— en vez de
+      //      `ClXPlaySoundAll` en su origen. Se le pasa a `sonar` como
+      //      `servidor: true`; quien dibuja decide si le importa.
+      //   2. Al cortar (volumen 0) el del servidor manda `common/null.wav` y no
+      //      el sonido pedido (:4781 contra :4794).
+      //   3. El sorteo se compara con los dos nombres aleatorios (:4730) y la
+      //      atenuación y el tono con `contains("random")` (:4739).
+      //
+      // Y uno más que no está aquí: el cargador los precachea al leerlos
+      // (script.cpp:5490-5491), que en un navegador no significa nada.
+      case "svplaysound": case "svplayrandomsound":
       case "playsound": case "playrandomsound": {
         if (params.length < 2) return true;          // `Params.size() >= 2`
+        const delServidor = c.nombre.startsWith("sv");   // :4725
+        const aleatorio = c.nombre.includes("random");   // :4730 y :4739
         const canal = enteroDe(params[0]);
         let siguiente = 1;
         let volumen = -1;
@@ -1396,22 +1830,34 @@ export class Guion {
           siguiente++;
         }
         let cual = params.length > siguiente ? String(params[siguiente]) : "common/null.wav";
-        if (c.nombre === "playrandomsound") {
+        if (aleatorio) {
           // `Params[NextParm + RANDOM_LONG(0, Params.size() - (Volume > -1 ? 3 : 2))]`
           const tope = params.length - (volumen > -1 ? 3 : 2);
           cual = String(params[siguiente + e.azar(0, Math.max(0, tope))] ?? cual);
         }
         if (cual === "none") return true;
+        // El del servidor corta con `common/null.wav` (:4781); el otro manda
+        // el sonido pedido a 0,001 (:4794).
+        if (delServidor && volumen === 0) cual = "common/null.wav";
         e.sonar(cual, {
           canal,
           // Sin volumen el motor no toca `Volume` y cae por la rama de abajo
           // con `SndVolume`, el del bicho. Aquí eso es «el que tenga».
+          //
+          // CORRECCIÓN DEL 89b, ANOTADA Y NO APLICADA: en esta fuente no hay
+          // «rama de abajo». Las dos emisiones están DENTRO de
+          // `if (Volume > -1)` (scriptcmds.cpp:4754-4797), así que la forma
+          // vieja —sin volumen— **no suena** en el build de Xash3D. No se
+          // cambia aquí porque cambia lo que se oye en partida y pide su
+          // propia medida (cuántas formas viejas quedan DESPUÉS de resolver
+          // variables: en texto crudo son 342 de 3 224 líneas).
           volumen: volumen > -1 ? volumen : null,
           corta: volumen === 0,
           // La atenuación y el tono sólo se leen en la forma NO aleatoria
           // (`if (!Cmd.Name().contains("random"))`, :4737).
-          atenuacion: c.nombre === "playsound" && params.length > 3 ? numDe(params[3]) : null,
-          tono: c.nombre === "playsound" && params.length > 4 ? numDe(params[4]) : null,
+          atenuacion: !aleatorio && params.length > 3 ? numDe(params[3]) : null,
+          tono: !aleatorio && params.length > 4 ? numDe(params[4]) : null,
+          servidor: delServidor,
         });
         return true;
       }
@@ -1746,6 +2192,365 @@ export class Guion {
         return true;
       }
 
+      // ── EL 89b: los pequeños del intérprete ─────────────────────────────
+      //
+      // Todos escriben con `SetVar(Cmd.m_Params[1], …)`, o sea con el nombre
+      // CRUDO y no con el `Params[0]` resuelto —igual que `stradd`—, y todos
+      // LEEN `Params[0]` ya resuelto. Eso tiene una consecuencia que se porta
+      // tal cual: sobre una variable que no existe, `Params[0]` es **su propio
+      // nombre** (script.cpp:4741), y `strconc`/`token.add` lo pegan delante.
+      // `stradd` lo comprueba (:6797-6800) y éstos no.
+      //
+      // Un `Params[2]` que no existe es memoria de más allá de la lista
+      // (`mslist::operator[]` no comprueba, stackstring.h:86-89): aquí se lee
+      // como cadena vacía, o sea `atof` = 0.
+      //
+      // `sound.play3d` / `svsound.play3d <sonido> <volumen> <origen> [atenuación] [canal] [tono]`
+      // scriptcmds.cpp:6698-6716. Las dos son la misma función (:152-153); la
+      // `sv` sólo cambia el precache del cargador (script.cpp:5492, 5506).
+      //
+      // Ojo con el ORDEN: el comentario de encima del motor dice
+      // `[attenuation] [pitch]` y el código lee **el canal en el 5.º y el tono
+      // en el 6.º** (:6703-6704); el 4.º es la atenuación (:6702). Los guiones escriben lo que lee el código:
+      // `svsound.play3d magic/pulsemachine_noloop.wav 8 PLR_LCOD_POS 0.8 5 100`.
+      // Y a diferencia de `playsound`: **sin tope** del volumen, sin saltarse
+      // `none` y sin «0 corta el canal»; es un `UTIL_EmitAmbientSound` crudo
+      // (global.cpp:774-783).
+      case "sound.play3d": case "svsound.play3d": {
+        if (params.length < 3) return true;          // `ERROR_MISSING_PARMS`
+        e.sonarEn(String(params[0]), {
+          volumen: numDe(params[1]) / 10,
+          origen: vectorDeTexto(params[2]),
+          atenuacion: params.length >= 4 ? numDe(params[3]) : null,   // `ATTN_NORM`
+          canal: params.length >= 5 ? enteroDe(params[4]) : 0,
+          tono: params.length >= 6 ? numDe(params[5]) : null,         // `PITCH_NORM`
+        });
+        return true;
+      }
+
+      // `vectoradd <vec> <vec>` | `vectoradd <vec> <x|y|z> <cantidad>` |
+      // `vectoradd <destino> <vec> <vec>`. scriptcmds.cpp:7073-7092.
+      //
+      // La componente se reconoce con `==`, que en `msstring` es `strcmp`
+      // (stackstring.cpp:53-55): `X` mayúscula NO es una componente, y cae a
+      // la suma de vectores con «X» leído como vector, o sea cero.
+      //
+      // La forma de TRES vectores ignora el valor del primero: suma el 2.º y
+      // el 3.º y lo guarda en el 1.º. Son 6 de las 891 líneas del juego.
+      case "vectoradd": {
+        if (params.length < 2) return true;
+        const comp = { x: 0, y: 1, z: 2 }[params[1]];
+        let r;
+        if (comp !== undefined) {
+          const d = [0, 0, 0];
+          d[comp] = numDe(params[2] ?? "");
+          r = vectorDeTexto(params[0]).map((a, i) => Math.fround(a + d[i]));
+        } else {
+          const [a, b] = params.length < 3 ? [params[0], params[1]] : [params[1], params[2]];
+          const va = vectorDeTexto(a), vb = vectorDeTexto(b);
+          r = va.map((x, i) => Math.fround(x + vb[i]));
+        }
+        this.ponerVar(c.params[0], textoDeVector(r), ev);
+        return true;
+      }
+
+      // `vectormultiply <vec> <vec|número>` | `vectormultiply <vec> <x|y|z> <factor>`
+      // scriptcmds.cpp:7098-7125.
+      //
+      // DOS COSAS DEL MOTOR QUE PARECEN FALLOS Y SE PORTAN:
+      //
+      //   1. Con componente, multiplica por `Vector(f, 0, 0)` componente a
+      //      componente (`VecMultiply`, :37): **las otras dos se van a cero**.
+      //      `vectormultiply V x 2` sobre (1,2,3) da (2,0,0). Ningún guion del
+      //      juego usa esa forma (0 de 23), así que nadie lo sufre.
+      //   2. Escalar o vector se decide con `isdigit(Params[1][0])`: un factor
+      //      NEGATIVO o que empiece por punto («-0.5», «.5») no es un dígito, se
+      //      lee como vector, `StringToVec` da cero, y el resultado es (0,0,0).
+      //
+      // Con tres parámetros mira `isdigit` del SEGUNDO —el que debería ser un
+      // vector— y no del tercero; se porta así.
+      case "vectormultiply": {
+        if (params.length < 2) return true;
+        const comp = { x: 0, y: 1, z: 2 }[params[1]];
+        const porVector = (a, b) => a.map((x, i) => Math.fround(x * b[i]));
+        const porNumero = (a, f) => a.map((x) => Math.fround(x * f));
+        const digito = (s) => /^\d/.test(String(s ?? ""));
+        let r;
+        if (comp !== undefined) {
+          const d = [0, 0, 0];
+          d[comp] = numDe(params[2] ?? "");
+          r = porVector(vectorDeTexto(params[0]), d);
+        } else if (params.length < 3) {
+          r = digito(params[1]) ? porNumero(vectorDeTexto(params[0]), numDe(params[1]))
+            : porVector(vectorDeTexto(params[0]), vectorDeTexto(params[1]));
+        } else {
+          r = digito(params[1]) ? porNumero(vectorDeTexto(params[1]), numDe(params[2]))
+            : porVector(vectorDeTexto(params[1]), vectorDeTexto(params[2]));
+        }
+        this.ponerVar(c.params[0], textoDeVector(r), ev);
+        return true;
+      }
+
+      // `vectorset <vec> <x|y|z> <valor>` — scriptcmds.cpp:7130-7144.
+      //
+      // Con una componente que no es `x`, `y` ni `z` el motor avisa por consola
+      // y **escribe igual**: el vector tal cual, pero ya pasado por
+      // `VecToString`. O sea que un `vectorset` mal escrito no deja la variable
+      // como estaba: la reformatea, y si no era un vector la deja a cero.
+      // El juego lo tiene una vez (`vectorset … $relvel(ATK_ANG,MY_VEL)`).
+      case "vectorset": {
+        if (params.length < 2) return true;
+        const v = vectorDeTexto(params[0]);
+        const comp = { x: 0, y: 1, z: 2 }[params[1]];
+        // Sin componente válida el motor avisa (`MSErrorConsoleText`, :7139) y
+        // NO se apunta como hueco del puerto: es un fallo del guion.
+        if (comp !== undefined) v[comp] = Math.fround(numDe(params[2] ?? ""));
+        this.ponerVar(c.params[0], textoDeVector(v), ev);
+        return true;
+      }
+
+      // `strconc <var> <cosas...>` — scriptcmds.cpp:6813-6833.
+      //
+      //     sTemp += Params[0];
+      //     for (i = 0; i < Params.size() - 1; i++) { if (i) sTemp += " "; sTemp += Params[i + 1]; }
+      //
+      // O sea: el valor que ya tenía, PEGADO al primero, y luego los demás con
+      // un espacio. Los guiones cuentan con ello —`local MSG_TITLE "HP LIMIT
+      // is "` y luego `strconc MSG_TITLE $int(CVAR_HP_LIMIT) hp`
+      // (player/player_main.script:933-934)—. Sobre una variable sin poner
+      // pega su NOMBRE delante; ver la cabecera de este bloque.
+      case "strconc": {
+        if (params.length < 2) return true;
+        let s = String(params[0]);
+        for (let i = 0; i < params.length - 1; i++) {
+          if (i) s += " ";
+          s += String(params[i + 1]);
+        }
+        this.ponerVar(c.params[0], s, ev);
+        return true;
+      }
+
+      // `token.add <lista> <valor>` — scriptcmds.cpp:6865-6880. Un `;` sólo si
+      // la lista no estaba vacía. Sin `TokenizeString`: es concatenar.
+      case "token.add": {
+        if (params.length < 2) return true;
+        let s = String(params[0]);
+        if (s.length) s += ";";
+        s += String(params[1]);
+        this.ponerVar(c.params[0], s, ev);
+        return true;
+      }
+
+      // `token.del <lista> <índice>` — scriptcmds.cpp:6885-6911.
+      //
+      // Parte con `TokenizeString` —`partirTokens`, que CORTA en el primer
+      // hueco— y vuelve a pegar, así que borrar de «a;;b;c» deja sólo lo de
+      // antes del hueco. Fuera de rango **no escribe nada** (el `SetVar` está
+      // dentro del `if`, :6896-6906).
+      case "token.del": {
+        if (params.length < 2) return true;
+        const t = partirTokens(params[0]);
+        const i = enteroDe(params[1]);
+        if (i >= 0 && i < t.length) {
+          t.splice(i, 1);
+          this.ponerVar(c.params[0], t.join(";"), ev);
+        }
+        return true;
+      }
+
+      // `token.set <lista> <índice> <valor>` — scriptcmds.cpp:6947-6984. Igual
+      // que `token.del` —fuera de rango no escribe—, y pide sólo DOS
+      // parámetros aunque lea el tercero (:6952 contra :6959).
+      case "token.set": {
+        if (params.length < 2) return true;
+        const t = partirTokens(params[0]);
+        const i = enteroDe(params[1]);
+        if (i >= 0 && i < t.length) {
+          t[i] = String(params[2] ?? "");
+          this.ponerVar(c.params[0], t.join(";"), ev);
+        }
+        return true;
+      }
+
+      // `token.scramble <lista>` — scriptcmds.cpp:6917-6940. Saca uno al azar
+      // cada vez (`RANDOM_LONG(0, size - 1)`) y le pega **un `;` detrás
+      // siempre**: «a;b» sale «b;a;», con el punto y coma colgando. Un
+      // `token.add` de después añade otro y queda «b;a;;c», que para
+      // `TokenizeString` acaba en la «a».
+      case "token.scramble": {
+        if (!params.length) return true;
+        const t = partirTokens(params[0]);
+        let s = "";
+        const n = t.length;
+        for (let k = 0; k < n; k++) {
+          const r = e.azar(0, t.length - 1);
+          s += `${t[r]};`;
+          t.splice(r, 1);
+        }
+        this.ponerVar(c.params[0], s, ev);
+        return true;
+      }
+
+      // ── EL 89c: LO QUE CAMBIA EL ESTADO DEL JUGADOR ──────────────────────
+      //
+      // Ninguno decide nada aquí: el intérprete sólo parte los parámetros
+      // como el motor y llama al gancho. Si el entorno NO tiene el gancho —el
+      // de un NPC o el de un objeto, hoy— se APUNTA en vez de tragarse: un
+      // `=> {}` por omisión es donde una regla vive sin correr (el 66, el 81).
+
+      // `drainstamina <objetivo> <cantidad>` — scriptcmds.cpp:2988-3009. El
+      // servidor NO resta: le manda al cliente `WRITE_LONG(Amt)` con un
+      // `float`, o sea la cantidad TRUNCADA a entero (:2996-2998), y el
+      // cliente la resta con tope en [0, máximo] (clplayer.cpp:131-136,
+      // :1358-1360). Negativa, suma: `-1000` es «llénalo».
+      case "drainstamina": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        if (!e.drenarAguante) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.drenarAguante(String(params[0]), Math.trunc(numDe(params[1])));
+        return true;
+      }
+
+      // `gold <n>` pone y `addgold <n>` suma — npcscript.cpp:234-252. Los dos
+      // son de `CMSMonster`: el oro de QUIEN CORRE el guion, sin objetivo.
+      case "gold": case "addgold": {
+        if (!params.length) return true;             // `ERROR_MISSING_PARMS`
+        if (!e.oroPropio) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.oroPropio(c.nombre === "gold" ? "poner" : "sumar", enteroDe(params[0]));
+        return true;
+      }
+
+      // `removeitem <nombre>` — npcscript.cpp:621-634, con «Thothie - this
+      // doesn't work» encima. Busca por SUBCADENA del nombre (`strstr`,
+      // msmonstershared.cpp:196-221). El gancho hace la búsqueda.
+      case "removeitem": {
+        if (!params.length) return true;
+        if (!e.quitarObjeto) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.quitarObjeto(String(params[0]));
+        return true;
+      }
+
+      // `setvelocity|addvelocity <objetivo> <vec> [override]` —
+      // scriptcmds.cpp:7155-7214. `setorigin <objetivo> <vec>` — :4508-4528.
+      // El vector se parte como `StringToVec` (`vectorDeTexto`), en UNIDADES y
+      // ejes del motor; pasarlo a la escena es del gancho.
+      //
+      // LA GUARDA DEL `$`, que NO es del motor: un getter que este puerto no
+      // tiene vuelve como su propio texto (script.cpp:4741, ver `resolver`), y
+      // `StringToVec("$vec(…)")` da (0,0,0). En el motor eso no pasa porque el
+      // getter existe; aquí mandaría al jugador al origen del mapa. Así que esa
+      // mitad —nuestra— se apunta y no se ejecuta, y la otra —una variable sin
+      // poner, que también da (0,0,0) y ES del motor— se ejecuta como allí.
+      case "setvelocity": case "addvelocity": case "setorigin": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        const gancho = c.nombre === "setorigin" ? e.ponerOrigen : e.velocidad;
+        if (!gancho) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        const texto = String(params[1]);
+        if (texto.startsWith("$")) {
+          this.anotarNoSoportado("vector sin getter", `${c.nombre} ${texto}`);
+          return true;
+        }
+        const v = vectorDeTexto(texto);
+        if (c.nombre === "setorigin") e.ponerOrigen(String(params[0]), v);
+        else {
+          e.velocidad(String(params[0]), v, {
+            sumar: c.nombre === "addvelocity",
+            // `Params[2] != "override"` (:7184): sólo cuenta si hay tercero.
+            override: params.length >= 3 && String(params[2]) === "override",
+          });
+        }
+        // `ScriptCmd_Origin` devuelve FALSE (:4527) y `ScriptCmd_Velocity`
+        // TRUE (:7213). No cambia nada: el valor sólo lo lee un condicional y
+        // éstos no lo son (script.cpp:5748-5754).
+        return true;
+      }
+
+      // `setstat <estadística> <valores...>` — npcscript.cpp:1305-1358. En un
+      // jugador escribe las subestadísticas de verdad; en un monstruo sólo
+      // `parry`, y como scriptvar. Las dos ramas son del gancho.
+      case "setstat": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        if (!e.ponerEstadistica) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.ponerEstadistica(String(params[0]), params.slice(1).map(String));
+        return true;
+      }
+
+      // `noxploss ent_me 0`, en `game_player_putinworld`
+      // (player_main.script:986). **No existe**: la palabra no sale en todo el
+      // código del mod ni del motor. No está en `m_GlobalCmdHash` ni en la
+      // lista de `CMSMonster` (npcscript.cpp:20-95), así que el CARGADOR ya la
+      // tira al leer el guion: `Script_ParseLine` devuelve 0 y la línea no
+      // entra en el evento (script.cpp:5616-5630). Es una línea muerta de un
+      // sistema que ya no está; portarla es no hacer nada A PROPÓSITO, y no
+      // apuntarla como hueco.
+      case "noxploss": return true;
+
+      // ── LOS EFECTOS ──────────────────────────────────────────────────
+      // `applyeffect <objetivo> <guion> [params…]` (scriptcmds.cpp:1865-1929),
+      // `removeeffect <objetivo> <id>` (:5068-5106) y `removescript`
+      // (:5114-5119). El intérprete no decide nada: QUIÉN es el objetivo y si
+      // puede llevar un efecto lo sabe el entorno, y la regla entera —la pila,
+      // el `game_activate`, el reparto de eventos— está en `efectos.js`. Sin
+      // gancho se apunta: no hay `=> {}` en `entornoVacio` para éstos (el 66).
+      case "applyeffect": case "removeeffect": case "removescript": {
+        if (c.nombre === "removescript") {
+          // `RemoveNextFrame`: NO corta el evento, lo de detrás sigue.
+          if (e.quitarGuion) e.quitarGuion();
+          else this.anotarNoSoportado("comando", "removescript (este guion no se puede quitar de su entidad)");
+          return true;
+        }
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        const gancho = c.nombre === "applyeffect" ? e.aplicarEfecto : e.quitarEfecto;
+        if (!gancho) { this.anotarNoSoportado("comando", `${c.nombre} (sin anfitrión de efectos)`); return true; }
+        if (c.nombre === "applyeffect") e.aplicarEfecto(String(params[0]), String(params[1]), params.slice(2).map(String), { desde: this });
+        else e.quitarEfecto(String(params[0]), String(params[1]));
+        return true;
+      }
+
+      // ── EL 91: EL DAÑO, LAS BANDERAS Y LA RESISTENCIA ───────────────────
+      //
+      // `dodamage` y `xdodamage` se parten ENTEROS, con todas sus formas y sus
+      // rarezas (ver `leerDano`), y el resultado va al gancho `hacerDano` del
+      // entorno, que es quien sabe a quién le duele. Sin gancho, se apunta: un
+      // `=> {}` aquí sería un veneno que no hace nada sin decirlo (el 66).
+      case "dodamage": case "xdodamage": {
+        const d = leerDano(c.nombre, params.map(String));
+        if (!d) return true;                         // `ERROR_MISSING_PARMS`
+        if (!e.hacerDano) { this.anotarNoSoportado("comando", `${c.nombre} (sin gancho de daño)`); return true; }
+        e.hacerDano(d, { desde: this });
+        return true;
+      }
+
+      // `scriptflags <objetivo> <acción> [nombre] [tipo] [valor] [caduca] [aviso]`
+      // — scriptcmds.cpp:5265-5451. Las banderas son de la ENTIDAD
+      // (`pEntity->m_scriptflags`), no del guion: un efecto y su anfitrión
+      // leen las mismas. La regla está en `BanderasDeEntidad` (`efectos.js`);
+      // aquí sólo se reparten los avisos y los dos eventos que el motor manda
+      // a la entidad, en su orden: `game_scriptflag_expired` DENTRO del bucle
+      // de `remove_expired` (:5372) y `game_scriptflag_update` siempre al
+      // final (:5437-5444).
+      case "scriptflags": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        const ref = String(params[0]);
+        const b = e.banderas?.(ref) ?? null;
+        // «target entity not found» (:5446): el motor avisa por consola.
+        if (!b) { this.anotarNoSoportado("comando", "scriptflags (entidad sin banderas)"); return true; }
+        const r = b.ejecutar(params.map(String), Number(this.ahora()) || 0);
+        for (const aviso of r.avisos) e.mensajeAlJugador?.(ref, aviso, "dplayermessage");   // HUDEVENT_UNABLE
+        for (const ex of r.expirados) e.llamarExterno?.(ref, "game_scriptflag_expired", ex);
+        e.llamarExterno?.(ref, "game_scriptflag_update", r.parametros);
+        return true;
+      }
+
+      // `takedmg <tipo|all> <multiplicador> [adjust]` — npcscript.cpp:1057-1104.
+      // Es de `CMSMonster`, y el jugador lo es: lo usa su guion para las
+      // resistencias elementales (player/server/element_resist.script:103).
+      case "takedmg": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        if (!e.ponerRecibeDano) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.ponerRecibeDano(String(params[0]), numDe(params[1]), params.length >= 3 ? String(params[2]) : null);
+        return true;
+      }
+
       case "dbg": return true;                       // sólo en el build de Thothie
 
       default:
@@ -1860,6 +2665,13 @@ export function entornoVacio() {
     decir: () => {},
     /** `playsound <ent> <canal> <archivo>`. */
     sonar: () => {},
+    /**
+     * El 89b. `sound.play3d`/`svsound.play3d`: un sonido en un PUNTO y no en
+     * la entidad. `origen` en unidades y ejes del motor, sin convertir.
+     * AVISO (CLAUDE.md §4, el `=> {}` del 66): hoy no lo conecta ningún
+     * entorno; el comando corre y no suena hasta que alguien lo cablee.
+     */
+    sonarEn: () => {},
     /** `setprop <ent> <prop> <valor>`. */
     ponerPropiedad: () => {},
     /** `roam 0|1`: `MONSTER_ROAM`. */

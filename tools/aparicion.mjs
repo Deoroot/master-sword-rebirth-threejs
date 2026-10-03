@@ -582,10 +582,28 @@ const seCambio = elegido !== delMapa;
 // todo o rechazaran todo, la elección entera sería un sello de goma. Este par
 // es la versión de dos lados del control del 48: tienen que rechazar algo Y
 // aceptar algo, en el mapa que se está horneando.
+//
+// CORRECCIÓN DEL 88: en un mapa pequeño puede no haber NINGÚN candidato malo.
+// La sala del 88 tiene dos sitios para nacer, los dos a 29 m de su única rata,
+// y estos dos controles salían rojos con las reglas funcionando: pedían un caso
+// que el mapa no tiene. Marcarlos «no aplica» habría dejado sin comprobar que
+// la regla de los hostiles sabe decir que no, así que se le da un caso que sí
+// existe: un TESTIGO encima del primer hostil del mapa, que tiene que salir
+// rechazado. Sólo entra cuando los candidatos de verdad no traen ninguno malo,
+// para que en Gate City y Edana el control siga midiendo lo mismo que antes; y
+// si el mapa no tiene ni un hostil, entonces sí: no aplica.
+const testigos = hostiles.slice(0, 1).map((b) =>
+  medir([b.pies[0], b.pies[1], b.pies[2] + 36], `testigo encima de ${b.nombre}`, "testigo"));
+const conCasoMalo = candidatos.some((c) => reglasDuras(c).length > 0) ? candidatos : [...candidatos, ...testigos];
+const conTestigo = conCasoMalo !== candidatos ? ` (con ${testigos.length} testigo)` : "";
 {
-  const juzgados = candidatos.map((c) => reglasDuras(c).length);
-  control("las reglas duras RECHAZAN sitios de este mapa", juzgados.some((n) => n > 0),
-    `${juzgados.filter((n) => n > 0).length} de ${juzgados.length} candidatos incumplen alguna`);
+  const juzgados = conCasoMalo.map((c) => reglasDuras(c).length);
+  if (!hostiles.length && !juzgados.some((n) => n > 0)) {
+    noAplica("las reglas duras RECHAZAN sitios de este mapa", "ningún candidato es malo y el mapa no tiene hostiles con los que poner un testigo");
+  } else {
+    control("las reglas duras RECHAZAN sitios de este mapa", juzgados.some((n) => n > 0),
+      `${juzgados.filter((n) => n > 0).length} de ${juzgados.length} candidatos incumplen alguna${conTestigo}`);
+  }
   control("y ACEPTAN otros", juzgados.some((n) => n === 0),
     `${juzgados.filter((n) => n === 0).length} de ${juzgados.length} las cumplen todas`);
 }
@@ -631,8 +649,12 @@ control("mira a algo despejado", elegido.libre >= 3,
   `${elegido.libre} m libres en yaw ${(elegido.yaw * 180 / Math.PI).toFixed(0)}°`);
 // El control negativo, que es el que impide que esto sea un sello de goma: si
 // se relaja la regla de los hostiles, el punto del mapa TIENE que colarse.
-control("la regla de los hostiles descarta algo", candidatos.some((c) => c.hostiles15 > 0),
-  `${candidatos.filter((c) => c.hostiles15 > 0).length} de ${candidatos.length} candidatos descartados por hostiles`);
+if (!hostiles.length) {
+  noAplica("la regla de los hostiles descarta algo", "el mapa no tiene ni un hostil");
+} else {
+  control("la regla de los hostiles descarta algo", conCasoMalo.some((c) => c.hostiles15 > 0),
+    `${conCasoMalo.filter((c) => c.hostiles15 > 0).length} de ${conCasoMalo.length} candidatos descartados por hostiles${conTestigo}`);
+}
 // ── El ancla derivada, y que el `grep` distinga ────────────────────────────
 //
 // La lista de anclas ya no está escrita, así que hay que comprobar que el

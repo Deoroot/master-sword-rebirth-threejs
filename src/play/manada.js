@@ -516,6 +516,22 @@ export class Manada {
     /** Qué ha pasado desde la última foto: golpes, muertes, encogimientos. */
     this.sucesos = [];
     this.instancias = [];
+    /**
+     * EL 91: QUIEN OYE LOS GOLPES PARA EL GUION DEL BICHO.
+     *
+     * `(suceso) => void`, con `suceso = { que, i, ... }`. Lo enchufa
+     * `InteraccionesNpc.enchufarA`, que es quien tiene los guiones. Va aparte
+     * de `sucesos` porque aquello es la foto para el cable y se vacía cuando
+     * quiere quien la lleva; esto tiene que llegar en el MOMENTO, dentro del
+     * golpe, porque el orden del motor importa (`game_struck` corre con la
+     * vida de ANTES, msmonsterserver.cpp:2380-2388).
+     *
+     * Sin oyente no pasa nada y se CUENTA en `costuraSinOyente`: el servidor
+     * de `src/red/` todavía no lo enchufa, y eso tiene que verse.
+     */
+    this.oyente = null;
+    this.costuraSinOyente = 0;
+    this.costuraFallos = 0;
 
     for (const [n, c] of (censo?.colocados ?? []).entries()) {
       const secuencias = secuenciasPorClave.get(c.clave) ?? [];
@@ -616,6 +632,12 @@ export class Manada {
         llevaEncima: sorteoDeBotin(c.ia?.botin, azar),
         /** Cuánto lleva con la misma pose de reposo, para volver a sortear. */
         tQuieto: 0,
+        /**
+         * EL 91: cuántas veces ha vuelto a nacer. Cada `revivir` es una
+         * entidad nueva en el motor y con ella un guion nuevo; el guion se
+         * guarda con este número y se rehace cuando no coincide.
+         */
+        nacimientos: 0,
         /** La animación PEDIDA. `gen` sube cada vez que hay que rebobinar. */
         anim: { nombre: null, gen: 0, unaVez: false },
         /**
@@ -1099,6 +1121,8 @@ export class Manada {
    * se puede matar, o uno con la animación de morir congelada.
    */
   revivir(i) {
+    // EL 91: otra entidad, otro guion. Ver `nacimientos`.
+    i.nacimientos = (i.nacimientos ?? 0) + 1;
     // EL CAZADOR, que la muerte pone a `null` (`herir`, más abajo) y sin el cual
     // el bicho vuelve pero no ataca a nadie — vivo, con vida llena, y pacífico.
     // Se reconstruye de la ficha, que es de donde salió.
@@ -1260,9 +1284,29 @@ export class Manada {
         if (acierta(i.ficha.ia, this.azar)) {
           const dano = danoDe(i.ficha.ia, this.azar);
           this._suceso("pega", { id: i.id, a: r.objetivo, dano: Math.round(dano * 10) / 10 });
-          golpear?.(i, r.objetivo, dano);
+          // ── EL 91: LOS DOS EVENTOS DEL ATACANTE, EN EL ORDEN DEL MOTOR ──
+          //
+          // `game_damaged_other` va ANTES de que el golpe llegue al otro, y
+          // sólo si la tirada de acierto ha entrado (giattack.cpp:1696-1762).
+          // `game_dodamage` va al final, en `EndDamage`, acierte o no
+          // (:2030-2045). Y en medio la defensa del jugador puede pararlo:
+          // un parry deja `flDamage == -1` y eso pone `AttackHit = false`
+          // (:1832-1838), así que el «1» o el «0» de PARAM1 lo decide quien
+          // tiene la defensa, que es `golpear`. Si `golpear` no dice nada
+          // (`null`), se toma el golpe como entrado con el daño de la IA.
+          this._costura("danaAOtro", i, { objetivo: r.objetivo, dano });
+          const def = golpear?.(i, r.objetivo, dano) ?? null;
+          const parado = Boolean(def?.parado);
+          this._costura("hizoDano", i, {
+            objetivo: r.objetivo, acierto: !parado,
+            dano: parado ? 0 : (Number.isFinite(def?.dano) ? def.dano : dano),
+          });
         } else {
           this._suceso("falla", { id: i.id, a: r.objetivo });
+          // La tirada de acierto no ha entrado: `AttackHit = false`
+          // (giattack.cpp:1686-1691) y no hay `game_damaged_other`, pero
+          // `EndDamage` corre igual y el guion se entera de que ha fallado.
+          this._costura("hizoDano", i, { objetivo: r.objetivo, acierto: false, dano: 0 });
         }
         continue;
       }
@@ -1336,13 +1380,27 @@ export class Manada {
     // atacante es `rand(acierto, 100)` y puede salir 100. Un dado «fijado» que
     // no fija nada da una sonda que pasa unas veces y no otras, y eso se lee
     // como un fallo del juego.
+    // La tirada del atacante se guarda: es la misma que el motor pasa como
+    // PARAM4 de `game_damaged` (`Damage.AccuracyRoll`, msmonsterserver.cpp:2284),
+    // y si se volviera a tirar para el guion serían dos dados para un golpe.
+    const tiradaDeAcierto = dados.acierto ?? aciertoDelGolpe();
     const p = parryDelBicho({
       parry: ia.parry ?? 0, tipo,
-      acierto: dados.acierto ?? aciertoDelGolpe(),
+      acierto: tiradaDeAcierto,
       tiradas: {
         ...(dados.parry !== undefined ? { parry: dados.parry } : {}),
         ...(dados.acc !== undefined ? { acierto: dados.acc } : {}),
       },
+    });
+    // ── EL 91: EL GUION DEL QUE RECIBE, con la vida de ANTES ──────────────
+    //
+    // `game_damaged` (TraceAttack, msmonsterserver.cpp:2311) y, si el golpe
+    // pasa, `game_struck` (TakeDamage, :2385, ANTES de `GiveHP`). Se avisa
+    // aquí, antes de restar, porque es el orden del motor; la costura sabe
+    // cuál de los dos toca con `parado`.
+    this._costura("recibe", i, {
+      quien: dados.quien ?? quien ?? null, dano, tipo, cubo,
+      acierto: tiradaDeAcierto, parado: Boolean(p.para),
     });
     if (p.para) {
       i.reaccion.parados++;
@@ -1480,6 +1538,11 @@ export class Manada {
     // dos veces — `revivir` le sortea uno nuevo, como un bicho nuevo.
     const suelta = i.llevaEncima ?? [];
     i.llevaEncima = [];
+    // EL 91: `game_predeath` y `game_death`, los dos sin parámetros
+    // (msmonsterserver.cpp:2580 y :2605). Después del grito a los aliados,
+    // que el guion también daría (`npcatk_alert_all_allies`, base_npc.script:
+    // 169-172) y por eso está en `CIERRE_DE_BICHO`.
+    this._costura("muere", i, { quien: quien ?? null });
     this._suceso("muere", {
       id: i.id, por: quien ?? null, avisados: avisados.length,
       // Va en el suceso y no en el valor de retorno porque con servidor el que
@@ -1550,6 +1613,17 @@ export class Manada {
         }
       }
     }
+  }
+
+  /**
+   * EL 91: un golpe, al guion del bicho. Un guion que revienta NO para la IA
+   * —la IA es la que manda—, pero se cuenta y se dice por consola: tragárselo
+   * callado sería un `catch {}` donde vive una regla muerta.
+   */
+  _costura(que, i, datos = {}) {
+    if (!this.oyente) { this.costuraSinOyente++; return; }
+    try { this.oyente({ que, i, ...datos }); }
+    catch (e) { this.costuraFallos++; console.warn(`costura «${que}» de ${i?.ficha?.script}:`, e); }
   }
 
   _suceso(que, datos) {

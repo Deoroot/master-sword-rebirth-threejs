@@ -2,6 +2,7 @@ import { BASE_COMUN, rutaComun } from "./play/recursos.js";
 // El 64: el jugador también es una entidad con guion.
 import { GuionDelJugador, EVENTOS_DEL_JUGADOR } from "./play/guionjugador.js";
 import { GuionesDeObjeto, GuionDeObjeto, QUIEN_VISTE } from "./play/guionobjeto.js";
+import { TablaDeEfectos } from "./play/efectos.js";
 import { HABILIDADES, PROPIEDADES } from "./juego/stats.js";
 // Entrada del navegador. Une las tres piezas y no hace nada mas: el cargador
 // y la fisica son los mismos modulos que corren en Node sin ojos.
@@ -32,7 +33,8 @@ import { carga as cargaDe } from "./juego/inventario.js";
 import { buildView } from "./render/scene.js";
 import { atlasDe } from "./render/studio.js";
 import { cargarNivel } from "./bsp/nivel.js";
-import { mapaPedido as leerMapaPedido, baseDe, rutaDe, esNombreDeMapa } from "./play/mapa.js";
+import { mapaPedido as leerMapaPedido, baseDe, rutaDe, esNombreDeMapa, MAPAS_PORTADOS } from "./play/mapa.js";
+import { Transiciones, elegirLlegada, inicioDe, faltaElEnlace } from "./play/transicion.js";
 import {
   escenaDelMapa,
   cargarTexturas as cargarTexturasBsp,
@@ -140,7 +142,7 @@ import { InteraccionesNpc } from "./juego/interacciones.js";
 import { nombreVisibleDe } from "./play/usaropcion.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
 import { AlmacenLocal, AlmacenMemoria } from "./juego/almacen.js";
-import { Sesion, ESTADO, guardarAlCerrar } from "./juego/sesion.js";
+import { Sesion, ESTADO, ENTRADA, guardarAlCerrar } from "./juego/sesion.js";
 import { relacionDeRazas, RELACION } from "./bsp/razas.js";
 import {
   PARTIDA,
@@ -257,6 +259,8 @@ let fichaDelJugador = null;
 // montan al aparecer, que son dos funciones distintas — tenerlas locales fue el
 // fallo del 65 («cargado false» sin un solo error en la página).
 let guionesDeObjeto = null;
+/** Los guiones de EFECTO horneados (`npm run efectos:guion`). Ver `src/play/efectos.js`. */
+let tablaDeEfectos = null;
 /** @type {Map<string, GuionDeObjeto>} por `uid` del objeto, o por su id. */
 const objetosVivos = new Map();
 // Y EL ASA A LA COSTURA, a nivel de módulo por la misma razón que el resto: la
@@ -608,6 +612,11 @@ async function arrancarJuego() {
     const fichaObjetos = await traerJson(rutaComun("objetosguion.json"));
     if (!fichaObjetos) console.warn("sin build/msr/objetosguion.json: los objetos van sin guion. Corre `npm run objetos:guion`.");
     guionesDeObjeto = fichaObjetos ? new GuionesDeObjeto(fichaObjetos) : null;
+    // Y los de EFECTO: la cura del sacerdote, el sentarse, los venenos. Un
+    // efecto es otro guion que se pega a una entidad (scriptedeffects.cpp:27).
+    const fichaEfectos = await traerJson(rutaComun("efectosguion.json"));
+    if (!fichaEfectos) console.warn("sin build/msr/efectosguion.json: `applyeffect` se apunta y no hace nada. Corre `npm run efectos:guion`.");
+    tablaDeEfectos = fichaEfectos ? new TablaDeEfectos(fichaEfectos) : null;
     if (catalogo) catalogoDeObjetos = { porId: new Map(catalogo.objetos.map((o) => [o.id, o])) };
     // CÓMO SE PRESENTA EL MAPA: su nombre, su descripción y la banda de nivel
     // para la que está hecho. `npm run mapainfo`. Sin esto el juego no dice que
@@ -1191,7 +1200,48 @@ async function arrancarJuego() {
     // El menú se monta más abajo —necesita su ficha horneada—, así que aquí
     // sólo se apunta por dónde hay que entrar y se abre cuando exista. Llamarlo
     // ahora abriría un menú que todavía es `null`.
-    if (mapaPedido) await sesion.arrancar();
+    // ── EL 89: SE LLEGA DE UN VIAJE ─────────────────────────────────────────
+    //
+    // Tras cruzar una transición el motor reconecta CON EL MISMO PERSONAJE y no
+    // enseña la lista, así que aquí tampoco. `viaje` es el personaje y `llegada`
+    // el `m_SpawnTransition` que puso `settrans` (ver `aplicarTransicion`).
+    //
+    // NO se espera al mapa con `await`: `elMapa` se resuelve más abajo en esta
+    // misma función (`mapaListo()`), y esperarlo aquí sería que `arrancarJuego`
+    // se esperase a sí misma para siempre. Se encadena y se sigue.
+    const deViaje = new URLSearchParams(location.search);
+    const personajeDeViaje = deViaje.get("viaje");
+    if (mapaPedido && personajeDeViaje) {
+      elMapa.then(async () => {
+        const nombre = deViaje.get("llegada");
+        const m = level.manifiesto;
+        const inicio = inicioDe(m);
+        // Llegada con nombre; si no la hay y el mapa deja crear personaje
+        // (`JN_STARTMAP`), el inicio; y si tampoco, nada — el motor expulsa.
+        const punto = elegirLlegada(m.llegadas ?? [], nombre, { inicio });
+        try {
+          if (!punto) {
+            // `JN_TRAVEL` sin respaldo (player.cpp:2525-2547). El motor desconecta;
+            // aquí se dice lo mismo y se vuelve a la lista de personajes. Ninguna
+            // de las 193 transiciones del juego llega a esto: es la regla y nada más.
+            suceso("nopuedes", faltaElEnlace(nombre ?? "<unknown>"));
+            await sesion.arrancar();
+            return;
+          }
+          // El inicio va con el `nacimiento` horneado, que es ese mismo
+          // `ms_player_begin` CON su rumbo medido; una llegada con nombre, con el
+          // suyo del `.bsp`. GoldSrc mira a (cos θ, sin θ) y este jugador, con yaw
+          // 0, a +Y del `.bsp` (−Z de la escena), así que yaw = (θ − 90°).
+          sesion.ultimaTransicion = punto === inicio
+            ? (sesion.aparicion?.nacimiento ?? null)
+            : { nombre, escena: punto.pies, yaw: ((punto.yaw - 90) * Math.PI) / 180 };
+          await sesion.entrar(personajeDeViaje, { entrada: ENTRADA.VUELTA });
+        } catch (err) {
+          console.warn("no se ha podido llegar del viaje:", err);
+          await sesion.arrancar();
+        }
+      });
+    } else if (mapaPedido) await sesion.arrancar();
     else entrarPorElMenu = true;
   } catch (e) {
     console.warn("el ciclo de sesion no se ha podido montar:", e);
@@ -1800,6 +1850,57 @@ async function arrancarJuego() {
   addEventListener("pointerdown", despertarAudio, { once: false });
   addEventListener("keydown", despertarAudio, { once: false });
 
+  // ── EL 89: LAS TRANSICIONES ENTRE MAPAS ─────────────────────────────────
+  //
+  // La regla —pisar, salir, aceptar y lo que hace el `game_master`— está en
+  // `src/play/transicion.js`, con sus citas, y devuelve efectos. Esto es la
+  // COSTURA: a quién le toca cada efecto. Va de una pieza y con nombre por lo
+  // mismo que la reverberación de abajo: en una costura se perdieron tres cosas
+  // seguidas en el 63.
+  //
+  // `mapaExiste` es el `$map_exists` del guion: un mapa existe «en este
+  // servidor» si este puerto sabe abrirlo, o sea si está en `MAPAS_PORTADOS`.
+  const transiciones = new Transiciones({ mapaExiste: (m) => MAPAS_PORTADOS.includes(m) });
+  // `EnableControl(FALSE)` (msmapents.cpp:1842-1843): entre el «Traveling to» y
+  // el cambio de nivel no se anda ni se ataca. Se aplica abajo, sobre la
+  // intención del jugador, junto a las banderas de sentarse.
+  let controlesQuitados = false;
+  let viajeProgramado = null;
+  const aplicarTransicion = (efectos) => {
+    for (const ef of efectos) {
+      if (ef.tipo === "evento") guionJugador?.llamar(ef.nombre, ef.params);
+      else if (ef.tipo === "guardar") sesion?.guardar?.({ forzar: true });
+      // `infomsg all`: a la ventana de arriba a la izquierda, no a la consola.
+      else if (ef.tipo === "aviso") mensajes?.aviso(ef.titulo, ef.texto);
+      // `UTIL_ClientPrintAll(HUD_PRINTCENTER, ...)`.
+      else if (ef.tipo === "centro") mensajes?.centrar(ef.texto);
+      // `messageall green` es `HUDEVENT_GREEN`, que aquí es la clave `bueno`.
+      else if (ef.tipo === "mensaje") suceso(ef.color === "green" ? "bueno" : "normal", ef.texto);
+      else if (ef.tipo === "bloquear") controlesQuitados = true;
+      // La votación de varios jugadores NO está portada (ver transicion.js), y
+      // callarla sería dejar al que pulsa esperando algo que no llega.
+      else if (ef.tipo === "votacion") suceso("nopuedes", `${ef.titulo} — voting between players is not in this port yet`);
+      else if (ef.tipo === "viajar" && !viajeProgramado) {
+        // `callevent 5.0 delay_changelevel`: cinco segundos y se cambia de
+        // nivel. En el navegador, cambiar de nivel es navegar — lo mismo que
+        // hace «Start» con otro mapa, y conservando lo demás de la URL por la
+        // razón del 61 (si no, te saca del servidor en silencio).
+        //
+        // Y se lleva al personaje: el motor reconecta CON EL MISMO, sin pasar
+        // por la lista (`viaje`), y le dice dónde aparecer (`llegada`, que es
+        // `m_SpawnTransition` puesto por `settrans`, scriptcmds.cpp).
+        viajeProgramado = setTimeout(() => {
+          const q = new URLSearchParams(location.search);
+          q.set("map", ef.mapa);
+          q.set("menu", "1");
+          if (sesion?.personaje?.id) q.set("viaje", sesion.personaje.id);
+          if (ef.llegada) q.set("llegada", ef.llegada); else q.delete("llegada");
+          location.search = `?${q}`;
+        }, ef.en * 1000);
+      }
+    }
+  };
+
   // ── EL 82: LA REVERBERACIÓN. Los once `env_sound` de Edana ──────────────
   //
   // `env_sound` no suena: le pone al jugador su `room_type`, que es el preset
@@ -2078,8 +2179,54 @@ async function arrancarJuego() {
         // mapa contra la cadena «game.map.name» y la guarda que impide que
         // Edana regale el bono de los 10 000 del gauntlet no se cumple.
         mapa: () => MAPA,
+        // `game.players` (el 89): uno, más los demás si hay servidor.
+        jugadores: () => (red ? 1 + (red.ajenos?.size ?? 0) : 1),
+        // `infomsg` del guion del jugador (el 89): a la misma ventana que el de
+        // los NPC. Antes no llegaba a ningún sitio.
+        aviso: (titulo, texto) => mensajes?.aviso(titulo, texto),
+        // ── EL 89c: lo que el guion le cambia al jugador ──────────────────
+        // `drainstamina`: el aguante vive en `fatiga`, no en el personaje. La
+        // regla (restar, tope en [0, máximo]) está en el entorno del jugador;
+        // aquí sólo se le da dónde leer y escribir.
+        aguante: {
+          leer: () => fatiga.aguante,
+          poner: (v) => { fatiga.aguante = v; },
+          maximo: () => vitalesDelPersonaje().aguanteMax,
+        },
+        // `setvelocity`/`addvelocity`/`setorigin` sobre el jugador. Llegan en
+        // UNIDADES y ejes del motor. `player.vel` ya va en unidades por segundo
+        // (ver `velocidadParaLosPasos`): sólo se cambian los ejes, no la escala.
+        // Y el `origin` del motor es el CENTRO de la caja (36 sobre los pies de
+        // pie, `tocandoDisparadores`), y `colocar` quiere los pies en metros.
+        fisica: {
+          empujar: (v, sumar) => {
+            const e = [v[0], v[2], -v[1]];
+            player.vel = sumar ? player.vel.map((x, i) => x + e[i]) : e;
+          },
+          colocar: (v) => {
+            const e = aEscenaDesdeUnidades(v);
+            player.colocar([e[0], e[1] - 36 / level.unitsPerMetre, e[2]]);
+          },
+        },
+        // Oro, objetos o habilidades tocados desde el guion: se guarda, y si
+        // cambió la mochila se remontan los guiones de objeto (el 66).
+        cambio: (que) => {
+          sesion?.tocado?.();
+          if (que === "objetos") sincronizarObjetos();
+        },
         // Los máximos van inyectados: no se guardan, se derivan (el 66).
         maximos: () => maximosDelPersonaje(),
+        // Los guiones de efecto: el jugador es su anfitrión (`src/play/efectos.js`).
+        efectos: tablaDeEfectos,
+        // EL 91: EL DAÑO DE UN EFECTO —el veneno de `effects/base_dot`— entra
+        // por el MISMO `golpear` que el mordisco de un bicho: escudo, parry,
+        // «X hits you: …», `game_damaged` y restar la vida. El bicho es el
+        // atacante del efecto (`aplicadorDeBicho`, efectos.js); si el efecto
+        // lo puso otra cosa, sólo se sabe su nombre. Va por el asa de módulo:
+        // `arnesDePaseo` se define más abajo, y esto se llama jugando.
+        herir: (g) => arnesDePaseo.golpear(
+          g.atacante?.instancia ?? { ficha: { nombre: g.atacante?.nombre ?? "none", ia: {} } },
+          "jugador", g.dano, g.tipo ?? ""),
         suceso: (tipo, texto) => suceso(tipo, texto),
         // `usetrigger` (67): la unica puerta del jugador hacia el `.bsp`. Va por
         // el asa de modulo, no por la variable local del armado del mundo: un
@@ -2896,6 +3043,10 @@ async function arrancarJuego() {
 
   const interacciones = new InteraccionesNpc({
     sesion, guiones: fichaDeGuiones, menus: fichaDeMenus,
+    // `applyeffect` de un NPC sobre el jugador: la cura del sumo sacerdote de
+    // Edana (edana/highpriest.script:94). Va por el asa de módulo: el guion
+    // del jugador se monta al aparecer, después de esto.
+    aplicarEfecto: (ruta, params, o) => guionJugador?.efectos?.aplicar(ruta, params, o) ?? null,
     catalogo: catalogoDeObjetos?.porId ?? null,
     // ── EL 85: EL OTRO LADO DEL MENÚ DEL JUGADOR ─────────────────────────
     //
@@ -3351,6 +3502,25 @@ async function arrancarJuego() {
     }
     if (vgui?.abierto) return;
     if (conPanel) return;
+
+    // ── EL 89: ACEPTAR (Enter), que en una transición es pedir el viaje ─────
+    //
+    // `accept` → `MSQuery` (multiplay_gamerules.cpp:1725-1732). Va DESPUÉS de los
+    // paneles y del chat a propósito: el chat se queda el Enter mientras escribes
+    // y un panel abierto se queda las teclas, como en el motor. Sin repetición,
+    // por lo mismo que el Escape de arriba: aguantar no es pulsar otra vez.
+    if (teclas.accionDe(e.code) === "aceptar") {
+      if (!e.repeat) {
+        // Con servidor, los demás son `red.ajenos`. Más de uno abre la votación,
+        // que no está portada (lo dice la propia regla).
+        const jugadores = red ? 1 + (red.ajenos?.size ?? 0) : 1;
+        aplicarTransicion(transiciones.aceptar({
+          jugadores, todosDentro: jugadores <= 1, quien: sesion?.personaje?.nombre ?? "",
+        }));
+      }
+      e.preventDefault();
+      return;
+    }
 
     // ── CICLAR Y LAS DOCE RANURAS ─────────────────────────────────────────
     //
@@ -5125,10 +5295,20 @@ async function arrancarJuego() {
      * del mundo y no de la regla: DE DONDE viene el golpe —el cono de 53 grados
      * de verdad, ver `escudo.js`— y que el escudo este desplegado.
      */
-    golpear(i, id, dano) {
-      if (id !== "jugador" || !(dano > 0)) return;
+    // EL 91: devuelve `{parado, dano}` —lo que la defensa hizo con el golpe—
+    // porque de eso sale el PARAM1 de `game_dodamage` del bicho: un parry
+    // deja `AttackHit = false` (giattack.cpp:1832-1838). `null` es «no lo sé»
+    // y la manada lo toma como entrado. Ver `Manada.cazar`.
+    //
+    // EL 91 (veneno): `tipo` es opcional y por omisión el del bicho. Lo pasa
+    // el daño de un EFECTO —el `xdodamage` de `effects/base_dot`—, cuyo tipo
+    // es el del veneno («poison_effect») y no el del mordisco: es el que
+    // decide que ni el escudo ni el parry lo paren (escudo.js, parry.js) y el
+    // elemento del mensaje. Ver `herir` en el `new GuionDelJugador`.
+    golpear(i, id, dano, tipo = i?.ficha?.ia?.tipoDano ?? "") {
+      if (id !== "jugador" || !(dano > 0)) return null;
       cuentas.golpesRecibidos++;
-      if (sesion?.estado !== ESTADO.JUGANDO) return;
+      if (sesion?.estado !== ESTADO.JUGANDO) return null;
       const n = i.nodo?.position ?? null;
       const desde = n ? [n.x, n.y, n.z] : null;
       const yo = player.feet;
@@ -5141,7 +5321,7 @@ async function arrancarJuego() {
         dano,
         // El goblin pega sin declarar `dmg.type`, y un tipo vacio SI se bloquea
         // —al contrario que en el parry del script—. No se inventa un tipo.
-        tipo: i.ficha?.ia?.tipoDano ?? "",
+        tipo,
         escudo: equipo.brazal?.ficha ?? null,
         postura: equipo.brazal?.postura ?? POSTURA.GUARDADO,
         desplegado: Boolean(equipo.brazal?.desplegado),
@@ -5172,7 +5352,7 @@ async function arrancarJuego() {
         // atacante, daño, tipo, tirada de parry, |tirada de acierto| y valor.
         // Sin guion se dice lo de antes, para no quedarse mudo.
         const dicho = guionJugador?.llamar("game_parry", [
-          i.ficha?.nombre ?? "none", String(dano), i.ficha?.ia?.tipoDano ?? "",
+          i.ficha?.nombre ?? "none", String(dano), tipo,
           String(Math.round(d.parry.tirada)), String(Math.abs(Math.round(d.parry.acc))),
           String(Math.round(d.parry.valor)),
         ]);
@@ -5185,9 +5365,9 @@ async function arrancarJuego() {
         if (!dicho) {
           suceso("atacado", parryDelJugador(d.parry.tirada, Math.abs(d.parry.acc)));
         }
-        return;
+        return { parado: true, dano: 0 };
       }
-      if (!(d.dano > 0)) return;
+      if (!(d.dano > 0)) return { parado: false, dano: 0 };
       // Y QUE TE PEGAN SE DICE, que hasta ahora no se decía en ningún sitio.
       // Es el `HUDEVENT_ATTACKED` del motor —rojo, (240,0,0)— y es el único
       // aviso que tiene el jugador de que la vida que baja tiene un culpable:
@@ -5199,7 +5379,7 @@ async function arrancarJuego() {
       // arma `src/play/mensajesdecombate.js`, con el detalle de los dos
       // espacios y de por qué el corchete todavía no puede salir.
       suceso("atacado", golpeRecibido({
-        nombre: i.ficha.nombre, dano: d.dano, tipo: i.ficha?.ia?.tipoDano,
+        nombre: i.ficha.nombre, dano: d.dano, tipo,
       }));
       // `game_damaged` — 1: atacante 2: daño. El guion se apunta que te han
       // atacado (`PL_BEEN_ATTACKED`) y de quién, que es lo que leen después el
@@ -5211,6 +5391,7 @@ async function arrancarJuego() {
       // contador vive en el efecto, que es otra entidad.
       emociones.golpeado();
       sesion.danar(d.dano, { porQue: `${i.ficha.nombre ?? "un monstruo"}`, tipo: "golpe" });
+      return { parado: false, dano: d.dano };
     },
   };
   /** Lo último que el servidor contestó a un golpe nuestro. Lo mira la sonda. */
@@ -5394,6 +5575,23 @@ async function arrancarJuego() {
     if (!emociones.puede("saltar")) q.saltar = false;
     if (!emociones.puede("agacharse")) q.agachar = false;
     if (!emociones.puede("atacar")) { q.atacar = false; q.cubrir = false; }
+    // EL 89: el viaje en marcha quita el control (`EnableControl(FALSE)`,
+    // msmapents.cpp:1842-1843). La vista no se toca: no se ha medido si el
+    // motor la quita también, y se dice.
+    if (controlesQuitados) {
+      q.adelante = 0; q.lado = 0; q.saltar = false; q.agachar = false;
+      q.correr = false; q.atacar = false; q.cubrir = false;
+    }
+    // Y LAS TRANSICIONES, cada fotograma: en cuáles estás. Con los PIES, como
+    // la música (`zonasEn`), que es como este puerto decide «estar dentro» de
+    // cualquier `msarea_*`. Sólo con alguien jugando: un personaje que no ha
+    // entrado no pisa nada. (Y es `estado`, no `jugando`: `Sesion` no tiene ese
+    // campo, y escrito así la condición valdría `undefined` siempre — la línea
+    // del `QUIEN_VISTE` más arriba lo usa y nunca es cierto.)
+    if (sesion?.estado === ESTADO.JUGANDO) {
+      aplicarTransicion(transiciones.tic(
+        volumenes.zonasEn(player.feet).filter((z) => z.clase === "msarea_transition")));
+    }
     const before = player.feet;
     while (accumulator >= DT) {
       // LA VELOCIDAD SALE DEL PERSONAJE, y eso es lo propio de Master Sword:
@@ -5906,6 +6104,11 @@ async function arrancarJuego() {
             if (debeTenerlo) i.conCilindro = Boolean(bichosSolidos?.poner(i));
             else { bichosSolidos?.quitar(i); i.conCilindro = false; }
           }
+          // EL 91: la costura. Los golpes de esta manada llegan al guion de
+          // cada bicho y los de combate nacen con el suyo; ver
+          // `InteraccionesNpc.enchufarA`. Una vez por manada: no hace nada si
+          // ya está puesta.
+          interacciones.enchufarA(bichos.manada);
           bichos.cazar(dtB, { ...arnesDePaseo, ahora: reloj });
           bichosSolidos?.seguir();
         }
@@ -6127,6 +6330,9 @@ async function arrancarJuego() {
     get adornos() { return adornos; },
     get adornosVivos() { return adornosVivos; },
     get aguante() { return fatiga.aguante; },
+    // El 89c: la sonda lo VACÍA para que el relleno de `activate_stuff` se vea
+    // (al entrar ya está lleno, que es el valor de reposo).
+    set aguante(v) { fatiga.aguante = v; },
     get ambienteSinArchivo() { return ambienteSinArchivo; },
     get animarLuz() { return animarLuz; },
     get aparicion() { return aparicion; },
@@ -6203,6 +6409,8 @@ async function arrancarJuego() {
     get guionDe() { return instancia => interacciones.guionDe(instancia); },
     get guionesVivos() { return interacciones.guionesVivos; },
     get relojDeGuiones() { return interacciones.reloj; },
+    // EL 91: lo que la costura ha hecho y lo que se ha quedado por el camino.
+    get costuraDeBichos() { return interacciones.costura; },
     get fichaDeGuiones() { return fichaDeGuiones; },
     get gruposDetalle() { return gruposDetalle; },
     get vgui() { return vgui; },

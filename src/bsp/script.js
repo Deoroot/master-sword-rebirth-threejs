@@ -388,7 +388,9 @@ export function leerFichaNpc(raiz, rutaScript) {
   const cuerpos = new Map();
   const estadisticas = new Map();
   const pisados = new Set();
-  const visita = (evento, hondo) => {
+  // `diferido`: este evento corre por un `callevent` con retraso. Ver la nota
+  // larga del `callevent`, más abajo: lo diferido SÓLO RELLENA.
+  const visita = (evento, hondo, diferido = false) => {
     if (hondo > 4 || pisados.has(evento)) return;
     pisados.add(evento);
     for (const b of indice.get(evento) ?? []) {
@@ -396,7 +398,14 @@ export function leerFichaNpc(raiz, rutaScript) {
         const p = l.match(CAMPOS);
         if (p) {
           const clave = p[1].toLowerCase();
-          if (ficha[clave] === undefined) ficha[clave] = p[2].trim();
+          const valor = p[2].trim();
+          // Un `$función(...)` es una expresión que este lector no evalúa: no es
+          // un valor. Lo diferido no rellena con eso — `doom_plant_new` ganaba
+          // `$stradd(LEVEL_PREFIX,idle1)` de animación, peor que nada. Y se mira
+          // el valor RESUELTO: la línea es `setidleanim ANIM_IDLE`, y el `$`
+          // sólo aparece al seguir la variable — mirando el texto crudo, la
+          // guarda no lo veía (medido: la planta lo seguía ganando).
+          if (ficha[clave] === undefined && !(diferido && resolverVar(valor).startsWith("$"))) ficha[clave] = valor;
           continue;
         }
         // `setmodelbody indice valor` elige el submodelo de cada `bodypart`:
@@ -404,7 +413,12 @@ export function leerFichaNpc(raiz, rutaScript) {
         // gana el ULTIMO y no el primero, porque el motor los ejecuta en orden y
         // `gatecity/miner` pone el 1 y luego el 8 — con el primero sale desarmado.
         const b2 = l.match(/^setmodelbody\s+(\d+)\s+(\d+)/i);
-        if (b2) { cuerpos.set(Number(b2[1]), Number(b2[2])); continue; }
+        if (b2) {
+          // Lo diferido no PISA un `bodypart` ya puesto, aunque aquí gane el
+          // último: ver la nota del `callevent`, el caso de los enanos.
+          if (!diferido || !cuerpos.has(Number(b2[1]))) cuerpos.set(Number(b2[1]), Number(b2[2]));
+          continue;
+        }
         // `setstat <nombre> <v0> [v1] [v2]`. No es un campo más: no cabe en
         // `CAMPOS` porque un bicho pone VARIAS —la araña pone `awareness 20` y
         // `parry 50 0 0`— y ahí gana la primera, o sea que el parry se perdía.
@@ -416,7 +430,9 @@ export function leerFichaNpc(raiz, rutaScript) {
         // que escribe las substats está dentro de `if (IsPlayer())`.
         const st = l.match(/^setstat\s+(\S+)((?:\s+-?[\d.]+)+)\s*$/i);
         if (st) {
-          estadisticas.set(st[1].toLowerCase(), st[2].trim().split(/\s+/).map(Number));
+          if (!diferido || !estadisticas.has(st[1].toLowerCase())) {
+            estadisticas.set(st[1].toLowerCase(), st[2].trim().split(/\s+/).map(Number));
+          }
           continue;
         }
         // La FAMILIA DE PIEL. `dwarf/male1.mdl` tiene siete y
@@ -426,12 +442,64 @@ export function leerFichaNpc(raiz, rutaScript) {
         // el juego los tiene con barba roja, negra y blanca.
         const pi = l.match(/^(?:setprop\s+\S+\s+skin|setmodelskin|setskin)\s+(.+)$/i);
         if (pi && ficha.piel === undefined) { ficha.piel = pi[1].trim(); continue; }
-        const c = l.match(/^callevent\s+(\S+)/i);
-        if (c) visita(c[1].toLowerCase(), hondo + 1);
+        // ── `callevent [retraso] <evento>`: el primer token puede ser el RETRASO ──
+        //
+        // El 89, al hornear `edanasewers`. Esto era `/^callevent\s+(\S+)/`, que se
+        // queda con el PRIMER token — y en `callevent 0.1 bat_spawn` el primer
+        // token es el retraso. O sea que todo `callevent` con retraso se seguía
+        // hasta un evento llamado «0.1», que no existe, y en silencio. Los 16
+        // murciélagos de las cloacas se quedaban sin `setmodel` —vive en
+        // `bat_spawn`, al que llega `bat_base.script:27` con `callevent 0.1`— y
+        // **no se colocaba ninguno**. Gate City y Edana no tienen murciélagos.
+        //
+        // La regla del motor, ScriptCmd_CallEvent (scriptcmds.cpp:2257-2266):
+        // con un parámetro, ése es el evento; con más, si el PRIMER CARÁCTER del
+        // primero es un dígito, es el retraso y el evento es el siguiente. Los
+        // parámetros llegan ya resueltos, así que `callevent FLIGHT_CHECK_FREQ
+        // flight_check` también lleva retraso: se resuelve antes de mirar.
+        //
+        // Y un evento con retraso corre DESPUÉS de que acabe el bloque que lo
+        // llama, así que se aplaza a la cola de `diferidos` y no se visita aquí
+        // en línea.
+        //
+        // ── LO DIFERIDO SÓLO RELLENA, y esto lo enseñó la medida ─────────────
+        //
+        // Lo escribí primero diciendo que la cola hacía el cambio «aditivo por
+        // construcción». **Era falso**: comparado el lector viejo con el nuevo
+        // sobre los 2 884 guiones, 274 sólo ganaban un valor pero **114 CAMBIABAN
+        // uno que ya tenían**, todos en `cuerpos` — porque ahí gana el ÚLTIMO, y
+        // lo diferido llega el último.
+        //
+        // Y no era una mejora que se pudiera quedar: `NPCs/default_dwarf`, que
+        // son los vecinos de Gate City, cambiaba la mano de 1 a 0 porque
+        // `set_lantern` pone `setmodelbody 2 0`, y a `set_lantern` se llega por
+        // `callevent 1.0 do_lantern` **sólo si `$rand(1,2) == 1`**. Este lector no
+        // evalúa condiciones, así que aplicaba una moneda al aire a TODOS los
+        // enanos del pueblo. Así que lo diferido rellena lo vacío y no pisa nada:
+        // ni un campo, ni un `bodypart`, ni un `setstat`.
+        //
+        // Lo que eso CUESTA, y se dice en vez de esconderlo: cuando el evento
+        // diferido es incondicional y de verdad cambia algo, se pierde. El caso
+        // medido es `m2_quest/bgoblin_weak`: `npc_spawn` llama sin condición a
+        // `callevent 0.01 goblin_set_weapon`, que le pone el arma, y aquí el
+        // goblin sigue saliendo como salía antes, desarmado. Ninguno de los tres
+        // mapas horneados tiene ese goblin.
+        const c = l.match(/^callevent\s+(.+)$/i);
+        if (c) {
+          const t = c[1].trim().split(/\s+/);
+          const p0 = resolverVar(t[0]);
+          if (t.length > 1 && /^\d/.test(p0)) diferidos.push([t[1].toLowerCase(), hondo + 1, true]);
+          else visita(t[0].toLowerCase(), hondo + 1, diferido);
+        }
       }
     }
   };
+  const resolverVar = (v, n = 0) => (n < 8 && vars.has(v) ? resolverVar(String(vars.get(v)).trim(), n + 1) : v);
+  const diferidos = [];
   for (const n of NACIMIENTO) visita(n, 0);
+  // Lo que se pidió con retraso, cuando lo inmediato ya ha corrido. Un diferido
+  // puede pedir a su vez otro: por eso es una cola y no un `for` de una pasada.
+  while (diferidos.length) visita(...diferidos.shift());
 
   // Resolver variables. Un valor puede ser otra variable —`setmodel SPIDER_MODEL`
   // y `setvar SPIDER_MODEL monsters/spider.mdl`—, así que se sigue la cadena.
