@@ -77,8 +77,17 @@ export class InteraccionesNpc {
     // LOS EFECTOS: `(ruta, params, {aplicador})` que se lo pega AL JUGADOR
     // (`src/play/efectos.js`). Lo tiene `src/main.js`, que es quien tiene el
     // guion del jugador. Se reenvía a cada `GuionDeNpc` en `guionDe` (el 63).
-    aplicarEfecto = null } = {}) {
-    Object.assign(this, { sesion, guiones, menus, catalogo, npcPorId, suceso, animar, borrarDelMundo, ventanaDeAviso, abrirTienda, comoEstaElCliente, losNpc, dondeEstaElJugador, unidadesPorMetro, mandarADestino, lineaDeVision, emociones, enLaMano, verDescripcion, aplicarEfecto });
+    aplicarEfecto = null,
+    // ── EL 92: QUIÉN ES «j3» ─────────────────────────────────────────────
+    //
+    // `(idDeObjetivo) => sesion | null`. Sólo lo pasa el SERVIDOR
+    // (`src/red/partida.js`): allí la manada conoce a los jugadores como
+    // «j1», «j2»… (`Fauna.nombreDeJugador`) y la sesión de cada uno es otra.
+    // Sin esto la costura del 91 contaba todos los golpes como del jugador del
+    // constructor, que en el servidor es `null`. En un navegador no se pasa y
+    // `alCombate` hace exactamente lo de antes. Ver `alCombate`.
+    jugadorDe = null } = {}) {
+    Object.assign(this, { sesion, guiones, menus, catalogo, npcPorId, suceso, animar, borrarDelMundo, ventanaDeAviso, abrirTienda, comoEstaElCliente, losNpc, dondeEstaElJugador, unidadesPorMetro, mandarADestino, lineaDeVision, emociones, enLaMano, verDescripcion, aplicarEfecto, jugadorDe });
     /**
      * Las opciones que se le mandaron al jugador en la última apertura de SU
      * menú, para poder resolver el índice que vuelve.
@@ -145,7 +154,7 @@ export class InteraccionesNpc {
      * en el motor también reciben `game_struck` y aquí todavía no (se dice).
      */
     this.manadaEnchufada = null;
-    this.costura = { sinGuion: 0, noDeCombate: 0, nacidos: 0, renacidos: 0 };
+    this.costura = { sinGuion: 0, noDeCombate: 0, nacidos: 0, renacidos: 0, sinJugador: 0 };
   }
 
   /**
@@ -157,6 +166,9 @@ export class InteraccionesNpc {
    * clase (ver `ponerNombresDeNpc`), y en el servidor de `src/red/` todavía no
    * se llama: allí la manada no tiene oyente y lo cuenta en
    * `costuraSinOyente`.
+   *
+   * EL 92: ya se llama también allí, en el constructor de `Partida`
+   * (doc/COSTURA_RED_92.md). La frase de arriba era verdad en el 91 y se deja.
    */
   enchufarA(manada) {
     if (!manada || this.manadaEnchufada === manada) return false;
@@ -203,18 +215,53 @@ export class InteraccionesNpc {
    *   `muere`      -> `game_predeath` y `game_death` (:2580, :2605)
    */
   alCombate(s) {
+    // En un navegador hay un jugador y es el del constructor: lo de siempre.
+    if (!this.jugadorDe) return this._alCombate(s, this.sesion, true);
+    // ── EL 92: EN EL SERVIDOR, ¿DE QUÉ JUGADOR ES ESTE GOLPE? ─────────────
+    //
+    // El motor no tiene que preguntarlo: el jugador viaja dentro del evento,
+    // como entidad (`Params.add(EntToString(pTarget))`,
+    // giattack.cpp:1758; `EntToString(pAttacker)`,
+    // msmonsterserver.cpp:2285). Aquí la manada da un id de objetivo —«j3»— y
+    // la sesión de ese jugador hay que buscarla. Quien pega es `objetivo` en
+    // los dos eventos del atacante y `quien` en los del que recibe; los del
+    // 92 del daño por evento de animación (`ataca`, `animacion`) traen
+    // `quien`, y si falta se mira `objetivo`.
+    const principal = s?.que === "danaAOtro" || s?.que === "hizoDano" ? s.objetivo : (s?.quien ?? s?.objetivo);
+    const suSesion = esUnJugador(principal) ? (this.jugadorDe(principal) ?? null) : null;
+    if (esUnJugador(principal) && !suSesion) this.costura.sinJugador++;
+    // Y MIENTRAS CORRE EL EVENTO, «con quién habla el guion» es ESE jugador:
+    // sus `playermessage`, su `applyeffect` y la posición de su centro van a
+    // él y no al último que abrió un menú. Es el `MSG_ONE` del motor
+    // (`MESSAGE_BEGIN(MSG_ONE, …, pEnt->edict())`, el mismo comentario de
+    // `hablandoCon` arriba). Se devuelve como estaba al acabar: el comercio y
+    // los menús usan esta misma casilla.
+    const antes = this.hablandoCon;
+    this.hablandoCon = suSesion;
+    try { return this._alCombate(s, suSesion, Boolean(suSesion)); }
+    finally { this.hablandoCon = antes; }
+  }
+
+  /** El cuerpo de `alCombate`, con el jugador ya resuelto. `hayJugador` falso: su asa es «none». */
+  _alCombate(s, sesion, hayJugador) {
     const i = s?.i ?? null;
     if (!i) return;
-    if (!esDeCombate(i)) { this.costura.noDeCombate++; return; }
+    if (!esDeCombate(i)) {
+      // EL 92: los eventos de animación de un NPC sin ficha de combate (los
+      // pasos de un aldeano) no son golpes: no se cuentan como tales. Ver
+      // doc/MORDISCO_92.md — a un NPC al que no se le habla no le llegan.
+      if (s.que === "animacion" || s.que === "ataca") return;
+      this.costura.noDeCombate++; return;
+    }
     const g = this.guionDe(i);
     if (!g) { this.costura.sinGuion++; return; }
-    const jugador = this.contextoDelJugador();
+    const jugador = this.contextoDelJugador(sesion);
     // `EntToString` del jugador: en este puerto su asa es el id del
     // personaje, la misma que ve el guion en `ent_lastspoke` (el 45).
-    const ref = (id) => (esUnJugador(id) ? jugador.ref : "none");
+    const ref = (id) => (hayJugador && esUnJugador(id) ? jugador.ref : "none");
     // Como `oir`: el guion tiene que saber quién es el jugador de ahora para
     // que `$get(<su asa>,…)` lo encuentre.
-    g.jugador = { ...(g.jugador ?? {}), personaje: jugador.personaje, ref: jugador.ref };
+    if (hayJugador) g.jugador = { ...(g.jugador ?? {}), personaje: jugador.personaje, ref: jugador.ref };
     const U = this.unidadesPorMetro ?? 39.37;
     const tipo = i.ficha?.ia?.tipoDano || "generic";
     switch (s.que) {
@@ -228,7 +275,9 @@ export class InteraccionesNpc {
         // que lee el empujón del jabalí (boar_base.script:93) y su aturdimiento
         // (:178-183).
         g.entorno.golpeadoPorMi = ref(s.objetivo);
-        g.costura("game_damaged_other", [ref(s.objetivo), comoF(s.dano), tipo, "(none)"]);
+        // EL 92: si el golpe lo dio el GUION, el tipo y el `dmgevent` son los
+        // de su `dodamage` (`dmgevent:bite` de spider_base.script:34).
+        g.costura("game_damaged_other", [ref(s.objetivo), comoF(s.dano), s.tipo || tipo, s.evento || "(none)"]);
         return;
       case "hizoDano": {
         const alto = i.ficha?.ia?.alto ?? i.ficha?.alto ?? 0;
@@ -241,9 +290,36 @@ export class InteraccionesNpc {
         // otro número y no se distingue: queda dicho.
         const p = esUnJugador(s.objetivo) ? (this.dondeEstaElJugador?.() ?? null) : null;
         const centro = p ? aMotor([p[0], p[1] + 36 / U, p[2]], U) : null;
-        g.costura("game_dodamage", paramsDeDodamage({
-          acierto: s.acierto, objetivo: ref(s.objetivo), desde: ojo, hasta: centro ?? ojo, tipo, dano: s.dano,
-        }));
+        const params = paramsDeDodamage({
+          acierto: s.acierto, objetivo: ref(s.objetivo), desde: ojo, hasta: centro ?? ojo, tipo: s.tipo || tipo, dano: s.dano,
+        });
+        g.costura("game_dodamage", params);
+        // EL 92: y después `<dmgevent>_dodamage`, con los MISMOS parámetros y
+        // acierte o no (giattack.cpp:2046-2059). Es por donde envenena la
+        // araña venenosa de las cloacas (`bite_dodamage`,
+        // spider_mini_poison.script:51-54). Un `dmgevent` con `*` va al
+        // OBJETO que inflige (:2050-2054), y un bicho no lleva ninguno: no se
+        // porta.
+        if (s.evento && !String(s.evento).startsWith("*")) g.costura(`${s.evento}_dodamage`, params);
+        return;
+      }
+      case "ataca":
+        // EL 92: la IA va a atacar con una secuencia que trae eventos 500/600.
+        // Si el guion maneja alguno, el daño lo pondrá él (`Manada.cazar`), y
+        // antes tiene que saber a quién (`GuionDeNpc.apuntarObjetivo`).
+        if (s.r && !g.retirado && (s.eventos ?? []).some((e) => g.maneja(e))) {
+          g.apuntarObjetivo(ref(s.objetivo));
+          s.r.porGuion = true;
+        }
+        return;
+      case "animacion": {
+        // EL 92: un evento 500/600 del modelo, al guion por su nombre
+        // (`CallScriptEvent(pEvent->options)`, msmonsterserver.cpp:1487 y
+        // :1492). Mientras corre, su `dodamage` tiene a quién pedírselo.
+        const antes = g.alHacerDano ?? null;
+        g.alHacerDano = s.hacerDano ?? null;
+        try { g.costura(String(s.evento), []); }
+        finally { g.alHacerDano = antes; }
         return;
       }
       case "recibe": {
@@ -444,6 +520,9 @@ export class InteraccionesNpc {
       npc: {
         nombre: instancia.ficha?.nombre ?? "Someone",
         script: instancia.ficha?.script ?? "",
+        // EL 92: el bicho mismo, para que el veneno que pone sepa quién es su
+        // atacante (`GuionDeNpc` -> `aplicarEfecto` -> `main.js`, `herir`).
+        instancia,
         // La posición cambia al caminar: no capturar una copia al hablar.
         get origen() { return (instancia.donde ?? []).join(" "); },
         // EL 91: `$get(ent_me,hp)` y `maxhp` leen esto (scriptcmds.cpp:960,

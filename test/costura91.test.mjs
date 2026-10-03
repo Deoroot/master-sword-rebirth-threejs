@@ -358,6 +358,11 @@ describe("al recibir: `game_damaged`, `game_damaged_end` y `game_struck`, con la
     const pedidas = [];
     inter.animar = (inst, n) => pedidas.push(n);
     inter.paso(0);
+    // EL 92 (pieza D): lo mismo que la prueba de arriba. El bloque sin nombre
+    // de la rata pide `playanim once ANIM_IDLE2` —que es `idle1`— una vez de
+    // cada seis (`$rand(0,5)`, giantrat.script:7 y :81-82), así que sin esto
+    // la prueba salía roja una pasada de cada seis con el código bien.
+    pedidas.length = 0;
     inter.guionesVivos.get(i.id).entorno.animar("idle1");
     assert.deepEqual(pedidas, ["idle1"]);
   });

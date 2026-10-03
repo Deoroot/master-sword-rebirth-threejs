@@ -2545,6 +2545,9 @@ export function montarSonda(S) {
           fallosSeguidos: g?.guion?.buscarVar?.("AS_MISS_COUNT")?.valor ?? null,
           // Los `game_dodamage` del rastro, con sus parámetros, los últimos.
           dodamage: (g?.guion?.rastro ?? []).filter((r) => r.evento === "game_dodamage").slice(-6).map((r) => [...r.params]),
+          // EL 92: los `dodamage` que pidió su guion y los que llegaron sin
+          // evento de animación que los recogiera.
+          dano: g?.danoCuenta ? { pedidos: g.danoCuenta.pedidos, sinGancho: g.danoCuenta.sinGancho } : null,
         };
       },
       /** Lo de toda la partida: nacidos, renacidos y lo que no llegó. */
@@ -2555,6 +2558,10 @@ export function montarSonda(S) {
           enchufada: Boolean(m?.oyente),
           sinOyente: m?.costuraSinOyente ?? null,
           fallos: m?.costuraFallos ?? null,
+          // EL 92: los golpes que pone el guion desde el evento de animación
+          // (`Manada.golpesDelGuion`): cuántos ataques le dejó la IA y qué
+          // hizo cada `dodamage`.
+          golpesDelGuion: m?.golpesDelGuion ? { ...m.golpesDelGuion } : null,
         };
       },
     },
@@ -2846,7 +2853,14 @@ export function montarSonda(S) {
       },
       /** Corre la caza `s` segundos sin depender del fotograma. */
       correr(s = 3) {
-        for (let t = 0; t < s; t += 1 / 60) pasoDeBichos(S, 1 / 60, S.arnesDePaseo);
+        // EL 92: y con los RELOJES de la manada, como `avanzar` aquí abajo y
+        // como el bucle de `main.js` (`bichos.animar` -> `manada.relojes`).
+        // Sin ellos el reloj de la manada se paraba durante `correr`: la
+        // animación de atacar no llegaba nunca al fotograma del mordisco, y
+        // desde el 92 el daño sale de ahí. Lo destapó `sondas/mordisco82.mjs`
+        // («0 golpes en 12 s» con la rata pegada) — el paso de la sonda no era
+        // el paso del jugador, que es justo lo que pide `pasoDeBichos`.
+        for (let t = 0; t < s; t += 1 / 60) { S.bichos?.animar(1 / 60); pasoDeBichos(S, 1 / 60, S.arnesDePaseo); }
         S.bichosSolidos?.seguir();
         return this.estado(0);
       },
@@ -3222,11 +3236,20 @@ export function montarSonda(S) {
         // quietos. Una foto ahí dice «ninguno anda con la animación de andar»
         // y es verdad en ese instante y mentira en el resto.
         const vioAndar = (S.bichos?.instancias ?? []).map(() => false);
+        // EL 92 (pieza D): con qué ESTADO y qué secuencia se movió cada uno en
+        // cada fotograma, para poder decir quiénes son los «andandoMal» y no
+        // sólo cuántos.
+        const comoSeMovio = (S.bichos?.instancias ?? []).map(() => new Map());
         for (let t = 0; t < s; t += DT) {
+          const pre = (S.bichos?.instancias ?? []).map((i) => [i.nodo.position.x, i.nodo.position.z]);
           pasoDeBichos(S, DT, S.arnesDePaseo, { cazar: false });
           (S.bichos?.instancias ?? []).forEach((i, n) => {
             if (i.andando === "pasea" && i.ficha.andando &&
                 i.nombreActual === String(i.ficha.andando).toLowerCase()) vioAndar[n] = true;
+            if (Math.hypot(i.nodo.position.x - pre[n][0], i.nodo.position.z - pre[n][1]) > 1e-4) {
+              const k = `${i.andando ?? "-"}:${i.nombreActual ?? "-"}`;
+              comoSeMovio[n].set(k, (comoSeMovio[n].get(k) ?? 0) + 1);
+            }
           });
         }
         S.bichosSolidos?.seguir();
@@ -3241,6 +3264,14 @@ export function montarSonda(S) {
           // que hace el motor y no un fallo que haya que marcar en rojo.
           declaraAndar: Boolean(i.ficha.andando),
           conLaDeAndar: vioAndar[n],
+          declara: i.ficha.andando ?? null,
+          guion: i.ficha.script ?? null,
+          // «estado:secuencia» -> fotogramas en que se movió así.
+          comoSeMovio: Object.fromEntries(comoSeMovio[n]),
+          // Y si al acabar seguía el candado de `CAnimOnce` puesto (el 80):
+          // es lo que rechaza la de andar mientras dura una de una vez.
+          candado: i.unaVezHasta !== null && i.unaVezHasta !== undefined,
+          deBucle: i.actual?.seq?.bucle ?? null,
         }));
         return {
           segundos: s,

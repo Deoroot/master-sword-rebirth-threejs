@@ -19,6 +19,8 @@ import {
   Listas, buscarEnLista, olvidarListasGlobales, SIN_LISTA, FALTAN_PARAMS,
 } from "../src/play/listas.js";
 import { entornoDe, GuionDeNpc } from "../src/play/npcguion.js";
+// El 92: la vida máxima del jugador para `$get(<jugador>,maxhp)`.
+import { derivadas, atributosDe, habilidadesDePartida } from "../src/juego/stats.js";
 
 /** Corre un cuerpo de evento con un entorno que se puede mirar por dentro. */
 function corre(cuerpo, extra = {}) {
@@ -451,15 +453,26 @@ describe("las propiedades de `$get`, y las dos que el motor deja en cero", () =>
     npc, jugador: { ref: "p", personaje, origen: personaje?.origen ?? "0" },
   });
 
-  test("`maxhp` DE UN JUGADOR es «0», y por eso el guardarropa es gratis", () => {
-    // La rama vive dentro de `else if (pMonster)` (scriptcmds.cpp:1388-1391),
-    // así que con un jugador delante no casa nada y sale «0» por :1688.
+  test("`maxhp` DE UN JUGADOR es su vida máxima con «%.2f» (corrección del 92)", () => {
+    // Lo que decía esta prueba en el 46, y era FALSO:
     //
-    // `NPCs/base_storage.script:150` hace `setvard USE_FEE $get(PARAM1,maxhp)`
-    // con PARAM1 = el jugador. La tarifa del guardarropa de Gate City es cero
-    // en el juego de verdad. Devolver aquí la vida máxima sería cobrar un
-    // dinero que el original no cobra.
-    assert.equal(conJugador({ vida: 80, vidaMax: 120 }).propiedad("p", "maxhp"), "0");
+    //   «La rama vive dentro de `else if (pMonster)` (scriptcmds.cpp:1388-1391),
+    //   así que con un jugador delante no casa nada y sale «0» por :1688. […]
+    //   La tarifa del guardarropa de Gate City es cero en el juego de verdad.»
+    //
+    // EL 92: el jugador SÍ es `pMonster` — `IsMSMonster()` (scriptcmds.cpp:926)
+    // es `true` en `CMSMonster` (msmonster.h:352) y `CBasePlayer` hereda de él
+    // (player.h:396) —, así que :1391 devuelve `RETURN_FLOAT(MaxHP())`. Y el
+    // guardarropa nunca fue gratis: `if ( USE_FEE < 25 ) setvard USE_FEE 25`
+    // (NPCs/base_storage.script:153). Lo destapó el veneno de un bicho, que
+    // es el 5 % de esto (base_monster_shared.script:1334).
+    assert.equal(conJugador({ vida: 80, vidaMax: 120 }).propiedad("p", "maxhp"), "120.00");
+    // Con la hoja de habilidades del juego se DERIVA, como `CBasePlayer::MaxHP`
+    // (playershared.cpp:1067-1076), y no se lee de ningún campo guardado.
+    const habilidades = habilidadesDePartida();
+    const esperado = derivadas(atributosDe(habilidades)).vidaMax;
+    assert.ok(esperado > 0);
+    assert.equal(conJugador({ vida: 1, habilidades }).propiedad("p", "maxhp"), esperado.toFixed(2));
   });
 
   test("pero `hp` sí contesta, que es otra rama", () => {

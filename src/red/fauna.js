@@ -514,7 +514,20 @@ export class Fauna {
    * siempre y no se lee como un problema de red: se lee como que la espada
    * atraviesa a los monstruos.
    */
-  pegar({ id, dano, alcance, cubo = null, tipo = "", desde = null, t = null, quien = null, dados = {} }) {
+  pegar({ id, dano, alcance, cubo = null, tipo = "", desde = null, t = null, quien: hueco = null, dados = {} }) {
+    // ── EL 92: QUIEN PEGA ES «j3», NO 3 ─────────────────────────────────────
+    //
+    // `Partida._pegar` manda el HUECO del cliente, un número, y la manada
+    // conoce a los jugadores por `nombreDeJugador` («j3»): es el id que dan
+    // `objetivos()` y `golpear`. Con el número, `herir` hacía
+    // `cazador.apuntarA(3)` —el «devolver el golpe» del 82— y la caza buscaba
+    // un objetivo «3» que no está en la lista: **en el servidor una rata a la
+    // que pegas no te muerde nunca**, y los aliados avisados al morir
+    // (`Manada.avisar`) apuntaban al mismo fantasma. Y el guion del bicho
+    // recibía «none» como atacante en `game_damaged`. Medido antes de tocar:
+    // tras el golpe `objetivo` valía `1`, y a los diez segundos `null` con el
+    // jugador intacto.
+    const quien = typeof hueco === "number" ? Fauna.nombreDeJugador(hueco) : hueco;
     const i = this.manada.de(id);
     if (!i || i.muerto) return { vale: false, porque: "no está o ya está muerto" };
     if (desde && alcance > 0) {

@@ -37,6 +37,8 @@ import { leerMision, ponerMision, limpiarMisiones, volcarMisiones } from "./misi
 import { usarOpcion, nombreVisibleDe } from "./usaropcion.js";
 import { oirFrase, limpiarTexto } from "./oir.js";
 import { Tiendas, flagsDe } from "./tienda.js";
+// EL 92: `$get(<jugador>,maxhp)` es `CBasePlayer::MaxHP()`, que es esto.
+import { derivadas, atributosDe } from "../juego/stats.js";
 
 /**
  * EL RELOJ DE LOS EVENTOS CON RETARDO.
@@ -285,6 +287,15 @@ export function entornoDe({
     // el intérprete saldría «You've slain game.monster.name.full», una frase
     // falsa con cara de mensaje del juego (el 65). Ver doc/BICHOS_GUION_91.md.
     if (r === "ent_laststruckbyme") return entorno.golpeadoPorMi === jugador.ref;
+    // EL 92: `ent_lastseen` es lo último que guardó `StoreEntity(pSighted,
+    // ENT_LASTSEEN)`, y en el motor eso SÓLO lo escribe `$cansee`
+    // (npcscript.cpp:1838-1846; `grep ENT_LASTSEEN` no da otro sitio). `ve`,
+    // aquí abajo, ya lo guardaba en `ultimoVisto` y nadie lo leía. Lo pide el
+    // golpe: la rata, el guardia y las arañas pegan a `ent_lastseen`
+    // (giantrat.script:65, spider_base.script:34). La costura lo escribe
+    // también cuando la IA ataca (`apuntarObjetivo`), que es el `$cansee` de
+    // la caza que el cierre del 91 no deja correr.
+    if (r === "ent_lastseen") return entorno.ultimoVisto === jugador.ref;
     return false;
   };
   const personaje = () => jugador?.personaje ?? null;
@@ -473,7 +484,15 @@ export function entornoDe({
         return null;
       }
       const id = String(desde?.resolver?.("$get(ent_me,id)") ?? "0");
-      return aplicarEfecto(ruta, params, { aplicador: { id, propiedad: (p) => entorno.propiedad("ent_me", p) } });
+      // EL 92: y con su NOMBRE y, si es un bicho de la manada, su instancia.
+      // El veneno que pone el mordisco de una araña golpea con este aplicador
+      // de atacante, y `main.js` arma el «X hits you» y el cono del escudo con
+      // `atacante.instancia` o, sin ella, con `atacante.nombre`: sin los dos
+      // la línea decía «none hits you: 2.0 poison damage.».
+      return aplicarEfecto(ruta, params, { aplicador: {
+        id, nombre: npc?.nombre ?? null, instancia: npc?.instancia ?? null,
+        propiedad: (p) => entorno.propiedad("ent_me", p),
+      } });
     },
 
     /** `$get(<ent>,<prop>)` — sólo las propiedades de `PROPIEDADES`. */
@@ -506,8 +525,38 @@ export function entornoDe({
          * Gate City es cero en el juego de verdad**, y siempre lo ha sido.
          * Devolver aquí la vida máxima del personaje sería «arreglarlo» y
          * cobrar un dinero que el original no cobra.
+         *
+         * ── CORRECCIÓN DEL 92: LO DE ARRIBA ES FALSO ─────────────────────
+         *
+         * El jugador SÍ es `pMonster`: `GetProp` lo rellena con
+         * `pTarget->IsMSMonster()` (scriptcmds.cpp:926), `CBasePlayer` hereda
+         * de `CMSMonster` (player.h:396) y no redefine `IsMSMonster`, que en
+         * `CMSMonster` devuelve `true` (msmonster.h:352). Así que la rama de
+         * :1391 SÍ casa con un jugador y devuelve `RETURN_FLOAT(MaxHP())`
+         * —«%.2f», iscript.h:224—, la vida máxima de `CBasePlayer::MaxHP`
+         * (playershared.cpp:1067-1076), que es `derivadas().vidaMax`.
+         *
+         * Y la tarifa del guardarropa NUNCA fue cero, ni con la lectura
+         * equivocada: la línea siguiente del guion es `if ( USE_FEE < 25 )
+         * setvard USE_FEE 25` (NPCs/base_storage.script:153).
+         *
+         * Lo destapó el veneno: `game_dodamage` de base_monster_shared
+         * (:1334) calcula el daño por segundo como el 5 % de
+         * `$get(PARAM2,maxhp)` del OBJETIVO, y con «0» el veneno de un bicho
+         * hacía 0 al jugador. Lo midió la pieza B del 92 (el servidor); lo
+         * arregla ésta. El texto de arriba se deja: es la lectura del 46.
+         *
+         * El de un MONSTRUO también es «%.2f» en el motor, y aquí sigue sin
+         * decimales: no se ha cambiado en este experimento (ningún guion de
+         * estos mapas lo compara con `equals`; sin medir en los demás).
          */
-        case "maxhp": return esElJugador(ref) ? "0" : String(npc?.vidaMax ?? 0);
+        case "maxhp": {
+          if (!esElJugador(ref)) return String(npc?.vidaMax ?? 0);
+          // Sin hoja de habilidades (un personaje de prueba) se lee el campo
+          // que traiga; el del juego no se guarda, se deriva (personaje.js).
+          const max = p?.habilidades ? derivadas(atributosDe(p.habilidades)).vidaMax : (p?.vidaMax ?? p?.vida ?? 0);
+          return (Number(max) || 0).toFixed(2);
+        }
 
         /**
          * `dist`/`range` y sus versiones en 2D — :1146-1165.
@@ -945,6 +994,10 @@ export function entornoDe({
       mandarConsejo(params);
     },
   };
+  // EL 92: `GuionDeNpc` resuelve el objetivo de un `dodamage` con la MISMA
+  // regla que todo lo demás de este entorno; una segunda copia de «quién es
+  // el jugador» sería otro mundo (el 63).
+  entorno.esElJugador = esElJugador;
   return entorno;
 }
 
@@ -1105,6 +1158,41 @@ export class GuionDeNpc {
       if (String(nombre) !== "parry") return;
       dueño.guion?.vars?.set("MONSTER_PARRY", String(numDe(valores[0])));
     };
+    /**
+     * ── EL 92: EL `dodamage` DE UN BICHO ──────────────────────────────────
+     *
+     * El intérprete parte el comando (`leerDano`, guion.js) y lo trae aquí;
+     * esto resuelve A QUIÉN apunta el primer parámetro con `esElJugador` —la
+     * misma regla del resto del entorno— y se lo pasa a `alHacerDano`, que
+     * pone quien sabe dónde está cada uno: `Manada._golpeDelGuion`, enchufado
+     * por la costura SÓLO mientras corre un evento de animación
+     * (`InteraccionesNpc`, caso `animacion`).
+     *
+     * Fuera de un evento de animación —un `dodamage` desde un `callevent`
+     * con retraso, o desde `npc_targetsighted`— no hay quien lo haga y se
+     * apunta: el `=> {}` callado es donde vive una regla muerta (el 66).
+     *
+     * Sólo para los bichos con cierre (ficha de combate). Un NPC al que se le
+     * habla sigue sin gancho de daño, como hasta el 91.
+     */
+    if (this.cierre) {
+      this.alHacerDano = null;
+      this.danoCuenta = { pedidos: 0, sinGancho: 0, ultimo: null };
+      this.entorno.hacerDano = (d) => {
+        dueño.danoCuenta.pedidos++;
+        if (!dueño.alHacerDano) {
+          dueño.danoCuenta.sinGancho++;
+          dueño.guion?.anotarNoSoportado("comando", `${d.comando} fuera de un evento de animación`);
+          return;
+        }
+        // En la directa y en la traza el primer parámetro es una entidad
+        // (`RetrieveEntity(Params[0])`, npcscript.cpp:1133 y :1186); en las
+        // otras dos es un punto y no apunta a nadie.
+        const alJugador = (d.forma === "traza" || d.forma === "directo") && dueño.entorno.esElJugador(d.objetivo);
+        dueño.danoCuenta.ultimo = { comando: d.comando, forma: d.forma, objetivo: d.objetivo, alJugador };
+        dueño.alHacerDano({ ...d, alJugador });
+      };
+    }
     this.guion = new Guion({
       eventos: ficha?.eventos ?? [],
       preload: ficha?.preload ?? [],
@@ -1275,6 +1363,54 @@ export class GuionDeNpc {
     const k = `${tipo} ${que ?? ""}`.trim();
     a[k] = (a[k] ?? 0) + 1;
     return true;
+  }
+
+  /** EL 92: ¿tiene este guion algún bloque con ese nombre? (`CallScriptEvent` sobre uno que no existe no hace nada.) */
+  maneja(evento) {
+    return (this.guion?.eventos ?? []).some((e) => e.nombre === String(evento));
+  }
+
+  /**
+   * **A QUIÉN ATACA LA IA, ESCRITO DONDE LO LEE EL GUION** — el 92.
+   *
+   * En el motor estas variables las escriben los eventos de caza que la
+   * costura del 91 cierra, así que sin esto un `dodamage NPCATK_TARGET …`
+   * apunta a la cadena «unset» y no pega a nadie. Se escribe lo mismo que
+   * escribirían ellos, y SÓLO en un guion con una de las dos plantillas de
+   * caza (la de un NPC al que se le habla no las tiene). Las DOS familias
+   * escriben las TRES variables, cada una a su manera:
+   *
+   *   nueva  `NPCATK_TARGET` (base_npc_attack_new.script:445) y de ahí
+   *          `HUNT_LASTTARGET` y `ENTITY_ENEMY` (:508-509, «backwards
+   *          compatibility»)
+   *   vieja  `HUNT_LASTTARGET` (base_npc_attack.script:594) y de ahí
+   *          `NPCATK_TARGET` y `ENTITY_ENEMY` (:525-526 y :595, «forward
+   *          compat»)
+   *
+   * y `ent_lastseen` es el `$cansee(enemy)` de la caza, que lo guarda con
+   * `StoreEntity(…, ENT_LASTSEEN)` (npcscript.cpp:1844;
+   * base_npc_attack_new.script:240, base_npc_attack.script:131).
+   *
+   * Se hace al decidir el ataque y no antes: es cuando la IA sabe a quién.
+   *
+   * Lo escribí primero por familias —`NPCATK_TARGET` sólo en la nueva— y la
+   * prueba de la rata lo desmintió: la vieja también lo escribe.
+   */
+  apuntarObjetivo(ref) {
+    const g = this.guion;
+    if (!g) return;
+    const r = String(ref);
+    // La familia se reconoce por el bucle de caza que DEFINE: `npcatk_hunt`
+    // la nueva (base_npc_attack_new.script:230) y `hunting_mode_go` la vieja
+    // (base_npc_attack.script:62). `npcatk_settarget` NO sirve: la vieja
+    // también lo tiene, «forward compatibility» (base_npc_attack.script:737),
+    // y base_monster_shared otro (:1058).
+    if (this.maneja("npcatk_hunt") || this.maneja("hunting_mode_go")) {
+      g.vars.set("NPCATK_TARGET", r);
+      g.vars.set("HUNT_LASTTARGET", r);
+      g.vars.set("ENTITY_ENEMY", r);
+    }
+    this.entorno.ultimoVisto = r;
   }
 
   /**

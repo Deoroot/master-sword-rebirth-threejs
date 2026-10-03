@@ -26,7 +26,7 @@
 //
 // El cambio se hace en la frontera y en un solo sitio, igual que antes.
 
-import { Cazador, ACCION, acierta, danoDe } from "./ia.js";
+import { Cazador, ACCION, acierta, danoDe, RELACION } from "./ia.js";
 // EL 77: la regla de «¿ya está cerca?» en el único sitio donde está escrita,
 // que es el mismo que mira el director de escenas. Dos cuentas de la misma
 // distancia dan un NPC que la escena cree llegado y el movimiento no.
@@ -35,6 +35,8 @@ import { parryDelBicho, aciertoDelGolpe } from "./parry.js";
 import { reaccionAlGolpe, aQuienAvisa, apuntaAlQueTePega } from "./reaccion.js";
 import { animacionDeParado } from "./actividad.js";
 import { Vagabundo, grados } from "./paseo.js";
+// EL 92: `atof`, para el `dmgmulti` del mapa (el 79: no es `Number`).
+import { numDe } from "./guion.js";
 
 /**
  * Lo que tarda en volver a golpear: `HACK_ATTACK_DELAY 1.0`.
@@ -43,8 +45,32 @@ import { Vagabundo, grados } from "./paseo.js";
  * de la secuencia de ataque cuando lo hay, y ése todavía no lo leemos del
  * `.mdl` — así que esto es el camino de repuesto del propio mod, no un número
  * elegido. Cuando se lea el evento, saldrá de ahí.
+ *
+ * EL 92: el evento ya se lee (`eventos` de cada secuencia, `tools/bicho.mjs`)
+ * y es el que pone el DAÑO (`eventosDeAnimacion`). La espera NO ha cambiado:
+ * de dónde la saca el motor no se ha leído en este experimento, y la frase de
+ * arriba sigue siendo una promesa. Ver doc/MORDISCO_92.md.
  */
 export const ESPERA_ENTRE_GOLPES = 1.0;
+
+/**
+ * EL 92: LOS DOS CÓDIGOS DE EVENTO DE ANIMACIÓN QUE LLAMAN AL GUION.
+ *
+ *     case 500: //Animation Event 500 - Call any script event
+ *       if (pEvent->options) CallScriptEvent(pEvent->options);
+ *     case 600: //Animation Event 600 - Call Attack() on my held weapon
+ *       //... or do damage if its an anim type attack
+ *       if (pEvent->options) CallScriptEvent(pEvent->options);
+ *                                  msmonsterserver.cpp:1484-1493
+ *
+ * 400, 401 y 450 (saltar, avanzar en el salto, frenar) mueven el CUERPO y no
+ * llaman a nadie: no se portan aquí (el cuerpo es de la IA). Lo demás cae en
+ * `CBaseAnimating::HandleAnimEvent`, que no hace nada.
+ */
+export const EVENTOS_QUE_LLAMAN_AL_GUION = new Set([500, 600]);
+
+/** `VIEW_FIELD_NARROW`, ±45° (util.h:178): el cono del golpe de un monstruo. */
+export const CONO_ESTRECHO = 0.7;
 
 /** Lo que puede subir de un paso: `m_StepSize = 18` (msmonsterserver.cpp:188). */
 export const ESCALON = 18;
@@ -360,14 +386,14 @@ function pasoDePaseo(manada, i, dt, arnes = {}, U = U_POR_METRO) {
     ponerDestino(i, r.destino, r.cerca);
     // La animación de andar, que es `m_MoveAnim`: el destino puesto es
     // `MONSTER_HASMOVEDEST` y eso es lo que la elige.
-    if (i.andando !== "pasea") { manada.pon(i, i.ficha.andando ?? manada.quieto(i)); i.andando = "pasea"; }
+    if (i.andando !== "pasea") { manada.ponDeAndarOParar(i, i.ficha.andando ?? manada.quieto(i)); i.andando = "pasea"; }
   }
   // El plazo de siete segundos: se suelta el destino aunque no se haya
   // llegado. Sin esto un bicho apuntado a 150 metros anda en línea recta
   // hasta la primera pared y se queda ahí para siempre.
   if (i.vagabundo.vencido) { i.vagabundo.llegado(); i.destino = null; }
   if (!i.destino) {
-    if (i.andando !== null) { manada.pon(i, manada.quieto(i)); i.andando = null; }
+    if (i.andando !== null) { manada.ponDeAndarOParar(i, manada.quieto(i)); i.andando = null; }
     return;
   }
   // Paseando se ANDA: `m_Activity = ACT_WALK`.
@@ -532,6 +558,19 @@ export class Manada {
     this.oyente = null;
     this.costuraSinOyente = 0;
     this.costuraFallos = 0;
+    /**
+     * EL 92: LO QUE HA PASADO CON LOS GOLPES QUE DA EL GUION. Ver
+     * `eventosDeAnimacion` y `_golpeDelGuion`. `atacaPorGuion` son los
+     * ataques en los que la IA NO ha tirado su dado porque el daño lo pone el
+     * evento de animación; `eventos` los eventos 500/600 entregados al guion;
+     * y el resto, lo que hizo cada `dodamage`/`xdodamage` del guion. Se
+     * cuenta para que «el guion pega» se pueda leer desde fuera sin
+     * recalcularlo (el 65).
+     */
+    this.golpesDelGuion = {
+      atacaPorGuion: 0, eventos: 0, pedidos: 0, entran: 0, fallan: 0,
+      alAire: 0, noPuede: 0, sinObjetivo: 0, sinArnes: 0, formaSinPortar: 0,
+    };
 
     for (const [n, c] of (censo?.colocados ?? []).entries()) {
       const secuencias = secuenciasPorClave.get(c.clave) ?? [];
@@ -705,7 +744,7 @@ export class Manada {
       // c.andando)`: si el script no nombraba la de estar quieto, se ponía la
       // de ANDAR. Y hay 33 de los 69 que no la nombran, así que el pueblo
       // entero estaba plantado en mitad de una zancada, con un pie levantado.
-      this.pon(i, this.quieto(i));
+      this.ponDeAndarOParar(i, this.quieto(i));
       this.instancias.push(i);
     }
   }
@@ -763,7 +802,7 @@ export class Manada {
     // puesto ya. Nunca la de estar parado: andar con la de parado es el
     // deslizamiento que el 21 arregló.
     const pedida = anim ?? i.ficha.andando ?? this.quieto(i);
-    this.pon(i, pedida);
+    this.ponDeAndarOParar(i, pedida);
     // Y SE APUNTA CUÁL SE PIDIÓ, que no es lo mismo que cuál se puso: `pon`
     // devuelve `null` si el `.mdl` no tiene esa secuencia, y en Node no hay
     // `.mdl` ninguno. Sin esto, «¿pidió la de correr?» sólo se puede medir en
@@ -800,7 +839,7 @@ export class Manada {
     // espera sus dos segundos. Sin esto el NPC se pone a pasear en el mismo
     // fotograma en que acaba la escena.
     i.vagabundo?.llegado();
-    this.pon(i, this.quieto(i));           // `m_Activity = ACT_IDLE`
+    this.ponDeAndarOParar(i, this.quieto(i));           // `m_Activity = ACT_IDLE`
     i.andando = null;
     if (avisar) aviso?.();                 // `CallScriptEvent("game_stopmoving")`
     return true;
@@ -843,7 +882,7 @@ export class Manada {
         const yaw = Number(angulos?.[1]);
         if (Number.isFinite(yaw)) i.yaw = (yaw * Math.PI) / 180;
       },
-      animacionDeReposo: () => { manada.pon(i, manada.quieto(i)); i.andando = null; },
+      animacionDeReposo: () => { manada.ponDeAndarOParar(i, manada.quieto(i)); i.andando = null; },
       /**
        * `SetAnimation(MONSTER_ANIM_ONCE, m_sActionAnim)` — npcact.cpp:198.
        *
@@ -937,11 +976,42 @@ export class Manada {
     if ((i.actual?.seq?.actividad ?? null) !== (s.actividad ?? null)) i.sigue.cambiosDeActividad++;
     i.actual = { seq: s };
     i.nombreActual = String(nombre ?? "").toLowerCase();
-    i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: !s.bucle };
+    // EL 92: `desde` y `visto` son el reloj de los eventos de animación —ver
+    // `eventosDeAnimacion`—: cuándo se rebobinó y hasta qué fotograma se han
+    // mirado ya. Rebobinar es `pev->frame = 0` (monsters.cpp:1238).
+    i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: !s.bucle, desde: this.t, visto: 0 };
     // Y si la que acaba de entrar es de una sola vez, arma el candado: a partir
     // de aquí es ELLA la que rechaza a las demás, hasta que `relojes` la vence.
     i.unaVezHasta = s.bucle ? null : this.t + duracionDe(s);
     i.tQuieto = 0;
+    return s;
+  }
+
+  /**
+   * LA DE ANDAR O LA DE ESTAR PARADO, que en el motor NO echan el candado — el 92.
+   *
+   * `pon` arma el candado de `CAnimOnce` (el 80) con CUALQUIER secuencia que no
+   * sea de bucle. Para un ataque está bien; para la pose de reposo, no. En el
+   * motor la de andar y la de parado se piden con `MONSTER_ANIM_WALK`
+   * (msmonsterserver.cpp:589-594), y la pose que sale del sorteo de actividad
+   * se pone después de `m_pAnimHandler = NULL; SetActivity(ACT_IDLE)` (:596-600):
+   * el manejador que queda es `gAnimWalk`, cuyo `CanChangeTo` devuelve `true`
+   * siempre (monsteranimation.cpp:144-147). O sea que en el siguiente `Think`,
+   * con destino puesto, la de andar entra sin esperar.
+   *
+   * Aquí `dwarf/male1.mdl` sortea `nod` —no es de bucle— 10 de cada 23 veces, y
+   * con el candado echado la de andar se rechazaba hasta que el asentimiento
+   * acabara: **el aldeano echaba a andar deslizándose mientras asentía**. Lo
+   * destapó `sondas/mundo.mjs` («el que anda y declara animación de andar, la
+   * tiene puesta», 3 mal), cuyo `pasear` no corre los relojes y por eso dejaba
+   * el candado puesto los diez segundos enteros (doc/FICHAS_92.md §3).
+   *
+   * Lo que sí respeta: si hay un candado de VERDAD puesto —un ataque—, la de
+   * andar se rechaza igual que antes, porque `pon` mira el candado primero.
+   */
+  ponDeAndarOParar(i, nombre) {
+    const s = this.pon(i, nombre);
+    if (s && !s.bucle) i.unaVezHasta = null;
     return s;
   }
 
@@ -972,7 +1042,7 @@ export class Manada {
     i.sigue.reinicios++;
     i.actual = { seq: s };
     i.nombreActual = String(nombre ?? "").toLowerCase();
-    i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: true };
+    i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: true, desde: this.t, visto: 0 };
     // El candado se rearma con ESTA, que es lo que hace `BreakAnimation` seguido
     // de `SetAnimation`: la de antes se va y la nueva manda.
     i.unaVezHasta = this.t + duracionDe(s);
@@ -1020,7 +1090,7 @@ export class Manada {
       // elegir entre andar, correr y huir: aquí sólo se sabe que hay destino,
       // no a cuál de los tres ritmos se va.
       i.andando = null;
-      this.pon(i, i.destino ? (i.ficha.andando ?? this.quieto(i)) : this.quieto(i));
+      this.ponDeAndarOParar(i, i.destino ? (i.ficha.andando ?? this.quieto(i)) : this.quieto(i));
       // Y se suelta DESPUÉS del `pon`: si el modelo no declarara reposo de
       // bucle, la de reposo volvería a echar el candado y esto se rearmaría
       // solo cada vez que venciera, rebobinándola. Un reposo no es una vez.
@@ -1050,7 +1120,7 @@ export class Manada {
       i.tQuieto = (i.tQuieto ?? 0) + dt;
       if (i.tQuieto < dura) continue;
       i.tQuieto = 0;
-      this.pon(i, this.quieto(i));
+      this.ponDeAndarOParar(i, this.quieto(i));
     }
     // EL CADÁVER, con los dos plazos del motor: veinte segundos quieto y luego
     // desvanecerse. `msmonsterserver.cpp:2688` pone el `think` a +20 s y
@@ -1153,7 +1223,7 @@ export class Manada {
     i.reaccion.proximoEncogerse = -Infinity;
     i.reaccion.proximoDolor = -Infinity;
     i.reaccion.quietoHasta = -Infinity;
-    this.pon(i, this.quieto(i));
+    this.ponDeAndarOParar(i, this.quieto(i));
     return i;
   }
 
@@ -1229,6 +1299,11 @@ export class Manada {
    */
   cazar(dt, arnes = {}) {
     const { objetivos = () => [], veA = () => true, libre, suelo, golpear, ahora = this.t } = arnes;
+    // EL 92: primero los eventos de animación que han pasado desde la última
+    // vuelta, con el arnes de ESTA vuelta a mano: son los que ponen el daño
+    // de los bichos cuyo guion lo maneja. Ver `eventosDeAnimacion`.
+    this._arnesDeCaza = arnes;
+    this.eventosDeAnimacion();
     for (const i of this.instancias) {
       if (i.dormido) continue;               // todavía no ha aparecido
       if (!i.cazador || i.muerto) continue;
@@ -1273,12 +1348,33 @@ export class Manada {
       if (r.accion === ACCION.GOLPEAR) {
         if (i.vagabundo?.tieneDestino) { i.vagabundo.llegado(); i.destino = null; }
         mirarA(i, r.destino, this.U);
+        // ── EL 92: ¿EL DAÑO LO PONE EL GUION? ──────────────────────────────
+        //
+        // Se pregunta ANTES de poner la animación, porque la respuesta depende
+        // de la secuencia que se va a poner: si trae un evento 500/600 cuyo
+        // nombre maneja el guion del bicho, en el motor el golpe sale de ahí
+        // (msmonsterserver.cpp:1484-1493 -> `bite1` -> `dodamage`) y la IA no
+        // tira ningún dado. Ver `_atacaPorGuion`.
+        const porGuion = this._atacaPorGuion(i, r.objetivo);
         this.pon(i, i.ficha.ia.golpe);
         // La espera entre golpes es la del ataque sin evento en el modelo:
         // `HACK_ATTACK_DELAY 1.0`. El motor la saca del evento 600 de la
-        // secuencia cuando lo hay, y ése todavía no lo leemos.
+        // secuencia cuando lo hay. EL 92: el evento ya se lee —es el que pone
+        // el daño, abajo—, pero la ESPERA sigue siendo ésta: no se ha portado
+        // de dónde la saca el motor y no se finge (doc/MORDISCO_92.md).
         i.cazador.haGolpeado(ESPERA_ENTRE_GOLPES);
         i.andando = null;
+        // ── EL 92: SIN DOS DAÑOS POR GOLPE ─────────────────────────────────
+        //
+        // Si el guion maneja el evento de la animación, ESTE golpe no tira
+        // `acierta`/`danoDe` ni llama a `golpear`: lo hará el `dodamage` del
+        // guion cuando la animación pase por su fotograma (`_golpeDelGuion`).
+        // Si no —sin guion, sin evento en el modelo, o con el evento sin
+        // manejar—, la IA pega como desde el 17. En el motor ese segundo caso
+        // sería un monstruo que no hace daño; aquí se le deja la IA porque es
+        // como pega hoy todo lo que no tiene costura (el servidor sin oyente,
+        // los modelos sin hornear), y se cuenta aparte.
+        if (porGuion) { this.golpesDelGuion.atacaPorGuion++; continue; }
         // El acierto y el daño son del script, y el dado se tira aquí
         // porque es donde hay alguien a quien pegarle.
         if (acierta(i.ficha.ia, this.azar)) {
@@ -1317,14 +1413,14 @@ export class Manada {
       if (r.accion === ACCION.HUIR) {
         if (i.vagabundo?.tieneDestino) i.vagabundo.llegado();
         if (r.destino) { ponerDestino(i, r.destino, r.cerca ?? 1); mirarA(i, r.destino, this.U); }
-        if (i.andando !== "huye") { this.pon(i, i.ficha.ia.corriendo ?? i.ficha.andando); i.andando = "huye"; }
+        if (i.andando !== "huye") { this.ponDeAndarOParar(i, i.ficha.ia.corriendo ?? i.ficha.andando); i.andando = "huye"; }
         avanzar(i, dt, libre, suelo, this.U, { valla: arnes.valla });
         continue;
       }
 
       if (r.accion === ACCION.PERSEGUIR || r.accion === ACCION.BUSCAR) {
         ponerDestino(i, r.destino, r.cerca);
-        if (i.andando !== "corre") { this.pon(i, i.ficha.ia.corriendo ?? i.ficha.andando); i.andando = "corre"; }
+        if (i.andando !== "corre") { this.ponDeAndarOParar(i, i.ficha.ia.corriendo ?? i.ficha.andando); i.andando = "corre"; }
         // Y el vagabundo se retira: la casilla de destino la tiene la caza.
         // Es `StopWalking` al revés — al soltarla se rearma el reloj de los
         // 2 s, así que al perder de vista al jugador el bicho no se pone a
@@ -1344,6 +1440,212 @@ export class Manada {
     // Los MUERTOS no: al morir se les quita el cazador, así que sin excluirlos
     // aquí el cadáver se levantaría a dar un paseo.
     this.pasear(dt, arnes, (i) => !i.cazador && !i.muerto);
+  }
+
+  // ── EL 92: EL DAÑO SALE DEL EVENTO DE ANIMACIÓN ───────────────────────────
+
+  /**
+   * ¿Pone el GUION el daño de este ataque? — el 92.
+   *
+   * Sí cuando la secuencia de ataque trae algún evento 500/600 y el guion del
+   * bicho maneja alguno de sus nombres. Lo contesta quien tiene los guiones
+   * (el oyente, `InteraccionesNpc`), que además deja apuntado en el guion A
+   * QUIÉN ataca la IA: en el motor eso lo escribirían los eventos de caza
+   * que la costura del 91 cierra (`npcatk_settarget` y compañía), y sin ello
+   * el `dodamage NPCATK_TARGET …` del guion no tendría a quién pegar.
+   *
+   * `buscarSecuencia` y no una búsqueda exacta: la secuencia que se mira es
+   * la que `pon` va a poner, y `pon` cae en la 0 si el nombre no existe — lo
+   * que se dispara es lo de la que SUENA, como en el motor.
+   */
+  _atacaPorGuion(i, objetivo) {
+    if (!this.oyente) return false;
+    const s = buscarSecuencia(i.secuencias, i.ficha?.ia?.golpe);
+    const eventos = [...new Set((s?.eventos ?? [])
+      .filter((e) => EVENTOS_QUE_LLAMAN_AL_GUION.has(e.evento) && e.opciones)
+      .map((e) => e.opciones))];
+    if (!eventos.length) return false;
+    // `r` va por referencia: `_costura` extiende el suceso con `...datos`, y
+    // un objeto dentro sigue siendo el mismo. `quien` es para el servidor, que
+    // resuelve de qué jugador es el suceso por ese campo (interacciones.js).
+    const r = { porGuion: false };
+    this._costura("ataca", i, { objetivo, quien: objetivo, eventos, r });
+    if (r.porGuion !== true) return false;
+    i.objetivoDelGuion = objetivo;
+    return true;
+  }
+
+  /**
+   * LOS EVENTOS DE ANIMACIÓN, AL GUION — el 92.
+   *
+   * Es `DispatchAnimEvents` (animating.cpp:125-167) con `GetAnimationEvent`
+   * (animation.cpp:290-330): cada vez que se mira, se disparan los eventos
+   * cuyo fotograma cae en `[visto, ahora)`, y en una de bucle también los
+   * de la vuelta siguiente. Lo llama `cazar` en cada vuelta; el motor lo hace
+   * en cada `Think` del monstruo (msmonsterserver.cpp:583) y también muerto
+   * (:2626), y aquí también — un cadáver no se salta, uno DORMIDO sí, porque
+   * no está en el mundo.
+   *
+   * Lo que NO es igual y va dicho:
+   *
+   *   - El motor mira cada 0,1 s (`flInterval = 0.1`, animating.cpp:150) y
+   *     aquí cada vuelta de `cazar`: el evento sale hasta 0,1 s antes que
+   *     allí. Su propio comentario avisa de que «this still sometimes hits
+   *     events twice» (:153); aquí no se repite.
+   *   - El fotograma es `tiempo × fps` con el `framerate` a 1: `setanim.framerate`
+   *     no está portado (las arañas lo piden en `frame_bite1`).
+   *   - Los de bucle dan la vuelta en `fotogramas` y no en `fotogramas − 1`
+   *     (animation.cpp:323-324): es el reloj con el que `duracionDe` mide la
+   *     secuencia en este puerto, y dos relojes para la misma animación serían
+   *     dos mundos.
+   *
+   * Sin oyente no se hace nada: no hay guion que lo reciba, y contar cada
+   * paso de cada aldeano como «sin oyente» enterraría la cuenta del 91.
+   */
+  eventosDeAnimacion() {
+    if (!this.oyente) return;
+    for (const i of this.instancias) {
+      if (i.dormido) continue;
+      const s = i.actual?.seq;
+      const evs = s?.eventos;
+      if (!evs?.length) continue;
+      const a = i.anim;
+      if (!Number.isFinite(a?.desde) || !(s.fps > 0)) continue;
+      const ahora = (this.t - a.desde) * s.fps;
+      const antes = a.visto ?? 0;
+      if (!(ahora > antes)) continue;
+      a.visto = ahora;
+      const n = Math.max(1, s.fotogramas ?? 1);
+      const gen = a.gen;
+      for (const e of evs) {
+        if (!EVENTOS_QUE_LLAMAN_AL_GUION.has(e.evento) || !e.opciones) continue;
+        let veces = 0;
+        if (!s.bucle) veces = e.frame >= antes && e.frame < ahora ? 1 : 0;
+        else {
+          for (let m = Math.max(0, Math.ceil((antes - e.frame) / n)); e.frame + m * n < ahora; m++) {
+            if (e.frame + m * n >= antes) veces++;
+          }
+        }
+        for (let k = 0; k < veces; k++) {
+          // Si un evento anterior de esta misma vuelta cambió la animación
+          // (un `playanim critical` del guion fuera de la costura), los que
+          // quedan son de una secuencia que ya no suena.
+          if (i.anim.gen !== gen) break;
+          this.golpesDelGuion.eventos++;
+          this._costura("animacion", i, {
+            evento: e.opciones, codigo: e.evento, secuencia: s.nombre, fotograma: e.frame,
+            quien: i.objetivoDelGuion ?? null,
+            hacerDano: (p) => this._golpeDelGuion(i, p),
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * **UN `dodamage`/`xdodamage` DEL GUION DEL BICHO** — el 92.
+   *
+   * `p` llega de `GuionDeNpc` (npcguion.js) ya partido por `leerDano`
+   * (guion.js) y con el objetivo resuelto: `alJugador` dice si el primer
+   * parámetro es el jugador. Aquí se decide lo que en el motor decide
+   * `DoDamage` (giattack.cpp:1532-1640 la lista, :1657-1730 el golpe) contra
+   * el único objetivo que este puerto da a un bicho, el que le dio la IA.
+   *
+   * ── LA TRAZA (`dodamage <obj> <alcance> …`, la forma de casi todos) ──────
+   *
+   *   - El alcance es una ESFERA desde el OJO (`vecSrc = EyePosition()`,
+   *     npcscript.cpp:1121), no una distancia entre pies: entra quien tenga el
+   *     centro dentro (giattack.cpp:1548; el motor mira la caja, aquí el
+   *     centro — aproximación declarada).
+   *   - Su radio: `dodamage` suma media anchura del bicho y media del objetivo
+   *     (npcscript.cpp:1146-1157) — la del jugador es 0, el 82 —; `xdodamage`
+   *     sólo la del atacante (scriptcmds.cpp:7425-7427).
+   *   - Sin pared entre el ojo y el centro (`UTIL_TraceLine … ignore_monsters`,
+   *     giattack.cpp:1563-1566): es el rayo de `veA`, el mismo de la caza.
+   *   - Y en el CONO ESTRECHO del atacante, ±45° en el plano
+   *     (`FInViewCone(tr.vecEndPos, VIEW_FIELD_NARROW)`, :1572;
+   *     combat.cpp:1186-1205). O sea que **apartarse durante el amago
+   *     esquiva el mordisco**, que es lo que el daño de la IA no podía dar.
+   *
+   *   Si nadie entra, el motor traza recto contra el mundo (:1615-1630) y un
+   *   golpe a la pared también corre `game_dodamage`; eso no está portado:
+   *   aquí un golpe al aire no le llega al guion y se cuenta en `alAire`.
+   *
+   * ── LA DIRECTA (`dodamage <obj> direct …`) ─────────────────────────────
+   *
+   *   Sin alcance ni cono: el objetivo es la lista (giattack.cpp:1542-1545).
+   *   Los goblins de Gate City la usan tras mirar ellos mismos el alcance.
+   *
+   * ── EL GOLPE, igual para las dos ───────────────────────────────────────
+   *
+   *   1. `CanDamage`: relación `<= RELATIONSHIP_NE` (msmonsterserver.cpp:83-87).
+   *   2. El daño por `m_DMGMulti` si es > 0 (npcscript.cpp:1160-1162;
+   *      scriptcmds.cpp:7362), que es el `dmgmulti` del mapa (`postspawn`).
+   *   3. La tirada: `RANDOM_LONG(0, 99) < 100 - acierto` falla
+   *      (giattack.cpp:1709-1713). `m_HITMulti` no está horneado: vale 1.
+   *   4. Si entra: `game_damaged_other` (con el `dmgevent`), la defensa del
+   *      jugador (`golpear`) y, al final, `game_dodamage` y
+   *      `<dmgevent>_dodamage`, acierte o no (giattack.cpp:2030-2058). Los
+   *      tres los manda `_costura`, por los mismos sucesos del 91.
+   *
+   * Las formas en radio y de vector a vector no se portan y se cuentan.
+   */
+  _golpeDelGuion(i, p) {
+    const c = this.golpesDelGuion;
+    c.pedidos++;
+    const arnes = this._arnesDeCaza;
+    if (!arnes) { c.sinArnes++; return { porQue: "sin arnes de caza" }; }
+    if (p?.forma !== "traza" && p?.forma !== "directo") { c.formaSinPortar++; return { porQue: `forma ${p?.forma}` }; }
+    const objetivo = p.alJugador ? (i.objetivoDelGuion ?? null) : null;
+    const cand = objetivo ? (arnes.objetivos?.(i) ?? []).find((x) => x.id === objetivo) : null;
+    if (!cand) { c.sinObjetivo++; return { porQue: "el guion apunta a alguien que no es el objetivo de la IA" }; }
+    const U = this.U;
+    const n = i.donde;
+    if (p.forma === "traza") {
+      const ojo = [n[0] * U, n[1] * U + ojoDe(i), n[2] * U];
+      const miAncho = Number(i.ficha?.ia?.ancho ?? i.ficha?.ancho ?? 0) || 0;
+      const radio = (Number(p.alcance) || 0) + miAncho / 2 +
+        (p.comando === "dodamage" ? (Number(cand.ancho) || 0) / 2 : 0);
+      const lejos = Math.hypot(cand.donde[0] - ojo[0], cand.donde[1] - ojo[1], cand.donde[2] - ojo[2]);
+      // `!(a <= b)` y no `a > b`: una distancia NaN no entra (el 79).
+      if (!(lejos <= radio)) { c.alAire++; return { porQue: "fuera de la esfera", lejos, radio }; }
+      if (arnes.veA && !arnes.veA(i, objetivo)) { c.alAire++; return { porQue: "pared en medio" }; }
+      // El cono en el PLANO, con el rumbo de `mirarA`: yaw 0 mira a +X y la
+      // Z de Three va negada, así que el adelante es (cos, −sin).
+      const dx = cand.donde[0] / U - n[0], dz = cand.donde[2] / U - n[2];
+      const L = Math.hypot(dx, dz);
+      const dot = L > 0 ? (dx * Math.cos(i.yaw) - dz * Math.sin(i.yaw)) / L : 1;
+      if (!(dot > CONO_ESTRECHO)) { c.alAire++; return { porQue: "fuera del cono", dot }; }
+    }
+    const tipo = String(p.tipo || "generic");
+    const evento = p.evento || null;
+    const relacion = cand.relacion ?? i.ficha?.relacion ?? RELACION.SIN_RAZA;
+    if (relacion > RELACION.NEUTRAL) {
+      // `AttackHit = CanDamage(...)` falso: no hay `game_damaged_other` pero
+      // `EndDamage` corre igual (giattack.cpp:1694, :2030).
+      c.noPuede++;
+      this._costura("hizoDano", i, { objetivo, quien: objetivo, acierto: false, dano: 0, tipo, evento });
+      return { porQue: "no puede herirle", relacion };
+    }
+    const mult = numDe(i.ficha?.postspawn?.dmgmulti ?? "0");
+    const dano = Math.fround((Number(p.dano) || 0) * (mult > 0 ? mult : 1));
+    const tirada = Math.floor(this.azar() * 100);
+    if (tirada < 100 - (Number(p.acierto) || 0)) {
+      c.fallan++;
+      this._suceso("falla", { id: i.id, a: objetivo });
+      this._costura("hizoDano", i, { objetivo, quien: objetivo, acierto: false, dano: 0, tipo, evento });
+      return { entra: false, tirada };
+    }
+    c.entran++;
+    this._suceso("pega", { id: i.id, a: objetivo, dano: Math.round(dano * 10) / 10 });
+    this._costura("danaAOtro", i, { objetivo, quien: objetivo, dano, tipo, evento });
+    const def = arnes.golpear?.(i, objetivo, dano, tipo) ?? null;
+    const parado = Boolean(def?.parado);
+    this._costura("hizoDano", i, {
+      objetivo, quien: objetivo, acierto: !parado, tipo, evento,
+      dano: parado ? 0 : (Number.isFinite(def?.dano) ? def.dano : dano),
+    });
+    return { entra: true, dano, tirada, parado };
   }
 
   /**

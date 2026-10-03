@@ -324,6 +324,116 @@ function recoger(raiz, rutaScript, vistos, profundidad, indice, vars, orden) {
 }
 
 /**
+ * LO QUE VALE UNA VARIABLE CUANDO EL BICHO YA HA NACIDO — el 92.
+ *
+ * `recoger`, arriba, junta los `setvar`/`setvard`/`const` de **todos los
+ * bloques de todo lo incluido, corran o no**. Para una constante eso es lo
+ * correcto; para una variable que sólo se pone dentro de un evento, no: el 82
+ * lo pisó con `NPC_NO_DROPS` (ver el comentario del botín en `iaDe`) y lo
+ * resolvió no leyéndolo. El 92 lo pisó otra vez con `NPC_IS_BOSS` y
+ * `NPC_SELF_ADJUST`: **los 13 tipos de bicho de Gate City salían jefes y
+ * autoajustables**, herrero y tabernero incluidos, porque los dos valores viven
+ * en `make_boss` y `set_self_adj` de `monsters/externals.script:791-793` y
+ * `:1319-1322`, dos eventos a los que no llama ningún guion — los pide el mapa
+ * por `params`. Y aquí «no leerlo» no vale: 7 ficheros hacen `setvar
+ * NPC_IS_BOSS 1` y 43 `setvard`, y algunos de verdad son jefes.
+ *
+ * LA REGLA DEL MOTOR, que distingue los tres comandos al CARGAR el guion
+ * (script.cpp:5384-5458, `ParseScriptFile`, línea a línea de cada bloque):
+ *
+ *   `const`    se registra al cargar, en CUALQUIER bloque, y gana el PRIMERO
+ *              (`AddConst = false` si ya está, :5418-5430).
+ *   `setvar`   se EJECUTA al cargar, en cualquier bloque que no sea
+ *              `[client]` (:5386-5416, `SetVar(...)` y `KeepCmd = true`): o
+ *              sea que vale aunque su evento no corra nunca, y como `SetVar`
+ *              pisa, gana el ÚLTIMO en orden de lectura. Y se vuelve a
+ *              ejecutar cuando su evento corre («Exectuted at loadtime and
+ *              runtime», scriptcmds.cpp:120).
+ *   `setvard`  NO se ejecuta al cargar: se reescribe a `setvar` y se guarda
+ *              para cuando el evento corra (:5448-5458). Sólo cuenta si el
+ *              bloque corre.
+ *
+ * Y lo que corre al nacer: `spawn` y `game_spawn` (`CallScriptEvent`,
+ * global.cpp:436-437) con lo que llamen —`base_npc` llama `npc_spawn` en su
+ * `game_spawn`, :24—; los bloques SIN NOMBRE, que el motor arma con
+ * `fNextExecutionTime = 0` (script.cpp:5198-5202) y corren en el primer
+ * `RunScriptEvents`; y lo pedido con retraso (`callevent 1.0 npc_post_spawn`,
+ * base_npc.script:25), al final. Dentro de eso, una variable que se pone dos
+ * veces vale lo que puso la ÚLTIMA ejecución.
+ *
+ * Lo que NO hace, igual que `visita`: no evalúa condiciones. Un `setvard` detrás
+ * de un `if` cuenta como ejecutado. Y `[override]` no borra al padre aquí.
+ *
+ * Devuelve las dos listas por separado: `variables` (lo que queda puesto al
+ * nacer) y `constantes`. Quien quiera «el valor al nacer» mira la variable y, si
+ * no está, la constante — que es el `valorAlNacer` de `iaDe`.
+ */
+function variablesAlNacer(raiz, rutaScript, resolverVar) {
+  // 1. Leer en el orden del motor: cada `#include` en su sitio (el 66).
+  const bloques = [];
+  const vistos = new Set();
+  const leer = (ruta, hondo) => {
+    if (hondo > 8) return;
+    const fichero = `${raiz}/${ruta.replace(/\\/g, "/")}.script`;
+    if (!existsSync(fichero) || vistos.has(fichero)) return;
+    vistos.add(fichero);
+    for (const p of partirScript(readFileSync(fichero, "latin1")).piezas) {
+      if (p.tipo === "include") { if (p.ambito !== "cliente") leer(p.ruta, hondo + 1); continue; }
+      const cab = cabeceraDe(p.lineas);
+      if (cab.ambito !== "cliente") bloques.push({ nombre: cab.nombre, lineas: p.lineas });
+    }
+  };
+  leer(rutaScript, 0);
+
+  const valores = new Map();
+  const constantes = new Map();
+  const VAR = /^(setvar|setvarg|setvard)\s+(\S+)\s+(.*)$/i;
+  // 2. Al cargar: `setvar`/`setvarg` en todos los bloques, gana el último; y
+  //    `const` en todos los bloques, gana el primero.
+  for (const b of bloques) {
+    for (const l of b.lineas) {
+      const k = l.match(/^const\s+(\S+)\s+(.*)$/i);
+      if (k) { if (!constantes.has(k[1])) constantes.set(k[1], k[2].trim()); continue; }
+      const m = l.match(VAR);
+      if (m && m[1].toLowerCase() !== "setvard") valores.set(m[2], m[3].trim());
+    }
+  }
+  // 3. Al nacer: los bloques que corren, en orden de ejecución.
+  const porNombre = new Map();
+  for (const b of bloques) {
+    if (!b.nombre) continue;
+    if (!porNombre.has(b.nombre)) porNombre.set(b.nombre, []);
+    porNombre.get(b.nombre).push(b.lineas);
+  }
+  const diferidos = [];
+  const pisados = new Set();
+  const correr = (lineas, hondo) => {
+    for (const l of lineas) {
+      const m = l.match(VAR);
+      if (m) { valores.set(m[2], m[3].trim()); continue; }
+      const c = l.match(/^callevent\s+(.+)$/i);
+      if (!c) continue;
+      // La misma regla del retraso que `visita` (scriptcmds.cpp:2257-2266).
+      const t = c[1].trim().split(/\s+/);
+      if (t.length > 1 && /^\d/.test(resolverVar(t[0]))) diferidos.push([t[1], hondo + 1]);
+      else evento(t[0], hondo + 1);
+    }
+  };
+  const evento = (nombre, hondo) => {
+    const n = resolverVar(nombre).toLowerCase();
+    if (hondo > 6 || pisados.has(n)) return;
+    pisados.add(n);
+    for (const lineas of porNombre.get(n) ?? []) correr(lineas, hondo);
+  };
+  // El orden del motor: `spawn` y `game_spawn` (global.cpp:436-437); `npc_spawn`
+  // suele llegar por `game_spawn` y si no, se corre detrás.
+  for (const n of ["spawn", "game_spawn", ...NACIMIENTO]) evento(n, 0);
+  for (const b of bloques) if (!b.nombre) correr(b.lineas, 0);
+  while (diferidos.length) evento(...diferidos.shift());
+  return { variables: valores, constantes };
+}
+
+/**
  * Lee la ficha de un NPC, siguiendo los `#include` **y los `callevent`**.
  *
  * Lo de los `callevent` no es un refinamiento: la mitad de los bichos no ponen
@@ -514,6 +624,8 @@ export function leerFichaNpc(raiz, rutaScript) {
   return {
     script: rutaScript, ruta: `${raiz}/${rutaScript}.script`,
     vars, ficha: fichaResuelta, estadisticas, resuelve,
+    // Las variables como quedan al nacer (el 92): ver `variablesAlNacer`.
+    alNacer: variablesAlNacer(raiz, rutaScript, resolverVar),
     // Los `bodypart` elegidos, por índice. El número de `body` que pide
     // `mallaDe()` se compone con las bases del propio modelo, así que se deja en
     // crudo: componerlo aquí obligaría a abrir el `.mdl` desde el lector de
@@ -922,6 +1034,36 @@ export function iaDe(f) {
     const x = f.vars?.get(n);
     return f.resuelve ? f.resuelve(x) : x;
   };
+  /**
+   * EL VALOR AL NACER, y no «el que aparezca en algún bloque» — el 92.
+   *
+   * `v` lee `vars`, que trae lo puesto en CUALQUIER bloque (ver
+   * `variablesAlNacer`). Para cinco campos eso era leer un evento que no corre:
+   * medido sobre los 1 593 guiones con modelo, su diferencia con el valor al
+   * nacer es **siempre** «había un valor de un evento muerto → no hay nada»,
+   * ni un solo caso de otra clase:
+   *
+   *   NPC_IS_BOSS          911 fichas   `make_boss`        externals.script:791-793
+   *   NPC_SELF_ADJUST      955          `set_self_adj`     :1319-1322
+   *   NPC_MUST_SEE_TARGET  915          `set_blind_attack` :1227-1229
+   *   FLEE_DISTANCE        955          `turn_undead`      :461, la línea :519
+   *   NPC_EXP_REDUCT       968          `ext_reduct_xp`    :860-869
+   *
+   * Los cinco son eventos de `externals.script` que pide el MAPA (por
+   * `params`), un hechizo (`turn_undead`) u otro guion con `callexternal`
+   * (`dq/quests/dq_kill_target.script:72` hace `make_boss`), no el bicho al
+   * nacer. Los demás campos de `iaDe` siguen
+   * leyendo `v`: en ésos la diferencia mezcla el evento muerto con un `setvard`
+   * de después que este lector no puede evaluar (`MY_WIDTH`,
+   * `$get(ent_me,xp)`, `PARAM1`…), y cambiarlos a ciegas sería cambiar un valor
+   * malo por otro. Contados en `doc/FICHAS_92.md`.
+   */
+  const va = (n) => {
+    const a = f.alNacer;
+    if (!a) return v(n);
+    const x = a.variables.has(n) ? a.variables.get(n) : a.constantes.get(n);
+    return f.resuelve ? f.resuelve(x) : x;
+  };
   const ancho = num(f.ficha.width);
   // Los tres alcances por omisión salen de la anchura, y los factores son del
   // comentario de cabecera del propio script (líneas 11-14): moverse hasta la
@@ -1001,6 +1143,16 @@ export function iaDe(f) {
      * 2 884 guiones**. O sea que al nacer vale siempre lo que no está puesto, y
      * portarlo desde `vars` sería portar el valor de un bloque que no se
      * ejecuta. Si algún día hay un camino que lo encienda, se lee de ahí.
+     *
+     * AÑADIDO EN EL 92: el 82 lo vio en UNA variable y lo arregló en esa. La
+     * misma trampa, del mismo fichero, estaba en otras cinco que `iaDe` sí leía
+     * —jefe, autoajuste, `NPC_MUST_SEE_TARGET`, `FLEE_DISTANCE` y
+     * `NPC_EXP_REDUCT`— y en 911 a 968 fichas cada una. Ahora hay
+     * `variablesAlNacer` y esas cinco la usan (ver `va`, arriba). Las
+     * probabilidades del botín (`DROP_ITEMn_CHANCE`) tienen la misma trampa
+     * —el `0%` de `ext_no_drops2`, :886-894— y siguen leyendo `v`: medido, sólo
+     * cambian `0%` por nada, y `botinDe` da probabilidad 0 en los dos casos
+     * («sin CHANCE»), así que hoy no deciden nada. Pendiente de pasar a `va`.
      */
     botin: botinDe(v),
     // `CAN_HUNT` y `HUNT_AGRO` se leen porque están, pero **no deciden nada
@@ -1028,7 +1180,7 @@ export function iaDe(f) {
     },
     canHuntViejo: num(v("CAN_HUNT")),
     huntAgroViejo: num(v("HUNT_AGRO")),
-    tieneQueVerte: num(v("NPC_MUST_SEE_TARGET")) !== 0,
+    tieneQueVerte: num(va("NPC_MUST_SEE_TARGET")) !== 0,
     puedeHuir: num(v("CAN_FLEE")) !== 0,
     cambioDeObjetivo: rango(v("RETALIATE_CHANCE"))?.min ?? IA_POR_OMISION.cambioDeObjetivo,
     esperaDeCambio: rango(v("NPC_DELAY_RETALITATE")) ?? { min: 5, max: 10 },
@@ -1058,7 +1210,7 @@ export function iaDe(f) {
       nunca: num(v("CANT_FLEE")) === 1,
       vida: num(v("FLEE_HEALTH")) ?? 0,
       probabilidad: rango(v("FLEE_CHANCE"))?.min ?? 0,
-      distancia: num(v("FLEE_DISTANCE")) || 1000,
+      distancia: num(va("FLEE_DISTANCE")) || 1000,
       tiempo: num(v("FLEE_TIME")) || 10.0,
     },
     // EL TERCER SISTEMA DE ENCOGERSE, el de `base_struck.script`, que es el que
@@ -1094,12 +1246,18 @@ export function iaDe(f) {
      * Se lee para poder DECIR que en Gate City no lo pide nadie, que es
      * distinto de suponerlo: los 25 scripts del pueblo dan 0 y en el `.bsp`
      * no aparece la cadena. Ver `src/juego/servidor.js`.
+     *
+     * CORRECCIÓN DEL 92: «los 25 scripts del pueblo dan 0» dejó de ser verdad
+     * en el 82, cuando `#include [server] monsters/externals` empezó a cargarse
+     * y con él `set_self_adj` (:1319-1322): desde entonces `v` leía su `1` y
+     * **los 25 daban 1**, herrero y tabernero incluidos. La frase era cierta
+     * del lector que había cuando se escribió. Por eso ahora es `va`.
      */
-    seAjusta: num(v("NPC_SELF_ADJUST")) === 1,
+    seAjusta: num(va("NPC_SELF_ADJUST")) === 1,
     /** `NPC_IS_BOSS`: el ×4 de FuzzNet. Tampoco lo pide nadie aquí. */
-    esJefe: num(v("NPC_IS_BOSS")) === 1,
+    esJefe: num(va("NPC_IS_BOSS")) === 1,
     /** `NPC_EXP_REDUCT`, la rebaja propia. Se guarda como TEXTO: ver `expadj`. */
-    reduccionDeExp: v("NPC_EXP_REDUCT") ?? null,
+    reduccionDeExp: va("NPC_EXP_REDUCT") ?? null,
     vida: vidaDe(f.ficha.hp),
     ancho, alto: num(f.ficha.height),
     raza: f.ficha.race ?? null,

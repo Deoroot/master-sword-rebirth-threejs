@@ -224,6 +224,11 @@ control("y andan una distancia de verdad, no dos pasos",
 // fallo. Comparar con «walk» los marcaba a todos en rojo.
 console.log(`  de los que se movieron, ${p10.andandoBien} con su animación de andar` +
   ` y ${p10.andandoMal} que la declaran y no la tienen`);
+// EL 92 (pieza D): QUIÉNES, y no sólo cuántos. «3 mal» no decía si era el
+// juego o el control; el estado con que se movieron sí.
+for (const x of p10.lista.filter((y) => y.movido > 0.2 && y.declaraAndar && !y.conLaDeAndar)) {
+  console.log(`    MAL ${String(x.nombre).padEnd(24)} ${x.guion}  declara '${x.declara}'  se movió como ${JSON.stringify(x.comoSeMovio)}`);
+}
 control("el que anda y declara animación de andar, la tiene puesta",
   p10.andandoBien > 0 && p10.andandoMal === 0, `${p10.andandoBien} bien, ${p10.andandoMal} mal`);
 

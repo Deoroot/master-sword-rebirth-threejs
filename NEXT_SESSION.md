@@ -1,5 +1,32 @@
 # Dónde se quedó esto
 
+> **EL 92: EL MORDISCO SALE DE LA ANIMACIÓN, LA COSTURA CORRE CON SERVIDOR, Y
+> UN GOBLIN QUE NO AVISABA A NADIE DESDE EL 53**, por cuatro agentes.
+> (A) el daño de un bicho sale del evento 500/600 de su modelo → evento del
+> guion → `dodamage`, sin daño doble con la IA ([doc/MORDISCO_92.md](doc/MORDISCO_92.md),
+> `sondas/mordisco92.mjs`). **La araña de Gate City NO envenena al morder**: su
+> veneno es el salto, que no está portado; la que envenena es la de
+> `edanasewers`. Y `$get(<jugador>,maxhp)` daba «0» desde el 46: el veneno hacía
+> 0 de daño. (B) con servidor los bichos corren guion y los efectos van al
+> jugador correcto; de paso, en el servidor ningún bicho podía apuntar a un
+> jugador («1» contra «j1») ([doc/COSTURA_RED_92.md](doc/COSTURA_RED_92.md),
+> `sondas/costurared92.mjs`). (C) los 4 rojos de `consecuencias`: tres eran de
+> la sonda (buscaba ratas que desde el 67 son crías de araña) y uno del juego —
+> la tabla de razas nacía vacía entrando por el menú, así que **ningún goblin
+> avisaba a sus aliados al morir desde el 53** ([doc/CONSECUENCIAS_92.md](doc/CONSECUENCIAS_92.md)).
+> (D) `sondas/mundo.mjs` 41/44: **los 13 tipos de bicho de Gate City salen
+> horneados como jefes que se autoajustan**, porque `recoger` cosecha los
+> `setvard` de `make_boss`/`set_self_adj`, eventos que sólo pide el mapa — la
+> trampa del `NPC_NO_DROPS` del 82, y nacida en el 82 (al cargar los
+> `#include [server]`). Arreglado con `variablesAlNacer` (la regla de
+> `setvar`/`setvard`/`const` del motor): 974 fichas cambian en cinco campos,
+> los jefes del juego bajan de 974 a 63, y **desde el 82 casi todos los bichos
+> atacaban sin verte** (`tieneQueVerte`). La tercera roja era un aldeano que se
+> deslizaba asintiendo: el bloqueo de animación del 80 se ponía también con la
+> pose de reposo. `mundo` 44/44 ([doc/FICHAS_92.md](doc/FICHAS_92.md)).
+> **Pendiente:** 23 variables de `iaDe` mezcladas con un `setvard` que este
+> lector no evalúa; los jefes que dependen de un `if` de una línea.
+
 > **EL 91: LOS BICHOS CORREN GUION (HÍBRIDO), Y EL VENENO LE QUITA VIDA AL
 > JUGADOR**, por tres agentes a la vez. La IA portada sigue mandando; el guion
 > del bicho nace con él y recibe `game_dodamage`, `game_damaged`/`game_struck`,

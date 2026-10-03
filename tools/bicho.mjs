@@ -38,6 +38,44 @@ const RAMPA = tablasDeGamma(AJUSTES).tex;
 
 export const nombreArchivo = (s) => s.replace(/[^A-Za-z0-9_.-]/g, "_");
 
+/**
+ * LOS EVENTOS DE UNA SECUENCIA, para el servidor — el 92.
+ *
+ * `mstudioseqdesc_t` lleva `numevents` y `eventindex` en los bytes 48 y 52
+ * (studio.h:172-173) y cada `mstudioevent_t` son `frame`, `event`, `type` y
+ * `options[64]`: 76 bytes (studio_event.h:23-26). Los de 5000 en adelante
+ * son del CLIENTE y el servidor los salta (`EVENT_CLIENT`, monsterevent.h:27;
+ * animation.cpp:322), así que no se hornean.
+ *
+ * Es la misma lectura que `eventosDeModelo` (tools/bichosguion.mjs:205), pero
+ * por ÍNDICE de secuencia y no por nombre: el horneado emite secuencias por
+ * índice y dos con el mismo nombre se confundirían. Que las dos lecturas den
+ * lo mismo lo comprueba `test/mordisco92a.test.mjs`.
+ *
+ * Lo pide `Manada.eventosDeAnimacion`: el 500 y el 600 llaman al guion por
+ * su nombre (msmonsterserver.cpp:1484-1493), y en Master Sword el golpe de un
+ * monstruo ES uno de ésos (`bite1` en giantrat.script:63-67).
+ */
+export function eventosDeSecuencia(m, indice) {
+  const { buf, offSecuencias } = m;
+  const o = offSecuencias + indice * 176;
+  if (o + 176 > buf.length) return [];
+  const n = buf.readInt32LE(o + 48), off = buf.readInt32LE(o + 52);
+  const fuera = [];
+  for (let k = 0; k < n; k++) {
+    const e = off + k * 76;
+    if (e + 76 > buf.length) break;
+    const evento = buf.readInt32LE(e + 4);
+    if (evento >= 5000) continue;
+    fuera.push({
+      frame: buf.readInt32LE(e),
+      evento,
+      opciones: buf.toString("latin1", e + 12, e + 76).replace(/\0.*$/s, ""),
+    });
+  }
+  return fuera;
+}
+
 /** Los vértices en el espacio de SU hueso, que es como los guarda el archivo. */
 export function verticesCrudos(m, cuerpo = 0) {
   const { buf } = m;
@@ -253,6 +291,8 @@ export function extraerBicho(relativo, {
       // entidad tiene que andar para que el bicho no patine.
       avance: s.avance,
       bbmin: s.bbmin, bbmax: s.bbmax,
+      // EL 92: los eventos del servidor de esta secuencia (`eventosDeSecuencia`).
+      eventos: eventosDeSecuencia(m, i),
     });
   }
 

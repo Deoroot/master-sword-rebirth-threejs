@@ -44,6 +44,12 @@ import { InteraccionesNpc } from "../juego/interacciones.js";
 import { ganchoDeMovedest, loVe } from "../play/movedest.js";
 import { ojoDe } from "../play/manada.js";
 import { comprar as comprarEnTienda, vender as venderEnTienda, MAX_OBJETOS } from "../play/tienda.js";
+// El 92: el anfitrión de los efectos de cada jugador, y la frase de «X hits
+// you», que es la misma función que usa el navegador (dos textos serían dos
+// juegos, el 63).
+import { GuionDelJugador } from "../play/guionjugador.js";
+import { TablaDeEfectos } from "../play/efectos.js";
+import { golpeRecibido } from "../play/mensajesdecombate.js";
 import { atributosDe, derivadas } from "../juego/stats.js";
 import {
   PARTIDA, vidaTotal, jugadoresActivos, autoajustar, experienciaDelBicho,
@@ -149,6 +155,19 @@ export class Partida {
     // El 63: el oro con el que entra cada personaje, si el operador lo dice.
     // `null` es «el suyo», que es lo normal.
     oroInicial = null,
+    // ── EL 92: LO QUE HACE FALTA PARA QUE UN EFECTO CAIGA EN UN JUGADOR ──
+    //
+    // `efectos` es `build/msr/efectosguion.json` y `fichaDelJugador`
+    // `build/msr/jugador.json`: con los dos, cada cliente tiene aquí un
+    // anfitrión de efectos (`_efectosDe`). Sin ellos un `applyeffect` de un
+    // guion de NPC se apunta como hasta ahora («sin anfitrión de efectos»).
+    efectos = null, fichaDelJugador = null,
+    // `{ "monsters/giantrat": ["add_dot_poison"] }`: eventos que se le llaman
+    // al guion de un bicho al nacer. Es lo que un mapa pide con los `params`
+    // de la entidad (`npcatk_do_events`, monsters/base_self_adjust.script:74-103) y que hoy no llega
+    // por su camino (doc/BICHOS_GUION_91.md §2: `G_MAP_ADDPARAMS`). Perilla del
+    // operador, como `oroInicial`: ver `--params` en `tools/servidor.mjs`.
+    paramsDeBicho = null,
   } = {}) {
     if (!mundo) throw new Error("una partida necesita un mundo que simular");
     if (!almacen) throw new Error("una partida necesita dónde guardar los personajes");
@@ -217,11 +236,33 @@ export class Partida {
      * dos y el guion es uno por NPC.
      */
     this.interacciones = null;
+    this.tablaDeEfectos = efectos ? new TablaDeEfectos(efectos) : null;
+    this.fichaDelJugador = fichaDelJugador;
+    this.paramsDeBicho = paramsDeBicho ?? null;
+    /** Los guiones de bicho a los que ya se les ha llamado `paramsDeBicho`. */
+    this._conParams = new WeakSet();
+    /** El 92: cuántos `applyeffect` pidió un guion sin jugador a quien ponérselo. */
+    this.efectosSinJugador = 0;
     if (guiones && this.fauna) {
       this.interacciones = new InteraccionesNpc({
         sesion: null,
         guiones, menus,
         catalogo: this._porId,
+        // EL 92: «j3» es el cliente del hueco 3. Ver `alCombate`.
+        jugadorDe: (id) => this._clienteDeObjetivo(id)?.sesion ?? null,
+        // EL 92: `applyeffect` desde un guion de NPC —el veneno de una rata en
+        // su `game_dodamage`, la cura del sumo sacerdote en su menú—, al
+        // jugador con el que habla el guion AHORA: el que abrió el menú, o el
+        // del golpe mientras corre la costura (`alCombate` pone
+        // `hablandoCon`). Sin tablas no se pasa el gancho, y el guion lo
+        // apunta como antes.
+        aplicarEfecto: this.tablaDeEfectos && this.fichaDelJugador
+          ? (ruta, params, o) => {
+            const c = this._aQuienHabla();
+            if (!c) { this.efectosSinJugador++; return null; }
+            return this._efectosDe(c)?.efectos?.aplicar(ruta, params, o) ?? null;
+          }
+          : null,
         npcPorId: (id) => this.fauna?.manada?.de?.(id) ?? null,
         // A quién va cada recado: `this.hablandoCon` es la sesión del que
         // habló, y de la sesión se saca su cliente. `MSG_ONE`, no `MSG_ALL`.
@@ -289,6 +330,15 @@ export class Partida {
           });
         },
       });
+      // ── EL 92: LA COSTURA DEL 91, TAMBIÉN AQUÍ ──────────────────────────
+      //
+      // `src/main.js` enchufa la manada del navegador desde el 91; ésta no la
+      // enchufaba nadie, así que **con servidor ningún bicho corría guion**:
+      // la manada lo contaba en `costuraSinOyente` y seguía. La misma línea
+      // que dejó escrita doc/BICHOS_GUION_91.md §5.1. Desde aquí los bichos de
+      // combate nacen con su guion en `interacciones.paso` y los golpes le
+      // llegan por `alCombate`.
+      this.interacciones.enchufarA(this.fauna.manada);
     }
   }
 
@@ -298,6 +348,164 @@ export class Partida {
     if (!s) return null;
     for (const c of this.clientes.values()) if (c.sesion === s) return c;
     return null;
+  }
+
+  /**
+   * El cliente de un id de objetivo de la manada: «j3» es el hueco 3
+   * (`Fauna.nombreDeJugador`). Cualquier otra cosa no es un cliente.
+   */
+  _clienteDeObjetivo(id) {
+    const m = /^j(\d+)$/.exec(String(id ?? ""));
+    return m ? (this.clientes.get(Number(m[1])) ?? null) : null;
+  }
+
+  /**
+   * **EL ANFITRIÓN DE LOS EFECTOS DE UN JUGADOR, EN EL SERVIDOR** — el 92.
+   *
+   * Un efecto es un guion que se AÑADE a la entidad objetivo
+   * (`Script_Add`, scriptedeffects.cpp:27) y corre en el servidor
+   * (`#scope server`, effects/base_dot.script). Con red el personaje vive
+   * aquí, así que el veneno tiene que vivir aquí también: si se mandara al
+   * navegador, su daño restaría de la COPIA de la vida, que la siguiente foto
+   * pisa con la de verdad (`vitales`, `src/main.js`).
+   *
+   * El anfitrión es un `GuionDelJugador` de verdad, con la ficha horneada del
+   * guion del jugador, por una razón medida: los efectos le preguntan cosas a
+   * su guion —`$get(ent_me,scriptvar,'PLAYING_DEAD')` en el veneno
+   * (effects/base_dot.script, `dot_resist_check`), que el motor contesta con
+   * `GetFirstScriptVar` (script.cpp:5949-5955)— y le avisan
+   * (`game_applyeffect`, scriptcmds.cpp:1890-1898). Un anfitrión de mentira
+   * contestaría el valor de reposo de una variable que el guion sí pone.
+   *
+   * **Sólo es anfitrión.** De este guion se mueven los relojes de sus EFECTOS
+   * (`efectos.paso`, en `_paso`) y no los suyos: su regeneración y sus
+   * `repeatdelay` siguen siendo del navegador, como hasta hoy. Moverlos aquí
+   * es mudar el guion del jugador al servidor, que es otro experimento y
+   * queda dicho en doc/COSTURA_RED_92.md.
+   *
+   * Se hace la primera vez que hace falta y se rehace si el cliente ha
+   * entrado con otro personaje.
+   */
+  _efectosDe(c) {
+    if (!c?.sesion?.personaje || !this.tablaDeEfectos || !this.fichaDelJugador) return null;
+    if (c.anfitrionDeEfectos?.personaje === c.sesion.personaje) return c.anfitrionDeEfectos;
+    const partida = this;
+    const g = new GuionDelJugador({
+      ficha: this.fichaDelJugador,
+      personaje: c.sesion.personaje,
+      ahora: () => partida.t,
+      mapa: () => partida.aparicion?.mapa ?? null,
+      jugadores: () => [...partida.clientes.values()].filter((x) => x.dentro).length,
+      efectos: this.tablaDeEfectos,
+      // `playermessage ent_me …`: a SU pantalla y a ninguna otra (`MSG_ONE`,
+      // `ScriptCmd_Message`, scriptcmds.cpp:4243). El mismo mensaje que usa el
+      // guion de un NPC para la consola de sucesos.
+      suceso: (tipo, texto) => c.mandar(MENSAJE.TEXTO, { tipo: -1, texto, suceso: tipo }),
+      aviso: (titulo, texto) => c.mandar(MENSAJE.TEXTO, { tipo: -2, texto, titulo }),
+      // `givehp`: el mismo tope que el navegador (`V_min(Max - Current, Amt)`,
+      // msmonsterserver.cpp:1971-1999), sobre el personaje que se guarda.
+      dar: (que, cuanto) => {
+        const p = c.sesion?.personaje;
+        if (!p || !(cuanto > 0)) return;
+        const d = derivadas(atributosDe(p.habilidades));
+        if (que === "vida") p.vida = Math.min(d.vidaMax, (p.vida ?? 0) + cuanto);
+        else p.mana = Math.min(d.manaMax, (p.mana ?? 0) + cuanto);
+        c.sesion.tocado?.();
+      },
+      herir: (golpe) => this._efectoPega(c, golpe),
+      // `$get(<el jugador>,maxhp)` que le pregunta un efecto a su anfitrión:
+      // la cura del sacerdote no cura a quien cree que está al máximo
+      // (effects/effect_rejuv2.script, `game_activate`). Los máximos se
+      // DERIVAN, no se guardan (el 66): la misma cuenta que `src/main.js`.
+      maximos: () => {
+        const p = c.sesion?.personaje;
+        if (!p) return { vida: 0, mana: 0 };
+        const d = derivadas(atributosDe(p.habilidades));
+        return { vida: d.vidaMax, mana: d.manaMax };
+      },
+    });
+    c.anfitrionDeEfectos = g;
+    return g;
+  }
+
+  /**
+   * El daño de un efecto —el `xdodamage` de un veneno— llega a un jugador.
+   *
+   * Por la misma puerta que el mordisco de un bicho en el servidor
+   * (`_bichoPega`: lo cobra la sesión de aquí, y el navegador lo ve en la
+   * foto), y con su aviso `"%s hits you: %s %s"` (giattack.cpp:1994), que en
+   * el navegador sale de la rama `pega` de `src/main.js` y aquí no hay rama
+   * que lo diga: el efecto no es un bicho de la foto. El nombre es el del que
+   * lo puso, si se sabe.
+   */
+  _efectoPega(c, golpe) {
+    if (!c?.sesion || !c.vivo || !(golpe?.dano > 0)) return null;
+    const a = golpe.atacante ?? null;
+    const nombre = a?.nombre ?? a?.instancia?.ficha?.nombre ?? a?.propiedad?.("name") ?? null;
+    const r = c.sesion.danar(golpe.dano, { porQue: nombre ?? "un efecto", deQuien: a?.id ?? null, tipo: "monstruo" });
+    c.mandar(MENSAJE.TEXTO, {
+      tipo: -1, suceso: "atacado",
+      texto: golpeRecibido({ nombre: nombre && nombre !== "0" ? nombre : null, dano: golpe.dano, tipo: golpe.tipo }),
+    });
+    this._suceso("dano", { id: c.id, de: a?.id ?? null, dano: Math.round(golpe.dano * 10) / 10, efecto: true });
+    return r;
+  }
+
+  /**
+   * Los eventos de `paramsDeBicho`, una vez por guion de bicho nacido.
+   * Se mira tras `interacciones.paso`, que es donde nacen (`nacerBichos`).
+   */
+  _ponerParams() {
+    if (!this.paramsDeBicho || !this.interacciones) return 0;
+    let n = 0;
+    for (const g of this.interacciones.guionesVivos.values()) {
+      if (!g || g.retirado || this._conParams.has(g) || !g.cierre) continue;
+      this._conParams.add(g);
+      for (const e of this.paramsDeBicho[g.npc?.script ?? ""] ?? []) { g.llamar(e, []); n++; }
+    }
+    return n;
+  }
+
+  /**
+   * LO QUE LA COSTURA HA HECHO EN ESTE SERVIDOR, para medirlo desde fuera
+   * (`/costura` en `tools/servidor.mjs`). Se lee del GUION —lo que recibió—,
+   * no de lo que la manada cree haber mandado: la regla de `probe.costura`.
+   */
+  costura() {
+    const I = this.interacciones;
+    const m = this.fauna?.manada ?? null;
+    const bichos = [];
+    if (I && m) {
+      for (const i of m.instancias) {
+        const g = I.guionesVivos.get(i.id);
+        if (!g) continue;
+        const ultimo = (ev) => g.guion?.rastro?.filter?.((r) => r.evento === ev).at(-1)?.params ?? null;
+        bichos.push({
+          id: i.id, script: i.ficha?.script ?? null, vivo: !i.muerto, dormido: Boolean(i.dormido),
+          conCierre: Boolean(g.cierre), recibidos: { ...g.costuraCuenta.recibidos },
+          cerrados: { ...g.costuraCuenta.cerrados }, absorbidos: { ...g.costuraCuenta.absorbidos },
+          dodamage: ultimo("game_dodamage"), damaged: ultimo("game_damaged"),
+          veneno: g.guion?.buscarVar?.("NPC_DOT_POISON")?.valor ?? null,
+        });
+      }
+    }
+    const efectos = [];
+    for (const c of this.clientes.values()) {
+      const g = c.anfitrionDeEfectos;
+      if (!g) continue;
+      efectos.push({
+        cliente: c.id, personaje: c.sesion?.personaje?.id ?? null,
+        activos: g.efectos.activos, aplicados: g.efectos.historial.length, heridas: g.heridas.length,
+      });
+    }
+    return {
+      enchufada: Boolean(I?.manadaEnchufada && I.manadaEnchufada === m),
+      sinOyente: m?.costuraSinOyente ?? null, fallos: m?.costuraFallos ?? 0,
+      ...(I ? { ...I.costura } : {}),
+      efectosSinJugador: this.efectosSinJugador,
+      clientes: [...this.clientes.values()].map((c) => ({ id: c.id, personaje: c.sesion?.personaje?.id ?? null })),
+      bichos, efectos,
+    };
   }
 
   /**
@@ -1060,6 +1268,12 @@ export class Partida {
     // primero que le hablara, y el segundo jugador no podría comprar nunca:
     // la exclusividad sin la correa es peor que no tener exclusividad.
     this.interacciones?.paso(this.paso);
+    // EL 92: los `params` del operador a los bichos que acaban de nacer, y los
+    // relojes de los efectos de cada jugador (el veneno muerde cada segundo:
+    // `callevent 1.0 dot_effect`, effects/base_dot.script). Cada `CScript`
+    // lleva los suyos (`IScripted::RunScriptEvents`, script.cpp:5906-5922).
+    this._ponerParams();
+    for (const c of this.clientes.values()) c.anfitrionDeEfectos?.efectos?.paso(this.paso);
     // Una vez por segundo, como el motor.
     if (this.t - this._ultimoChequeo >= 1) {
       this._ultimoChequeo = this.t;

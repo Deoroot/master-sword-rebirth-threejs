@@ -158,7 +158,50 @@ if (nacer && aparicion) {
 const oroInicial = valor("oro", null);
 if (oroInicial !== null) console.log(`  oro            ${oroInicial} al entrar  (--oro)`);
 
-const partida = new Partida({ mundo, almacen, aparicion, catalogo, fauna, guiones, menus, nombre: NOMBRE, oroInicial });
+// ── LOS EFECTOS, que desde el 92 caen en el jugador AQUÍ ────────────────────
+//
+// El veneno de una rata o la cura del sumo sacerdote son guiones que se pegan
+// al jugador (`applyeffect`), y con red el jugador vive en este proceso. Hacen
+// falta dos horneados comunes: los guiones de efecto y el del jugador, que es
+// su anfitrión (ver `_efectosDe` en `src/red/partida.js`). Sin ellos se dice,
+// como con los demás.
+const leerComun = (n) => readFile(rutaComun(n), "utf8").then((t) => JSON.parse(t)).catch(() => null);
+const efectos = await leerComun("efectosguion.json");
+const fichaDelJugador = await leerComun("jugador.json");
+if (!efectos || !fichaDelJugador) {
+  console.log("  (sin build/msr/efectosguion.json o jugador.json: un `applyeffect` sobre un jugador se apunta y no hace nada.\n" +
+    "   Corre `npm run efectos:guion` y el horneado del jugador)");
+} else {
+  console.log(`  efectos        ${Object.keys(efectos.archivos ?? {}).length} guiones, el jugador es su anfitrión aquí`);
+}
+
+// ── LOS `params` DE UN BICHO, si el operador los pide ───────────────────────
+//
+//     npm run servidor -- --mapa sala88 --params monsters/giantrat=add_dot_poison
+//
+// Un mapa le pone eventos a un monstruo con los `params` de su entidad, que el
+// guion corre al nacer (`npcatk_do_events`, monsters/base_self_adjust.script:74-103). Ese camino hoy
+// no llega (doc/BICHOS_GUION_91.md §2: `G_MAP_ADDPARAMS` es del GAME_MASTER,
+// que no corre), así que el operador puede pedirlos a mano: es la hermana de
+// `--nacer` y `--oro`, y lo que llama son eventos DEL MOD (el veneno de la
+// rata es `add_dot_poison`, monsters/externals.script:1342-1345). Se puede
+// repetir: `--params a=b --params c=d,e`.
+const paramsDeBicho = {};
+for (let k = 0; k < args.length; k++) {
+  if (args[k] !== "--params" || !args[k + 1]) continue;
+  const [script, eventos] = String(args[k + 1]).split("=");
+  if (!script || !eventos) { console.error(`  «--params ${args[k + 1]}» no es guion=evento[,evento]: se ignora.`); continue; }
+  (paramsDeBicho[script] ??= []).push(...eventos.split(",").filter(Boolean));
+}
+if (Object.keys(paramsDeBicho).length) {
+  for (const [s, e] of Object.entries(paramsDeBicho)) console.log(`  params        ${s}: ${e.join(", ")}  (--params)`);
+}
+
+const partida = new Partida({
+  mundo, almacen, aparicion, catalogo, fauna, guiones, menus, nombre: NOMBRE, oroInicial,
+  efectos, fichaDelJugador,
+  paramsDeBicho: Object.keys(paramsDeBicho).length ? paramsDeBicho : null,
+});
 
 const http = createServer((pet, res) => {
   // La lista de partidas: lo que en Master Sword es el navegador de servidores
@@ -168,6 +211,14 @@ const http = createServer((pet, res) => {
   if (pet.url?.startsWith("/partidas")) {
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.end(JSON.stringify([{ ...anfitrion.resumen, url: `ws://localhost:${PUERTO}/juego` }], null, 1));
+    return;
+  }
+  // EL 92: lo que los guiones de los bichos han recibido AQUÍ. Un navegador no
+  // puede verlo —los guiones no viajan—, y una sonda que lo midiera en su
+  // propia copia mediría otro juego. Es de sólo lectura.
+  if (pet.url?.startsWith("/costura")) {
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(JSON.stringify(partida.costura(), null, 1));
     return;
   }
   res.statusCode = 404;

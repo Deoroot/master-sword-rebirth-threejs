@@ -2032,6 +2032,12 @@ async function arrancarJuego() {
   // razas entera, que es lo que hace falta para saber a quién avisa un bicho al
   // morir — «aliado» es una relación entre DOS bichos, no con el jugador.
   let censoDeBichos = null;
+  // LA TABLA DE RAZAS se crea AQUÍ, vacía, y la llena `montarLosBichos` (92).
+  // Antes se construía 2 000 líneas más abajo leyendo `censoDeBichos` en ese
+  // instante, y entrando por el menú (el 53) los bichos se montan después, desde
+  // «Start»: la tabla nacía vacía para siempre, `sonAliados` decía «no» a todo y
+  // un goblin no avisaba a nadie al morir. `sonAliados` la lee por referencia.
+  const tablaDeRazas = new Map();
   let bichosSolidos = null;
   /** Monta los bichos si no lo están ya. Llamarla dos veces no los duplica. */
   async function montarLosBichos() {
@@ -2039,6 +2045,7 @@ async function arrancarJuego() {
     try {
       const censo = await traerJson(ruta("bichos.json"));
       censoDeBichos = censo;
+      for (const [clave, r] of censo?.razas ?? []) tablaDeRazas.set(clave, r);
       bichos = censo ? await cargarBichos(censo, { base: BASE }) : null;
       if (bichos) escena.add(bichos.grupo);
     } catch (e) {
@@ -3991,7 +3998,6 @@ async function arrancarJuego() {
    * La tabla de razas viaja entera en el manifiesto desde el 19, porque con la
    * relación de cada uno con el JUGADOR no se puede contestar esto.
    */
-  const tablaDeRazas = new Map(censoDeBichos?.razas ?? []);
   const sonAliados = (a, b) => {
     const ra = a?.o?.ficha?.ia?.raza ?? a?.ficha?.ia?.raza;
     const rb = b?.o?.ficha?.ia?.raza ?? b?.ficha?.ia?.raza;
