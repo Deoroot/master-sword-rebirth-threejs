@@ -300,6 +300,10 @@ con C3 se cayó antes de medirlo («la marca no está en la consola de B»: §7)
   (src/red/andar.js) y `vitalesDelPersonaje` (src/main.js) son la misma
   cuenta; lo que difiere es si el bucle la usa. Sin medir más; no es de las
   trabas y no se cuenta como control.
+  *Corrección del 99:* no era ninguna de las dos. El bucle sí usa la del
+  personaje (`probe.fisica.vitales()` de B dio 184); lo que caía en el 160 era
+  **rehacer** las órdenes tras una corrección: el gancho `red.simular` leía
+  `o.maxima`, que ninguna orden trae. Ver [RED_99.md](RED_99.md).
 - **`givehp` en el guion de un NPC lanza** «e.dar is not a function»: el
   entorno de `GuionDeNpc` no tiene el gancho `dar` (src/play/guion.js,
   `givehp`). El esqueleto venenoso lo hace al morder
@@ -308,10 +312,17 @@ con C3 se cayó antes de medirlo («la marca no está en la consola de B»: §7)
   mismo `GuionDeNpc`). La sonda lo imprime y no lo cuenta. Lo correcto es
   `CMSMonster::Give` sobre la vida del bicho con su tope
   (msmonsterserver.cpp:1971-1999), y eso es de la IA, no de esto.
+  *Corrección del 99:* portado así, en el entorno de `GuionDeNpc` (`dar`); ver
+  [RED_99.md](RED_99.md) §5.
 - **Reaparecer dentro de la roca.** `_sitioLibre` (src/red/partida.js) aparta
   al que reaparece de los otros jugadores sin mirar la geometría; en Gate
   City, al lado de la araña, dejó a A con la cápsula metida y a Rapier
   tardando segundos por paso (§7). El servidor entero deja de contestar.
+  *Corrección del 99:* `_sitioLibre` ni siquiera corría al reaparecer: el
+  servidor no movía el cuerpo y se volvía a la vida donde se había muerto. El
+  punto de Gate City ya estaba en la pared, y lo que paraba de verdad al
+  servidor de la sonda era una araña con su cilindro DENTRO de la cápsula
+  (125 ms por llamada al controlador). Ver [REAPARECER_99.md](REAPARECER_99.md).
 - **`game_damaged` de un golpe PARADO.** El motor lo llama también entonces
   (el parry deja `flDamage = -1` y sigue, msmonsterserver.cpp:2246-2311; el
   guion corta con `if PARAM2 > 0`). Ni `golpear` ni el servidor lo hacen; es

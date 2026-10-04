@@ -1,5 +1,48 @@
 # Dónde se quedó esto
 
+> **EL 99: LOS PENDIENTES PRINCIPALES DEL 98, Y LA FIDELIDAD DEL GUION.** El
+> usuario pidió cerrar primero los pendientes principales y, en lo demás,
+> **imitar a MSR** aunque se pierdan cosas. Cinco agentes:
+> (O) el salto tras teletransporte **no era la regla «techo»**: el nacimiento de
+> Gate City metía la cápsula 0,25 m en la pared, bajo el alféizar de una
+> ventana; en el motor la caja no cabe ahí. `tools/aparicion.mjs` exige que
+> quepa la caja (casco 1, `contenidoEnCasco`/`cabeDePie` en src/bsp/arbol.js) y
+> 28 de los 31 rayos de luz de Gate City se descartan; la regla inventada se
+> cambió por `PM_ClipVelocity`/`PM_FlyMove` (src/play/movimiento.js), con una
+> guarda NUESTRA para el autostep de Rapier que había atascado a Beto en el
+> escalón de red95 ([doc/SALTO_99.md](doc/SALTO_99.md)).
+> (P) Unholy Blade, Shadow Lance y las 11 armas cuerpo a cuerpo con
+> `charge-throw-projectile` tiran su proyectil (`Brazo.pasoDelLanzamiento`,
+> giattack.cpp:429-476, 1073-1103); el arco elige con `elegir`
+> ([doc/ARMAS_99.md](doc/ARMAS_99.md)).
+> (Q) Los 160 u/s con servidor eran el REHACER tras corrección, no el bucle: la
+> orden no guardaba su velocidad (input.cpp:795-796); `givehp` de NPC
+> (msmonsterserver.cpp:1971-1998) ([doc/RED_99.md](doc/RED_99.md)).
+> (S) Reaparecer en la roca eran cuatro cosas: el servidor no movía el cuerpo al
+> reaparecer, el nacimiento en la pared, Rapier lentísimo con la cápsula
+> incrustada (`PM_CheckStuck` portado en src/play/atasco.js) y **una araña
+> dentro del jugador** (`_bichosDentro`) ([doc/REAPARECER_99.md](doc/REAPARECER_99.md)).
+> (R) El `if` VIEJO y el `local` por evento, en el lector de horneado (el
+> `Guion` de juego ya era fiel): 541 → 485 ataques, 82 objetos cambian. La Blood
+> Drinker conserva SU golpe cargado (pierde los dos de plantilla duplicados); el
+> arco de Torkalath tira la esfera siempre; **el Orion Bow ya no ataca** (en MSR
+> su único ataque es la bola de maná por guion, sin portar)
+> ([doc/GUION_99.md](doc/GUION_99.md)).
+>
+> **Pendiente del 99:** (1) el servidor aún se cuelga alguna vez (1 de 12
+> pasadas de reaparecer99), sin atribuir; el vigía con perfilador está en el
+> scratchpad de la sesión, no en el árbol. (2) El navegador no tiene
+> `PM_CheckStuck` ni lo de los bichos dentro (`Player.pasoMsr`); los bichos
+> siguen entrando en el jugador. (3) Hundirse hasta 6,7 cm en suelo liso al
+> andar: es de antes del 99 (Rapier + `stick`). (4) Maná sin cobrar en ningún
+> ataque (`mpdrain` sin hornear); `reqskill` sumado sin aplicar (lanza 35→39,
+> mandobles 2→32); el proyectil en vuelo siempre con el modelo de flecha. (5)
+> Orion Bow: su bola de maná. (6) `fisica` 18/19 (la pantalla de opciones lista
+> 0 acciones) y `armas96` 31/33 en «fuera de su ventana», los dos de antes del
+> 99, sin atribuir. (7) El nacimiento de Gate City ya no cae bajo un rayo de luz;
+> la alternativa fiel sería apartar el punto de la pared hasta que quepa.
+> Siguen los del 98 (5)-(8).
+
 > **EL 98: POR QUÉ LAS SONDAS IBAN CADA VEZ MÁS LENTAS.** No eran las pruebas de
 > Node (2 837 en **14 s**, en paralelo). Eran **54 `vite` huérfanos**, uno por
 > sonda pasada en el día: `spawn("taskkill")` + `process.exit()` no mata nada en

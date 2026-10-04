@@ -1897,14 +1897,25 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       // del `[override]` no se puede aplicar sobre la marcha: sólo se sabe al
       // acabar el árbol.
       acc.bloque++;
-      // EL 98, MEDIDO Y NO APLICADO: `local reg.attack.*` es una variable LOCAL
-      // del evento (`Event.SetLocal`, scriptcmds.cpp:6577-6578) que se borra al
+      // EL 99 (doc/GUION_99.md): `local reg.attack.*` es una variable LOCAL del
+      // evento (`Event.SetLocal`, scriptcmds.cpp:6577-6578) que se borra al
       // acabarlo (`Event.m_Variables.clearitems()`, script.cpp:5696), y
-      // `RegisterAttack` la lee del evento EN CURSO (`GetVar`, script.cpp:4404).
-      // Aquí `acc.ataque` NO se vacía entre bloques, así que el `registerattack`
-      // a pelo de `bows_base` (bows_base.script:34) sale como copia del anterior
-      // y no como el ataque vacío —tipo strike-land, teclas sin poner— que es en
-      // el motor. Vaciarlo aquí cambia 53 armas: ver doc/ARMAS_98.md.
+      // `RegisterAttack` la lee del evento EN CURSO (`GetFirstScriptVar` ->
+      // `GetVar` -> `m.CurrentEvent->GetLocal`, script.cpp:5949-5955 y :4404).
+      // Un `callevent` sin retraso no la pierde al volver: `RunScriptEventByName`
+      // guarda y repone `m.CurrentEvent` (script.cpp:5013, :5025). O sea que un
+      // `registerattack` ve los `local` de SU bloque y nada más.
+      //
+      // El 98 lo midió y lo dejó sin aplicar —«cambia 53 armas»—; el usuario
+      // decidió en el 99 imitar al motor aunque las armas pierdan ataques. Con
+      // esto el `registerattack` a pelo de `bows_base` (bows_base.script:34) es
+      // el ataque VACÍO que es en el motor —tipo strike-land por omisión,
+      // giattack.cpp:605-607, y `reg.attack.keys` sin poner, o sea la tecla
+      // literal «reg.attack.keys», que no casa nunca—, y no una copia del
+      // anterior. Y lo mismo `reg.proj.*` para `RegisterProjectile`
+      // (giprojectile.cpp:24), que se fotografía al registrarse.
+      acc.ataque = new Map();
+      acc.proyectilLocal = new Map();
       const cab = cabeceraDe(pieza.lineas);
       // `lineas` se guarda desde el 71: el cuerpo del suelo de un objeto no es
       // una constante, son las órdenes de su `game_fall` — ver `caidaDe`.
@@ -1940,6 +1951,10 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
     const pila = [{ si: null, viejas: [] }];
     let pendiente = null;
     for (const l of pieza.crudo ?? pieza.lineas) {
+      // El 99: qué nombres pueden ser VARIABLES al correr, en cualquier
+      // bloque y detrás de lo que sea. Lo usa `condicionDeAtaque` para saber
+      // si un nombre sin `const` vale de verdad su propio nombre.
+      for (const m of l.matchAll(/(?:^|\s|\))(?:local|setvar[dg]?|add|inc|incvar|subtract|dec|decvar|multiply|divide|stradd)\s+(\S+)/gi)) acc.nombresVariables.add(m[1]);
       if (l === "{") { pila.push({ si: pendiente, viejas: [] }); pendiente = null; continue; }
       if (l === "}") { if (pila.length > 1) pila.pop(); pendiente = null; continue; }
       // `if ( X )` SOLO en su línea: lo que viene detrás es su `{ }`.
@@ -1985,7 +2000,7 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       // leeríamos el dado: queda dicho, y las ballestas no están en el juego
       // todavía.
       const rp = l.match(/^(?:if\s*\([^)]*\)\s*|else\s+)?local\s+reg\.proj\.([a-z0-9_.&]+)\s+(.*)$/i);
-      if (rp) { acc.proyectil.set(rp[1].toLowerCase(), rp[2].trim()); continue; }
+      if (rp) { acc.proyectilLocal.set(rp[1].toLowerCase(), rp[2].trim()); continue; }
 
       // ── `gravity`, y hay DOS en la misma flecha ────────────────────────────
       //
@@ -2087,6 +2102,9 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
         acc.ataques.push(new Map(acc.ataque));
       }
       if (REGISTROS[solo]) acc.registros.add(solo);
+      // El 99: lo que lee `RegisterProjectile` son los `local reg.proj.*` del
+      // evento en curso, en este instante (ver arriba, al empezar el bloque).
+      if (solo === "registerprojectile") acc.proyectil = new Map(acc.proyectilLocal);
       const sw = l.match(/^setworldmodel\s+(\S+)/i);
       if (sw) acc.ficha.set("modelo", sw[1].replace(/^'|'$/g, ""));
     }
@@ -2195,12 +2213,21 @@ function reglaDeContenedor(acc) {
  * un `$get` o una comparación dependen de la partida, y eso se deja como
  * estaba —el ataque se queda—, que es lo que este lector hacía con todos.
  */
-export function condicionDeAtaque(constantes, cond) {
+export function condicionDeAtaque(constantes, cond, variables = null) {
   const t = String(cond ?? "").trim();
   if (!t || /\s/.test(t)) return null;
   const no = t[0] === "!";
   const nombre = no ? t.slice(1) : t;
-  if (!constantes.has(nombre)) return null;
+  if (!constantes.has(nombre)) {
+    // EL 99: un nombre que no es constante NI variable de nadie vale su propio
+    // nombre (`GetVar`, script.cpp:4741-4747), y `atoi` de un nombre es 0. Es
+    // el caso de `if !CUSTOM_REGISTER_NORMAL` en las 136 armas que no lo
+    // declaran: cierto, y el ataque se registra. Sólo si quien llama dice qué
+    // variables existen (`setvar`/`setvard`/`local` del objeto): sin esa lista
+    // no se puede descartar que alguien la ponga al correr.
+    if (!variables || variables.has(nombre) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(nombre)) return null;
+    return no;
+  }
   const v = String(valorDe(constantes, nombre)).trim();
   // Lo que queda tiene que ser un número: si es otro nombre sin resolver, o un
   // `$rand(...)`, no se sabe.
@@ -2498,7 +2525,7 @@ export function leerFichaObjeto(raiz, ruta) {
     constantes: new Map(), ficha: new Map(), marcas: new Set(),
     registros: new Set(), ataque: new Map(), ataques: [], condiciones: [], ficheros: [], faltan: [],
     variables: new Map(), ranuras: new Set(), mano: null,
-    proyectil: new Map(), gravedad: null, gravedadEnMano: null,
+    proyectil: new Map(), proyectilLocal: new Map(), nombresVariables: new Set(), gravedad: null, gravedadEnMano: null,
     bloque: 0, evento: null, eventos: [],
   };
   if (!recogerObjeto(raiz, ruta, new Set(), 0, acc)) return null;
@@ -2545,25 +2572,30 @@ export function leerFichaObjeto(raiz, ruta) {
   // EL 98: y un ataque registrado DENTRO de un `if ( CONST )` falso no existe.
   // Ver `condicionDeAtaque`.
   //
-  // Los de detrás de un `if` VIEJO falso tampoco existen en el motor, pero esos
-  // SE APUNTAN Y NO SE QUITAN todavía: son 56 ataques en 41 armas y 2 bases (los `charge`
-  // de serie de `base_melee` en las que registran el suyo, el tiro de
-  // `base_ranged` en los arcos con `CUSTOM_ATTACK`...), y quitarlos cambia el
-  // combate de armas que otras sondas miden. `ataquesTrasIfViejo` los cuenta;
-  // decidirlo es del integrador (doc/ARMAS_98.md).
+  // Y los de detrás de un `if` VIEJO falso tampoco: el `if` sin paréntesis que
+  // falla hace `break` y abandona el RESTO de la lista de órdenes en que está
+  // (`if (!Cmd.m_NewConditional) break;`, script.cpp:5754-5757). El 98 los
+  // apuntó sin quitarlos —56 ataques en 41 armas y 2 bases: los cargados de
+  // serie de `base_melee` en las que registran el suyo, el tiro de
+  // `base_ranged` en los arcos con `CUSTOM_ATTACK`...— y el 99 los QUITA, por
+  // decisión del usuario: imitar al motor aunque las armas pierdan ataques
+  // (doc/GUION_99.md). `ataquesTrasIfViejo` sigue diciendo cuáles se tiraron.
+  //
+  // Un `if` viejo que este lector no sabe evaluar (una variable, un `$get`) NO
+  // quita nada —el ataque se queda, como con el nuevo— y va en
+  // `ataquesTrasIfDudoso`: un hueco se cuenta, no se decide.
   const condicionados = [];
   const trasIfViejo = [];
+  const trasIfDudoso = [];
   const vale = (i) => {
-    let viejaFalsa = null;
     for (const { cond, vieja } of acc.condiciones[i] ?? []) {
-      const r = condicionDeAtaque(acc.constantes, cond);
-      if (r !== false) continue;
+      const r = condicionDeAtaque(acc.constantes, cond, acc.nombresVariables);
       const fila = { tipo: acc.ataques[i].get("type") ?? null, condicion: cond };
-      if (vieja) { viejaFalsa ??= fila; continue; }
-      condicionados.push(fila);
+      if (r === null) { if (vieja) trasIfDudoso.push(fila); continue; }
+      if (r) continue;
+      (vieja ? trasIfViejo : condicionados).push(fila);
       return false;
     }
-    if (viejaFalsa) trasIfViejo.push(viejaFalsa);
     return true;
   };
   acc.ataques = acc.ataques.filter((_, i) => usados.has(i) && vale(i));
@@ -2955,11 +2987,21 @@ export function leerFichaObjeto(raiz, ruta) {
     ataquesFantasma: fantasmas,
     /** EL 98: los que se tiran por estar dentro de un `if ( CONST )` falso, con su condición. */
     ataquesCondicionados: condicionados,
-    /** EL 98: los que el motor tampoco registra (detrás de un `if` viejo falso) y aquí SIGUEN. */
+    /** EL 98/99: los que se tiran por ir detrás de un `if` viejo falso (script.cpp:5754-5757). */
     ataquesTrasIfViejo: trasIfViejo,
+    /** EL 99: detrás de un `if` viejo que este lector no sabe evaluar; se quedan. */
+    ataquesTrasIfDudoso: trasIfDudoso,
   };
   // `arma` es el ataque principal, que es el primero que se registra. Se deja
   // aparte de `ataques` porque casi todo el mundo quiere sólo ése.
-  ficha.arma = ficha.ataques[0] ?? null;
+  //
+  // EL 99: «el primero» salvo que sea el ataque VACÍO —un `registerattack` sin
+  // ningún `local reg.attack.*` en su evento, el de `bows_base.script:34` en los
+  // arcos con `CUSTOM_ATTACK`—. Para el motor existe (es su `m_Attacks[0]`, de
+  // tipo strike-land por omisión) pero sus teclas son la cadena
+  // «reg.attack.keys» y no se dispara nunca; `tipo` sale `null` porque nadie lo
+  // declaró. Este resumen es nuestro y no una regla del motor: quien lo lee
+  // quiere la habilidad y el daño del arma, y el vacío no tiene ninguno.
+  ficha.arma = ficha.ataques.find((a) => a.tipo) ?? ficha.ataques[0] ?? null;
   return ficha;
 }

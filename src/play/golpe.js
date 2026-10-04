@@ -498,6 +498,20 @@ export class Brazo {
      * sabe: su `skill_check` toca `attackprop ent_me 0` y `attackprop ent_me 1`.
      * Para el motor son dos ataques con la misma prioridad, o sea que
      * `StartAttack` **tira una moneda** entre dos clones.
+     *
+     * CORRECCIÓN DEL 99, parte R (doc/GUION_99.md): el párrafo de arriba era
+     * la lectura de antes, y es FALSA. `local` es del EVENTO y se borra al
+     * acabarlo (`Event.m_Variables.clearitems()`, script.cpp:5696), así que el
+     * `registerattack` de `bows_base` (bows_base.script:34) llega sin ningún
+     * `reg.attack.*`: es un ataque VACÍO —strike-land por omisión, teclas
+     * «reg.attack.keys», que no casan nunca (giattack.cpp:605-614)—. En la
+     * ficha sale con `tipo: null`, y el filtro de abajo lo deja fuera: nunca se
+     * elige, como en el motor. Lo que este filtro NO copia es el índice: para
+     * el motor ese vacío es `m_Attacks[0]` en los arcos con `CUSTOM_ATTACK`
+     * (Fénix, escarcha, Orión, Torkalath), y aquí `esDeTiro` mira el primero
+     * que queda. Los dos sitios que usan el índice 0 —el indulto de destreza de
+     * `cargaTope`/`elegir` y la salida de emergencia `ataques[0]`— no se
+     * disparan en un arco sin ataques cargados.
      */
     this.ataques = (arma?.ataques ?? [])
       .filter((a) => a?.tipo === "strike-land" || a?.tipo === "charge-throw-projectile");
@@ -519,6 +533,13 @@ export class Brazo {
     this.destreza = 0;
     /** Sólo del arco: se soltó el botón antes del mínimo y la suelta espera. */
     this.sueltaPendiente = false;
+    /**
+     * EL 99: el tiro cargado de un arma CUERPO A CUERPO (ver `pasoDelLanzamiento`).
+     * `soltado` es el `fAttackReleased` del motor y `tSuelta` el `tStart` que
+     * `Attack()` vuelve a poner al soltar (giattack.cpp:415-433).
+     */
+    this.soltado = false;
+    this.tSuelta = 0;
     /** Cuál de las animaciones de ataque tocó, que el arma tiene varias. */
     this.animacion = null;
   }
@@ -529,6 +550,16 @@ export class Brazo {
    * no se puede correr con la cuerda tirada.
    */
   get atacando() { return this.fase !== FASE.QUIETO; }
+
+  /**
+   * EL 99: ¿tira algo ESTE brazo, aunque no sea un arco? La Unholy Blade y las
+   * siete astas con `POLE_CAN_POWER_THROW 1` son cuerpo a cuerpo (`esDeTiro`
+   * falso) y registran un `charge-throw-projectile` cargado. Quien monta el
+   * conjunto de nodos que dibuja lo que vuela pregunta esto y no `esDeTiro`.
+   */
+  get tiraProyectiles() {
+    return this.ataques.some((a) => a.tipo === "charge-throw-projectile");
+  }
 
   /**
    * EL TOPE DE CARGA DEL ARMA, que es lo que impide que una espada oxidada
@@ -688,6 +719,9 @@ export class Brazo {
         this.fase = FASE.BLANDIENDO;
         this.t = 0;
         this.golpeDado = false;
+        // `CurrentAttack->fAttackReleased = false` (giattack.cpp:350).
+        this.soltado = false;
+        this.tSuelta = 0;
         this.cargaHecha = 0; // se limpia al elegir, como en el motor
         const anims = this.arma?.animaciones?.ataque ?? [];
         this.animacion = anims.length
@@ -702,7 +736,13 @@ export class Brazo {
     //    en el motor `tStart` es el instante de ahora.
     if (this.fase === FASE.BLANDIENDO && !out.empieza) {
       this.t += dt;
-      if (this.t >= (this.ataque?.duracion ?? 0)) {
+      // EL 99: el tiro cargado de un arma cuerpo a cuerpo NO es un mandoble con
+      // otro número: `Attack()` llama a `ChargeThrowProj` y no a `StrikeLand`
+      // según el TIPO del ataque (giattack.cpp:470-476). Hasta hoy caía aquí y
+      // salía como un golpe de 100 u delante de la cara.
+      if (this.ataque?.tipo === "charge-throw-projectile") {
+        this.pasoDelLanzamiento(pulsado, out);
+      } else if (this.t >= (this.ataque?.duracion ?? 0)) {
         this.fase = FASE.QUIETO;
         this.ataque = null;
         this.animacion = null;
@@ -716,6 +756,56 @@ export class Brazo {
     this.pulsadoAntes = pulsado;
     out.fase = this.fase;
     return out;
+  }
+
+  /**
+   * EL 99: EL TIRO CARGADO DE UN ARMA CUERPO A CUERPO — la sombra de la Unholy
+   * Blade (`custom_register`, swords_ub.script:109-135) y la lanza de las astas
+   * con `POLE_CAN_POWER_THROW 1` (polearms_base.script:298-322). Los dos son
+   * `-attack1` con `chargeamt 200%` (2,5 de carga) y `hold_min&max "1;1"`.
+   *
+   * Se elige como cualquier ataque cargado (`elegir`): al SOLTAR tras cargar el
+   * segundo nivel. Y a partir de ahí corre lo mismo que un arco, con el botón
+   * ya arriba desde el primer fotograma:
+   *
+   *   1. **Espera el mínimo con el botón arriba.** `ActivateButtonUp` corre en
+   *      cada fotograma sin botón y sólo suelta si `time >= tTrueStart +
+   *      tProjMinHold` (genericitem.cpp:747-762); hasta entonces `Attack()` pone
+   *      `fCanCancel = false` y `fCanLandAttack = false` (giattack.cpp:429-433):
+   *      ni caduca ni cae. Con `hold_min 1`, la sombra sale UN SEGUNDO después
+   *      de soltar el botón, no al soltarlo. Si se vuelve a pulsar, espera.
+   *   2. **Al soltar, el reloj vuelve a empezar**: `tStart = ahora`
+   *      (giattack.cpp:424), y el `delay.strike` cuenta desde ahí (:460).
+   *   3. **Cae `ChargeThrowProj`** (:476): la flecha sale con lo que se aguantó
+   *      desde `tTrueStart` (:1073), recortado a `[min, max]` — con «1;1» es
+   *      siempre el 100 % y la fuerza es `reg.attack.range` entera (:1097). Lo
+   *      que se devuelve es `tira` y `sostenido`, lo mismo que un arco, y quien
+   *      llama lo manda a `tirar` (src/main.js, `pasoDelBrazo`).
+   *   4. **Y acaba al paso siguiente de cumplirse `delay.end`** desde la suelta:
+   *      el chequeo de fin va ANTES que el de caer (:444) y sólo con
+   *      `fCanCancel`, que no se pone hasta `ChargeThrowProj` (:1103).
+   */
+  pasoDelLanzamiento(pulsado, out) {
+    const a = this.ataque;
+    if (!this.soltado) {
+      const minimo = a?.sostener?.[0] ?? 0;
+      if (pulsado || this.t < minimo) return;
+      this.soltado = true;
+      this.tSuelta = this.t;
+    }
+    const desde = this.t - this.tSuelta;
+    if (this.golpeDado) {
+      if (desde >= (a?.duracion ?? 0)) {
+        this.fase = FASE.QUIETO;
+        this.ataque = null;
+        this.animacion = null;
+        out.acaba = true;
+      }
+    } else if (desde >= (a?.retardo ?? 0)) {
+      this.golpeDado = true;
+      out.tira = a;
+      out.sostenido = this.t;
+    }
   }
 
   /**
@@ -746,11 +836,21 @@ export class Brazo {
    */
   ticDelTiro(dt, { pulsado = false, destreza = 0 } = {}) {
     const out = { empieza: null, golpe: null, tira: null, acaba: false, fase: this.fase };
-    const a = this.ataques[0] ?? null;
+    // EL 99: CUÁL de los ataques del arco, con el MISMO bucle que el mandoble.
+    // `StartAttack` no distingue arcos de espadas al elegir (giattack.cpp:269-334):
+    // recorre todos, y a igual prioridad tira la moneda (:325-326). Aquí se cogía
+    // siempre el 0, y en un arco de Torkalath el 0 es el `arrow` de `base_ranged`
+    // —el que el `if` viejo quitaría (ARMAS_98.md)— y la esfera, el 2, no salía
+    // nunca. Con la lectura de hoy (tres ataques a prioridad 0) sale la mitad de
+    // las veces; si se aplica el `if` viejo y el `local` por evento, siempre.
+    // En un arco de dos clones idénticos la moneda no cambia nada.
+    const a = this.fase === FASE.QUIETO
+      ? (pulsado ? this.elegir({ pulsado, destreza }).ataque : null)
+      : this.ataque;
     const minimo = a?.sostener?.[0] ?? 0;
 
     if (this.fase === FASE.QUIETO) {
-      if (!pulsado) { this.pulsadoAntes = pulsado; out.fase = this.fase; return out; }
+      if (!pulsado || !a) { this.pulsadoAntes = pulsado; out.fase = this.fase; return out; }
       // `CheckKeys` con `+attack1`: basta con tenerlo abajo. No es el flanco, y
       // por eso tras un tiro con el botón todavía pulsado arranca otro tensado.
       if (a?.pideHabilidad > 0 && destreza < a.pideHabilidad) {

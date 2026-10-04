@@ -8,7 +8,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   MOVEVARS, CAJA, velocidadDeSalto, pasoDeVelocidad, danoDeCaida,
-  nadar, trepar, NADANDO,
+  nadar, trepar, NADANDO, velocidadContraPlanos,
 } from "./movimiento.js";
 
 const U = 1 / 32; // una unidad de Quake en metros
@@ -361,6 +361,70 @@ export class Player {
     const antes = this.grounded;
     this.grounded = c.computedGrounded();
 
+    // EL 99: LA VELOCIDAD SE RECORTA CONTRA LOS PLANOS QUE SE HAN TOCADO.
+    //
+    // Aquí había una regla nuestra: «si al subir se ha avanzado menos de la
+    // mitad de lo pedido, la vertical a cero». No está en el motor, y se
+    // equivocaba por los dos lados: un techo tocado al 60 % del paso dejaba la
+    // velocidad entera (un fotograma pegado), y un techo INCLINADO, que en el
+    // motor te desliza de lado, te paraba en seco. Lo del motor es
+    // `PM_FlyMove` recortando con `PM_ClipVelocity` contra cada plano
+    // (pm_shared.cpp:1021-1206): ver `velocidadContraPlanos` en movimiento.js.
+    //
+    // SÓLO EN EL AIRE (`!antes` es `onground == -1` al empezar el paso, que es
+    // la rama :1128-1144). En el suelo el motor también recorta —`PM_WalkMove`
+    // llama a `PM_FlyMove`, :1355 y :1380— y eso NO está portado: tocaría la
+    // velocidad horizontal contra cada pared y cada rampa, y es otro
+    // experimento. Ver doc/SALTO_99.md.
+    //
+    // VA ANTES DE LA CAÍDA, como en el motor: `flFallVelocity` se toma de la
+    // velocidad con que EMPIEZA el paso (:3201), que es la ya recortada del
+    // anterior; y el «en el suelo, sin velocidad hacia abajo» de :3384-3388
+    // va después del recorte, que es donde está el `if` de abajo.
+    //
+    // Y EL ORDEN DE LA GRAVEDAD: el motor recorta ENTRE las dos medias
+    // gravedades (`PM_AddCorrectGravity`, mover, `PM_FixupGravityVelocity`,
+    // :3282, :3364, :3381), y `pasoDeVelocidad` devuelve la velocidad con las
+    // dos ya puestas. Se quita la segunda, se recorta y se vuelve a poner.
+    //
+    // EL 99 (CORRECCIÓN, MISMO EXPERIMENTO): EL PARPADEO DEL ESCALÓN. Subiendo
+    // un escalón, el autostep de Rapier deja la cápsula un paso o dos encima
+    // del canto redondo y `computedGrounded()` dice «en el aire» sin que nadie
+    // haya saltado ni caído. El motor no pasa nunca por ahí: con
+    // `onground != -1` es `PM_WalkMove` quien sube el escalón
+    // (pm_shared.cpp:1351-1390: prueba el paso subido 18 u y se queda con el
+    // que llega más lejos), y subido ya no toca la contrahuella. Con el recorte en ese paso, la
+    // contrahuella (−1, 0,04, 0) le quitaba la velocidad entera y Beto se
+    // quedaba en x = 17,24 de Edana para siempre (sonda red95).
+    //
+    // LA GUARDA ES NUESTRA, y se lee de lo que devuelve Rapier: si el paso NO
+    // pedía subir (`mover[1] <= 0`) y la cápsula ha SUBIDO, eso es el
+    // autostep, o sea el escalón de `PM_WalkMove`, que es del suelo y no del
+    // aire. Un salto pide subir (no entra aquí) y una caída no sube. Medido en
+    // Edana: el parpadeo dura uno o dos pasos y en los dos sube 0,028-0,030 m
+    // pidiendo −0,003/−0,008. Una primera versión miraba «vertical 0 justo
+    // tras un paso en el suelo» y sólo cubría el primero de los dos: Beto
+    // pasaba, pero medio segundo más tarde que con la regla vieja.
+    const escalon = mover[1] <= 0 && applied.y > 0;
+    if (!antes && !escalon) {
+      const choques = [];
+      for (let i = 0; i < c.numComputedCollisions(); i++) {
+        const k = c.computedCollision(i);
+        if (k) choques.push({ n: [k.normal1.x, k.normal1.y, k.normal1.z], toi: k.toi });
+      }
+      if (choques.length) {
+        const andando = !enEscalera && nivelAgua < NADANDO;
+        const media = andando ? (MOVEVARS.gravedad * dt) / 2 : 0;
+        const v = [this.vel[0], this.vel[1] + media, this.vel[2]];
+        const recortada = velocidadContraPlanos(v, choques, {
+          reflejar: !enEscalera,
+          seMovio: Math.hypot(applied.x, applied.y, applied.z) > 1e-6,
+        });
+        recortada[1] -= media;
+        this.vel = recortada;
+      }
+    }
+
     // LA CAIDA. El motor guarda `flFallVelocity` mientras estas en el aire y la
     // cobra al tocar suelo (`PM_CatagorizePosition`). Aqui igual: se lleva la
     // mayor velocidad de bajada y se entrega en el fotograma del aterrizaje.
@@ -380,9 +444,6 @@ export class Player {
       // acumular caida entre fotogramas apoyado en el suelo.
       if (this.vel[1] < 0) this.vel[1] = 0;
     }
-    // Y si se ha chocado con un techo, tampoco se sigue subiendo: sin esto el
-    // jugador se queda pegado al techo lo que dure la velocidad de salto.
-    if (mover[1] > 0 && applied.y < mover[1] / U * 0.5) this.vel[1] = 0;
 
     return {
       applied: [applied.x, applied.y, applied.z],

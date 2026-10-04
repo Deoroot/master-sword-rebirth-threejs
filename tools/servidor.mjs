@@ -146,6 +146,26 @@ if (nacer && aparicion) {
   }
 }
 
+// ── Y DÓNDE REAPARECEN — el 99 ──────────────────────────────────────────────
+//
+//     npm run servidor -- --nacer -36,-20.1,24 --reaparecer -36,-20.3,24
+//
+// La hermana de `--nacer` para la otra mitad de `m_JoinType`: quien muere
+// vuelve a `reaparicion` (src/juego/sesion.js `donde`), que `--nacer` no toca.
+// Existe para la sonda del 99: con la reaparición en el templo, quien muere al
+// lado de la araña vuelve lejos y ya no muere más, y lo que hay que medir es
+// morir y volver MUCHAS veces, y volver a un punto metido en la roca.
+const reaparecer = valor("reaparecer", null);
+if (reaparecer && aparicion) {
+  const xyz = String(reaparecer).split(",").map(Number);
+  if (xyz.length === 3 && xyz.every(Number.isFinite)) {
+    aparicion = { ...aparicion, reaparicion: { nombre: `--reaparecer ${reaparecer}`, escena: xyz } };
+    console.log(`  reaparición    ${xyz.join(", ")}  (--reaparecer)`);
+  } else {
+    console.error(`  «--reaparecer ${reaparecer}» no son tres números separados por comas: se ignora.`);
+  }
+}
+
 // ── CON CUÁNTO ORO ENTRAN, si el operador lo dice ───────────────────────────
 //
 //     npm run servidor -- --mapa edana --oro 5000

@@ -3159,6 +3159,10 @@ export function montarSonda(S) {
           id: S.brazo?.arma?.id ?? null,
           esDeTiro: Boolean(S.brazo?.esDeTiro),
           ataques: S.brazo?.ataques?.length ?? 0,
+          // El 99, parte R: los que REGISTRA la ficha, y cuántos son el ataque
+          // vacío de `bows_base` (tipo sin declarar), que `Brazo` no se queda.
+          registrados: S.brazo?.arma?.ataques?.length ?? 0,
+          vacios: (S.brazo?.arma?.ataques ?? []).filter((x) => !x?.tipo).length,
           sostener: a?.sostener ?? null,
           cono: a?.cono ?? null,
           apunta: a?.apunta ?? null,
@@ -3309,10 +3313,18 @@ export function montarSonda(S) {
        * que el bucle la siga moviendo y orientando —es él quien coloca el nodo—
        * sin que se vaya. Sigue `volando`.
        */
-      soltarYDetener(segundos = 1.3, unidades = 120) {
+      soltarYDetener(segundos = 1.3, unidades = 120, { cargado = false } = {}) {
         const DT = 1 / 60;
         for (let t = 0; t < 4 && S.brazo && S.brazo.fase !== "quieto"; t += DT) S.pasoDelBrazo(DT, false);
         const habia = S.ultimaFlecha;
+        // EL 99: el tiro cargado de un arma cuerpo a cuerpo se hace como lo hace
+        // un jugador (genericitem.cpp:735-741): clic —mandoble—, soltar, y un
+        // SEGUNDO clic mientras corre que se aguanta `segundos`. Sale al soltar
+        // más el mínimo (1 s en la Unholy Blade): el bucle de abajo da 4.
+        if (cargado) {
+          S.pasoDelBrazo(DT, true);
+          for (let k = 0; k < 6; k++) S.pasoDelBrazo(DT, false);
+        }
         for (let t = 0; t < segundos; t += DT) S.pasoDelBrazo(DT, true);
         for (let t = 0; t < 4 && S.ultimaFlecha === habia; t += DT) S.pasoDelBrazo(DT, false);
         const f = S.ultimaFlecha !== habia ? S.ultimaFlecha : null;

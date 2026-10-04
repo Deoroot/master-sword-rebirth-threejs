@@ -29,7 +29,8 @@
 import {
   RED, MENSAJE, empaquetar, abrir, orden as normalizarOrden, interpolacion, BOTON,
 } from "./protocolo.js";
-import { vitalesDe, velocidadDelPaso } from "./andar.js";
+import { vitalesDe, correrOrden } from "./andar.js";
+import { trabasDelCable, trabarIntencion } from "../play/trabas.js";
 import { MAX_LETRAS } from "../play/chat.js";
 
 /**
@@ -92,6 +93,12 @@ export class ClienteDeRed {
     this.pendientes = [];
     /** Dónde creímos estar al acabar cada una. Para poder comparar. */
     this.predicho = new Map();
+    /**
+     * EL 99: con qué velocidad se corrió cada orden pendiente la primera vez,
+     * `{maxima, tope}` por `seq`. Ver `_correr`: es lo que en el motor viaja
+     * DENTRO del `usercmd` y por eso la predicción lo rehace igual.
+     */
+    this.velocidades = new Map();
     this.seq = 0;
     this._msecSobrante = 0;
     this._proximoEnvio = 0;
@@ -317,6 +324,7 @@ export class ClienteDeRed {
     const ack = foto.ack ?? 0;
     const antes = this.pendientes.length;
     this.pendientes = this.pendientes.filter((o) => o.seq > ack);
+    for (const [seq] of this.velocidades) if (seq <= ack) this.velocidades.delete(seq);
     for (const [seq] of this.predicho) if (seq <= ack - this.red.historia) this.predicho.delete(seq);
 
     const creido = this.predicho.get(ack);
@@ -343,7 +351,7 @@ export class ClienteDeRed {
     // Y las que él no ha visto se vuelven a correr, en orden. El resultado es
     // el sitio donde estaríamos si el servidor ya las hubiera recibido todas.
     for (const o of this.pendientes) {
-      this._correr(o);
+      this._correr(o, { rehacer: true });
       this.predicho.set(o.seq, [...this.cuerpo.feet]);
     }
     return { ack, corregido: true, rehechas: this.pendientes.length };
@@ -395,14 +403,18 @@ export class ClienteDeRed {
    *
    * `correr: true` es el otro camino —el de las pruebas y el del cliente de
    * Node— donde no hay bucle y la red mueve ella.
+   *
+   * EL 99: `velocidad` es `{maxima, tope}`, con lo que el bucle CORRIÓ esta
+   * orden. Se guarda para rehacerla igual si el servidor corrige (`_correr`).
    */
-  apuntar(entrada = {}, { correr = false } = {}) {
+  apuntar(entrada = {}, { correr = false, velocidad = null } = {}) {
     if (!this.dentro) return null;
     const o = normalizarOrden({
       ...entrada,
       seq: ++this.seq,
       lerpMsec: Math.round(this.interp * 1000),
     });
+    if (velocidad) this.velocidades.set(o.seq, { maxima: velocidad.maxima, tope: velocidad.tope ?? Infinity });
     if (correr) this._correr(o);
     this.pendientes.push(o);
     this.predicho.set(o.seq, this.cuerpo ? [...this.cuerpo.feet] : null);
@@ -435,27 +447,64 @@ export class ClienteDeRed {
     return lote.length;
   }
 
-  _correr(o) {
+  /**
+   * Correr una orden en el cuerpo que predice.
+   *
+   * ── EL 99: LA VELOCIDAD VA CON LA ORDEN ────────────────────────────────
+   *
+   * En el motor la velocidad del personaje viaja DENTRO del `usercmd`: el
+   * cliente de Master Sword calcula `fSpeed` (`CheckSpeed`, clplayer.cpp:
+   * 306-316) y lo escribe en `cl_forwardspeed`, y `CL_CreateMove` lo mete en
+   * `cmd->forwardmove` (input.cpp:795-796). Así que cuando la predicción
+   * rehace las órdenes que el servidor no ha visto, las rehace con la
+   * velocidad con que se crearon, sin volver a preguntar nada.
+   *
+   * Aquí la orden lleva la intención en [-1, 1] (el servidor recalcula la
+   * velocidad: es la autoridad, `orden()` en protocolo.js), y lo que se perdía
+   * era eso: `src/main.js` rehacía con `o.maxima`, que ninguna orden trae, así
+   * que caía en el `maxima` del cuerpo —160, la del perfil, la de alguien sin
+   * nada—. Con un personaje que anda a 184 cada corrección rehacía a 160, eso
+   * abría un error nuevo y la siguiente foto volvía a corregir: 73
+   * correcciones en 3 s y la predicción a 160 (sonda red99). Ahora la
+   * velocidad de cada orden se GUARDA al correrla (`velocidades`) y se
+   * reutiliza al rehacerla (`rehacer`).
+   *
+   * Sin `simular` (el cliente de Node), la velocidad sale de `correrOrden`, la
+   * misma cuenta que `Partida._simular`: el personaje, el aguante y las trabas
+   * que trae la foto.
+   */
+  _correr(o, { rehacer = false } = {}) {
     if (!this.cuerpo) return;
-    if (this.simular) { this.simular(this.cuerpo, o); return; }
+    const guardada = this.velocidades.get(o.seq) ?? null;
+    if (this.simular) { this.simular(this.cuerpo, o, guardada); return; }
     const dt = o.msec / 1000;
     this.cuerpo.yaw = o.yaw;
     this.cuerpo.pitch = o.cabeceo;
-    // La velocidad sale del PERSONAJE y de la misma función que usa el
-    // servidor. Con la del perfil —160 unidades, la de alguien sin nada— el
-    // error era de seis centímetros a los dos segundos y la reconciliación
-    // corregía para siempre un poco.
-    this.maxima = velocidadDelPaso(this._andar, {
-      orden: o, dt,
-      vitales: vitalesDe(this.personaje, this.porId),
-      rapidez: this.cuerpo.rapidez ?? 0,
-    });
+    const trabas = this.trabas ? trabasDelCable(this.trabas) : null;
+    let q, v;
+    if (rehacer && guardada) {
+      // Rehacer no cobra aguante otra vez: la orden ya se cobró al crearse.
+      q = trabarIntencion({
+        adelante: o.adelante, lado: o.lado,
+        saltar: (o.botones & BOTON.SALTAR) !== 0, agachar: (o.botones & BOTON.AGACHAR) !== 0,
+      }, trabas);
+      v = guardada;
+    } else {
+      const r = correrOrden(this._andar, o, {
+        dt, vitales: vitalesDe(this.personaje, this.porId), rapidez: this.cuerpo.rapidez ?? 0, trabas,
+      });
+      q = r.q;
+      v = { maxima: r.maxima, tope: r.tope };
+      this.velocidades.set(o.seq, v);
+    }
+    this.maxima = v.maxima;
     this.cuerpo.step(dt, {
-      forward: o.adelante,
-      strafe: o.lado,
-      jump: (o.botones & BOTON.SALTAR) !== 0,
-      agachar: (o.botones & BOTON.AGACHAR) !== 0,
-      maxima: this.maxima,
+      forward: q.adelante,
+      strafe: q.lado,
+      jump: Boolean(q.saltar),
+      agachar: Boolean(q.agachar),
+      maxima: v.maxima,
+      tope: v.tope,
     });
   }
 

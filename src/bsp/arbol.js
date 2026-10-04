@@ -81,6 +81,56 @@ export function sePuedeEstar(bsp, punto, modelo = 0) {
 }
 
 /**
+ * EL CONTENIDO DE UN PUNTO EN UN CASCO DE CLIPNODOS (1..3), que es como el
+ * motor pregunta por una CAJA y no por un punto: `PM_HullPointContents`
+ * (ReHLDS pmovetst.cpp:104-133). En los clipnodos el hijo negativo ES el
+ * contenido, sin hojas en medio. Clipnodo de 8 bytes: plano y dos hijos.
+ */
+export function contenidoEnCasco(bsp, punto, casco = 1, modelo = 0) {
+  const C = bsp.lumps.clipnodes.datos;
+  const P = bsp.lumps.planos.datos;
+  let n = bsp.lumps.modelos.datos.readInt32LE(modelo * 64 + 36 + casco * 4);
+  for (let vuelta = 0; n >= 0; vuelta++) {
+    if (vuelta > 1e5) throw new Error("el árbol de clipnodos no acaba: ¿ciclo?");
+    const o = n * 8;
+    if (o + 8 > C.length) throw new Error(`clipnodo ${n} fuera del lump`);
+    const ip = C.readInt32LE(o);
+    const d =
+      punto[0] * P.readFloatLE(ip * 20) +
+      punto[1] * P.readFloatLE(ip * 20 + 4) +
+      punto[2] * P.readFloatLE(ip * 20 + 8) -
+      P.readFloatLE(ip * 20 + 12);
+    n = C.readInt16LE(o + 4 + (d >= 0 ? 0 : 2));
+  }
+  return n;
+}
+
+/**
+ * EL 99: ¿CABE UN JUGADOR DE PIE con los pies aquí?
+ *
+ * `sePuedeEstar` pregunta por un PUNTO (el casco 0), y un punto cabe a seis
+ * unidades de una pared. Un jugador no: es una caja de 32×32×72
+ * (`VEC_HULL_MIN`/`VEC_HULL_MAX`, util.h:464-465) con el origen en el centro,
+ * 36 por encima de los pies. El motor lo pregunta así —`PM_TestPlayerPosition`
+ * con el casco 1, pmovetst.cpp:346— y si sale sólido `PM_CheckStuck` no le
+ * deja moverse en todo el paso (pm_shared.cpp:3183-3189).
+ *
+ * Y LA CAJA NO SE APOYA DONDE EL PUNTO. `pies` sale de `sueloBajo`, que baja
+ * un PUNTO; la caja tiene 32 unidades de planta y se apoya en lo más alto que
+ * haya debajo de ella. El `ms_player_begin` de Edana está sobre un suelo
+ * desigual: a 36-38 sobre el punto la caja es sólida, a 40 ya cabe. Por eso
+ * se sube de unidad en unidad hasta un escalón (`sv_stepsize` 18,
+ * `MOVEVARS.escalon`), que es lo que el jugador sube sin saltar. Una pared no
+ * se acaba en 18 unidades: el rayo de Gate City sale sólido hasta +60.
+ */
+export function cabeDePie(bsp, pies, modelo = 0) {
+  for (let dz = 1; dz <= 18 + 1; dz++) {
+    if (contenidoEnCasco(bsp, [pies[0], pies[1], pies[2] + 36 + dz], 1, modelo) !== -2) return true;
+  }
+  return false;
+}
+
+/**
  * SÓLIDO PARA QUIEN CHOCA, que no es lo mismo que sólido para el árbol del mundo.
  *
  * Y ésta es la corrección que costó cuatro ratas. `sePuedeEstar` camina el árbol

@@ -322,7 +322,14 @@ export function montarArco({
     ultimaFlecha = f;
 
     // El sonido del arco, que lo pone su propio `ranged_toss`.
-    const s = elBrazo?.arma?.sonidos?.blandir ?? "weapons/bow/bow.wav";
+    //
+    // EL 99: y sólo de un ARCO. El tiro cargado de un arma cuerpo a cuerpo
+    // también pasa por aquí, y su `blandir` es el silbido del mandoble; lo que
+    // suena en el juego es lo de su guion —el grito y `SOUND_THROW` de
+    // `pole_powerthrow_start` (polearms_base.script:374-384), nada en la Unholy
+    // Blade (`dark_shard_toss` no existe)—, que no está portado. Mejor callado que
+    // el silbido de otra cosa, o la cuerda de un arco que no hay.
+    const s = elBrazo?.esDeTiro === false ? null : (elBrazo?.arma?.sonidos?.blandir ?? "weapons/bow/bow.wav");
     if (s && elAudio?.despierto) elAudio.unaVez(`snd/${s}`);
     const enMano = armaEnMano();
     if (enMano && elBrazo?.arma?.animaciones?.disparar !== null) {

@@ -30,7 +30,10 @@
 // mientras juegas (`MSChar_Interface::AutoSave`, ya portado en `Sesion`). Las
 // dos cosas, porque la primera no ocurre cuando se va la luz.
 
-import { Sesion, ESTADO } from "../juego/sesion.js";
+import { Sesion, ESTADO, ENTRADA } from "../juego/sesion.js";
+// EL 99: `PM_CheckStuck` y `PM_TestPlayerPosition` (doc/REAPARECER_99.md).
+import { Atasco, probadorDe } from "../play/atasco.js";
+import RAPIER from "@dimforge/rapier3d-compat";
 import { vitalesDe, velocidadDelPaso } from "./andar.js";
 // El techo de daño sale de las mismas tres piezas que el daño del navegador, y
 // eso es lo que hace que sea un techo y no un número inventado.
@@ -70,6 +73,33 @@ import {
   RED, MENSAJE, empaquetar, orden as normalizarOrden, partirOrden,
   recuperarPerdidas, tiempoObjetivo, intervaloDeEnvio, BOTON,
 } from "./protocolo.js";
+
+/**
+ * EL 99: DÓNDE SE PONE EL CUERPO AL APARECER, que es el punto tal cual.
+ *
+ * El motor lo pone UNA UNIDAD más arriba —«`pev->origin =
+ * pSpawnSpot->pev->origin + Vector(0, 0, 1)`», player.cpp:2937— y en el primer
+ * `PM_PlayerMove` `PM_CatagorizePosition` traza dos unidades hacia abajo y lo
+ * baja a la que ha encontrado («If we could make the move, drop us down that 1
+ * pixel», pm_shared.cpp:1783 y :1804-1806): o sea que la caja acaba apoyada en
+ * el suelo. Aquí esa unidad se probó y SE QUITÓ: eran 2,5 cm de caída que el
+ * cliente y el servidor no predicen igual —medido, `test/red_27` «sin mentiras
+ * la predicción acierta» pasó de 0 a **27,9 mm** de error— y el controlador de
+ * Rapier ya deja su propia holgura (`skin`) con lo que toca. Se queda como una
+ * función para que esto esté escrito en un solo sitio.
+ */
+export function puntoDeAparicion(escena) {
+  return [escena[0], escena[1], escena[2]];
+}
+
+/** EL 99: lo más que puede costar, en reloj de pared, correr las órdenes de UN mensaje (`_correrOrdenes`). */
+// 200 y no 50: lo que se viene a parar son órdenes de 100 ms a 2 s CADA UNA
+// (doc/REAPARECER_99.md §3-§4), no un paquete normal en una máquina cargada.
+// Con 50, `npm test` —todos los archivos a la vez— dio un rojo en
+// `test/red99` («no vuelve a corregir») que el archivo solo no da; NO está
+// medido que fuera el tope, pero un tope que pudiera tirar órdenes buenas
+// por la carga de la máquina sería un fallo nuevo, y 200 deja ese margen.
+export const TOPE_MS_POR_MENSAJE = 200;
 
 /** Lo que un cliente es para la partida. */
 class Cliente {
@@ -773,7 +803,21 @@ export class Partida {
       // EL 95: a quién contestaría `_aQuienHabla()` ahora (el valor de reposo
       // que se quitó de los cuatro ganchos), y lo que los guiones han dicho.
       hablaCon: this._aQuienHabla()?.id ?? null, voz: { ...this.voz },
-      clientes: [...this.clientes.values()].map((c) => ({ id: c.id, personaje: c.sesion?.personaje?.id ?? null })),
+      clientes: [...this.clientes.values()].map((c) => ({
+        id: c.id, personaje: c.sesion?.personaje?.id ?? null,
+        // EL 99: dónde está su cuerpo, si CABE ahí (la misma pregunta que hace
+        // `_atascado`, no recalculada aparte: el 65), cuántos pasos ha parado
+        // `PM_CheckStuck` y cuántas veces ha reaparecido.
+        estado: c.sesion?.estado ?? null,
+        pies: c.cuerpo ? [...c.cuerpo.feet] : null,
+        cabe: c.cuerpo && this._probador(c) ? !this._probador(c)(c.cuerpo.feet) : null,
+        pasosAtascado: c.pasosAtascado ?? 0, reapariciones: c.reapariciones ?? 0, sinTiempo: c.sinTiempo ?? 0,
+        ultimoSitio: c.ultimoSitio ?? null, bichosApartados: c.bichosApartados ?? 0,
+      })),
+      // EL 99: los dos puntos de la partida y si cabe la cápsula en cada uno (con la de cualquier jugador: son todas
+      // iguales). Es el control positivo de la sonda: el instrumento que dice
+      // «cabe» tiene que poder decir «no cabe».
+      puntos: this._puntosQueCaben(),
       bichos, efectos,
     };
   }
@@ -851,6 +895,13 @@ export class Partida {
       ahora: () => this.t,
       central: false,
     });
+    // EL 99: AL REAPARECER, EL CUERPO VA AL SITIO. `respawn()` es `Spawn()`
+    // (client.cpp:159-163) y `Spawn` llama a `MoveToSpawnSpot` (player.cpp:
+    // 2695), que pone el origen en el punto con la velocidad a cero
+    // (:2935-2941). Hasta el 99 la sesión del servidor reaparecía y nadie
+    // movía el cuerpo: se volvía a la vida DONDE SE HABÍA MUERTO, al lado del
+    // bicho que te mató (doc/REAPARECER_99.md §1).
+    c.sesion.al("aparece", ({ donde, entrada }) => this._reaparecer(c, donde, entrada));
     this.clientes.set(id, c);
     this.historia.set(id, []);
     c.mandar(MENSAJE.BIENVENIDA, {
@@ -1029,8 +1080,25 @@ export class Partida {
     // el servidor contestaba «You can't afford Sharp Knife», que era verdad.
     if (this.oroInicial !== null) { p.oro = this.oroInicial; c.sesion.tocado?.(); }
     const donde = c.sesion.donde;
-    const pies = this._sitioLibre(donde?.escena ?? this.aparicion?.nacimiento?.escena ?? [0, 0, 0]);
-    c.cuerpo = this.mundo.crearCuerpo(pies);
+    const punto = puntoDeAparicion(donde?.escena ?? this.aparicion?.nacimiento?.escena ?? [0, 0, 0]);
+    // EL 99: el cuerpo se crea PRIMERO y luego se busca dónde cabe, porque la
+    // pregunta de si cabe se le hace a SU cápsula (`probadorDe`). Si el punto
+    // vale, no se mueve.
+    c.cuerpo = this.mundo.crearCuerpo(punto);
+    c.probar = null;
+    c.atasco = null;
+    const pies = this._sitioLibre(punto, c);
+    if (pies !== punto) {
+      c.cuerpo.colocar?.(pies);
+      // Y EL ÁRBOL DE CONSULTAS, con el cuerpo ya en su sitio: si no, los demás
+      // le siguen viendo en el punto hasta el siguiente `world.step()`, y si
+      // el que está en el punto no se mueve, nadie lo llama nunca. Medido: el
+      // segundo que entra, creado en el punto y apartado, seguía «encima» de la
+      // primera para siempre, `PM_CheckStuck` la daba por atascada en otro
+      // jugador y no volvía a andar (test/servidor98, «el fénix de un débil»).
+      // Cuesta 0,3-0,7 ms en Gate City, una vez por entrada.
+      c.cuerpo.world?.world?.updateSceneQueries?.();
+    }
     c.dentro = true;
     c.mandar(MENSAJE.APARECES, {
       donde: donde ?? null,
@@ -1057,33 +1125,144 @@ export class Partida {
    * le deja moverse. No se ve como un choque: se ve como un jugador paralítico,
    * y el primero no se entera de nada.
    *
-   * Se prueba el sitio, y si está ocupado, ocho alrededor a un radio y a dos.
-   * Si todo está ocupado —diecisiete jugadores en el templo— se usa el punto de
-   * todas formas: quedarse fuera del mapa es peor que quedarse encajado un
-   * segundo.
+   * MSR no hace esto: su `IsSpawnPointValid` devuelve `TRUE` siempre, con la
+   * comprobación de «hay otro jugador a 128» comentada (player.cpp:2277-2311),
+   * y su punto lo pone el mapeador. El día que se usen los once
+   * `ms_player_spawn`, esto sobra.
    *
-   * MSR no hace esto y no puede: su punto de aparición lo resuelve el motor con
-   * la lista de `ms_player_spawn`, que son once y están repartidos por el mapa.
-   * El día que se usen los once, esto sobra.
+   * ── EL 99: Y TAMBIÉN MIRA LA PARED ─────────────────────────────────────
+   *
+   * Hasta el 99 sólo miraba a los otros jugadores, y apartaba metro y medio
+   * sin preguntar qué había allí: medio anillo podía caer dentro de una roca.
+   * Y peor: el punto de Gate City **ya está metido en la pared** —la cápsula
+   * corta la pared a +z, 30 cm hacia −z cabe (doc/REAPARECER_99.md §2)—, y una
+   * cápsula metida en la malla es lo que hace que Rapier tarde segundos por
+   * paso. Ahora un sitio vale si no hay nadie Y cabe la cápsula
+   * (`PM_TestPlayerPosition`, src/play/atasco.js) Y se ve desde el punto (un
+   * anillo no salta paredes). Se prueban anillos de menos a más —el primero a
+   * un cuarto de hueco, que es lo que separa de una pared—, y en cada sitio
+   * cuatro alturas hasta un escalón (`sv_stepsize` 18), porque un suelo
+   * desigual no deja la caja apoyada donde el punto.
+   *
+   * Si nada vale se usa el punto de todas formas: quedarse fuera del mapa es
+   * peor que quedarse encajado, y encajado **ya no cuelga**: lo para
+   * `PM_CheckStuck` en `_simular`.
+   *
+   * `yo` es el cliente que aparece: él no se estorba a sí mismo, y su cápsula
+   * es la que se prueba. Sin cuerpo de Rapier (las pruebas con un mundo de
+   * mentira) sólo se mira a los jugadores, como antes.
    */
-  _sitioLibre(pies) {
+  _sitioLibre(pies, yo = null) {
     const radio = (this.mundo.perfil?.radius ?? 0.25) * 2.1;
     const ocupado = (p) => {
       for (const c of this.clientes.values()) {
-        if (!c.cuerpo) continue;
+        if (c === yo || !c.cuerpo) continue;
         const o = c.cuerpo.feet;
         if (Math.hypot(p[0] - o[0], p[2] - o[2]) < radio && Math.abs(p[1] - o[1]) < 2) return true;
       }
       return false;
     };
-    if (!ocupado(pies)) return pies;
-    for (const anillo of [radio * 1.5, radio * 3]) {
-      for (let i = 0; i < 8; i++) {
+    const probar = yo ? this._probador(yo) : null;
+    // Rapier no contesta a una consulta hasta que alguien pone al día su árbol
+    // (el 28, doc/IA_28.md): al entrar el primero no ha corrido ni un paso, y
+    // el cuerpo de quien acaba de entrar tampoco está en él.
+    if (probar) yo.cuerpo.world.world.updateSceneQueries();
+    const U = this.mundo.perfil?.unidadesPorMetro ?? 39.37;
+    // Por qué se descartó cada sitio probado, para `costura()`: un sitio
+    // elegido a metro y medio del punto tiene que poder decir por qué no más cerca.
+    const motivos = { ocupado: 0, noCabe: 0, noSeVe: 0 };
+    const vale = (p) => {
+      if (ocupado(p)) { motivos.ocupado++; return false; }
+      if (!probar) return true;
+      if (probar(p)) { motivos.noCabe++; return false; }
+      if (!this._seVe(yo, pies, p)) { motivos.noSeVe++; return false; }
+      return true;
+    };
+    const elegido = (p, anillo) => { if (yo) yo.ultimoSitio = { anillo, ...motivos }; return p; };
+    if (vale(pies)) return elegido(pies, 0);
+    const alturas = [0, 6, 12, 18].map((u) => u / U);
+    for (const anillo of [0, radio * 0.25, radio * 0.75, radio * 1.5, radio * 3]) {
+      const n = anillo === 0 ? 1 : 8;
+      for (let i = 0; i < n; i++) {
         const a = (i * Math.PI) / 4;
-        const p = [pies[0] + Math.cos(a) * anillo, pies[1], pies[2] + Math.sin(a) * anillo];
-        if (!ocupado(p)) return p;
+        for (const dy of alturas) {
+          if (anillo === 0 && dy === 0) continue;
+          const p = [pies[0] + Math.cos(a) * anillo, pies[1] + dy, pies[2] + Math.sin(a) * anillo];
+          if (vale(p)) return elegido(p, anillo);
+        }
       }
     }
+    return elegido(pies, null);
+  }
+
+  /** EL 99, para `costura()`: ¿cabe la cápsula en el nacimiento y en la reaparición? */
+  _puntosQueCaben() {
+    const c = [...this.clientes.values()].find((x) => this._probador(x));
+    if (!c) return null;
+    // Sólo contra el MUNDO: un jugador de pie en el punto no es «el punto no cabe».
+    const probar = probadorDe(c.cuerpo);
+    const fuera = {};
+    for (const k of ["nacimiento", "reaparicion"]) {
+      const e = this.aparicion?.[k]?.escena;
+      if (!e) continue;
+      const pies = puntoDeAparicion(e);
+      fuera[k] = { pies, cabe: !probar(pies) };
+    }
+    return fuera;
+  }
+
+  /** EL 99: `PM_TestPlayerPosition` de la cápsula de este cliente, o `null` sin Rapier. */
+  _probador(c) {
+    if (!c?.cuerpo?.world?.world || !c.cuerpo.collider) return null;
+    if (!c.probar) {
+      c.probar = probadorDe(c.cuerpo, {
+        esJugador: (col) => {
+          for (const o of this.clientes.values()) {
+            if (o !== c && o.cuerpo?.collider?.handle === col.handle) return true;
+          }
+          return false;
+        },
+      });
+    }
+    return c.probar;
+  }
+
+  /**
+   * EL 99, nuestro: desde el punto de aparición, a media altura, ¿se llega a
+   * `p` sin cruzar lo fijo? Es lo que impide que un anillo de metro y medio
+   * ponga a alguien al otro lado de una pared.
+   */
+  _seVe(c, desde, p) {
+    const w = c?.cuerpo?.world?.world;
+    if (!w) return true;
+    const h = c.cuerpo.centreOffset;
+    const a = { x: desde[0], y: desde[1] + h, z: desde[2] };
+    const d = [p[0] - desde[0], p[1] - desde[1], p[2] - desde[2]];
+    const largo = Math.hypot(d[0], d[1], d[2]);
+    if (!(largo > 1e-6)) return true;
+    const rayo = new RAPIER.Ray(a, { x: d[0] / largo, y: d[1] / largo, z: d[2] / largo });
+    return !w.castRay(rayo, largo, true, RAPIER.QueryFilterFlags.ONLY_FIXED);
+  }
+
+  /**
+   * EL 99: `CBasePlayer::MoveToSpawnSpot` al reaparecer (player.cpp:2928-2945):
+   * el origen al punto (la unidad de más: ver `puntoDeAparicion`), la
+   * velocidad a cero. El punto lo da la
+   * sesión (`donde`, la regla de `m_JoinType` de `FindSpawnSpot`, :2427-2555);
+   * aquí sólo se pone el cuerpo, y por el mismo `_sitioLibre` que al entrar.
+   * Al ENTRAR no pasa por aquí: el cuerpo todavía no existe y lo coloca
+   * `_elegir`.
+   */
+  _reaparecer(c, donde, entrada) {
+    if (entrada !== ENTRADA.MUERTE || !c.cuerpo) return null;
+    const punto = puntoDeAparicion(donde?.escena ?? this.aparicion?.nacimiento?.escena ?? [0, 0, 0]);
+    const pies = this._sitioLibre(punto, c);
+    c.cuerpo.colocar(pies, { velocidad: [0, 0, 0] });
+    c.cuerpo.velocityY = 0;
+    c.cuerpo.caida = 0;
+    c.atasco?.reiniciar();
+    c.reapariciones = (c.reapariciones ?? 0) + 1;
+    this._suceso("reaparece", { id: c.id, nombre: c.nombre, pies: [...pies] });
     return pies;
   }
 
@@ -1918,6 +2097,7 @@ export class Partida {
   _correrOrdenes(c) {
     if (!c.cuerpo || !c.cola.length) return 0;
     let corridas = 0;
+    const desde = performance.now();
     while (c.cola.length) {
       const o = c.cola.shift();
       // Mientras está castigado, el tiempo SE SIGUE CONTANDO y la orden no se
@@ -1927,6 +2107,22 @@ export class Partida {
       c.tiempoPedido += o.msec / 1000;
       if (this.t < c.ignorarHasta) {
         c.ignoradas++;
+        if (o.seq > 0) c.ultimaOrden = o.seq;
+        continue;
+      }
+      // EL 99: UN TOPE DE RELOJ DE PARED POR MENSAJE, y es nuestro. Las órdenes
+      // se corren al llegar (arriba, `SV_ReadPackets`), así que el bucle es tan
+      // largo como lo que cueste cada una, y si Rapier se pone caro —una cápsula
+      // metida en la malla, un bicho dentro: §3 y §4 de doc/REAPARECER_99.md—
+      // sesenta órdenes por segundo de 100 ms cada una son un servidor que no
+      // vuelve a contestar a nadie. El motor no lo necesita porque su
+      // `PM_PlayerMove` cuesta lo mismo siempre. Pasado el tope, lo que queda
+      // del paquete se trata como el castigo de arriba: el tiempo se cuenta, el
+      // acuse sale y el cuerpo no se mueve; la reconciliación del cliente le
+      // devuelve donde está. Una orden normal cuesta menos de un milisegundo:
+      // el tope sólo lo toca lo que ya está roto.
+      if (corridas > 0 && performance.now() - desde > TOPE_MS_POR_MENSAJE) {
+        c.sinTiempo = (c.sinTiempo ?? 0) + 1;
         if (o.seq > 0) c.ultimaOrden = o.seq;
         continue;
       }
@@ -1991,19 +2187,92 @@ export class Partida {
     // (clplayer.cpp:306-307, pm_shared.cpp:3050-3053). Ver src/play/trabas.js.
     const conTrabas = velocidadConTrabas(this._velocidad(c, ot, dt), t.porcentaje);
     c.maxima = conTrabas.maxima;
-    cuerpo.step(dt, {
-      forward: q.adelante,
-      strafe: q.lado,
-      jump: q.saltar,
-      agachar: q.agachar,
-      maxima: conTrabas.maxima,
-      tope: conTrabas.tope,
-    });
+    // EL 99: «Always try and unstick us unless we are in NOCLIP mode» —
+    // `if (PM_CheckStuck()) return;`, pm_shared.cpp:3183-3189. Atascado, ese
+    // paso no se mueve, y eso es lo que impide que Rapier calcule segundos
+    // enteros dentro de una roca (src/play/atasco.js).
+    const apartados = this._atascado(c, ot.botones) ? null : this._bichosDentro(c);
+    if (apartados) {
+      try {
+        cuerpo.step(dt, {
+          forward: q.adelante,
+          strafe: q.lado,
+          jump: q.saltar,
+          agachar: q.agachar,
+          maxima: conTrabas.maxima,
+          tope: conTrabas.tope,
+        });
+      } finally {
+        for (const col of apartados) col.setEnabled(true);
+      }
+    }
     // EL 97: EL ESCUDO, con el mismo paso que el cuerpo. El botón es el de la
     // otra mano (`IN_ATTACK2`, giattack.cpp:118), y sólo jugando, como el
     // `cubre` del navegador. Su postura es la que mira `_defender`. EL 98:
     // con NOATTACK no se levanta (`q.cubrir`).
     this._brazalDe(c)?.tic(dt, { pulsado: c.vivo && q.cubrir });
+  }
+
+  /**
+   * EL 99: `PM_CheckStuck` para este cliente. `true` si este paso NO se mueve:
+   * porque el motor devuelve 1 (atascado), o porque ha devuelto 0 sin sacarlo
+   * y entonces `PM_FlyMove` empieza en sólido, pone la velocidad a cero y no
+   * mueve (pm_shared.cpp:1059-1067). Si el motor mueve el origen (un empujón
+   * grande de la tabla, o el forcejeo contra otro jugador), se coloca ahí.
+   * Un cuerpo sin Rapier —el de mentira de las pruebas— no se comprueba.
+   */
+  _atascado(c, botones = 0) {
+    const cuerpo = c.cuerpo;
+    const probar = this._probador(c);
+    if (!probar) return false;
+    c.atasco ??= new Atasco({ servidor: true, unidadesPorMetro: this.mundo.perfil?.unidadesPorMetro ?? 39.37 });
+    const pies = cuerpo.feet;
+    const r = c.atasco.comprobar({ pies, t: this.t, botones, probar });
+    if (r.pies !== pies) cuerpo.colocar(r.pies);
+    if (r.atascado || r.dentro) {
+      if (!r.atascado) cuerpo.vel = [0, 0, 0];
+      c.pasosAtascado = (c.pasosAtascado ?? 0) + 1;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * EL 99: LOS BICHOS QUE SE HAN METIDO DENTRO DEL JUGADOR, apagados mientras
+   * corre su paso. Devuelve los colisionadores apagados (casi siempre ninguno);
+   * quien llama los vuelve a encender.
+   *
+   * En el motor un monstruo no se mete en un jugador: anda con `SV_movestep`,
+   * que traza su caja con `MOVE_NORMAL` —contra las entidades, el jugador
+   * incluido— y no avanza si choca (ReHLDS sv_move.cpp:232 y :268-273). Aquí
+   * los cilindros de los bichos los coloca el paseo sin preguntar al jugador,
+   * y una araña que salta encima deja su cilindro DENTRO de la cápsula. Con
+   * eso dentro, el controlador de Rapier tarda: medido, hasta 125 ms por
+   * llamada con un cilindro de 32×24 metido en la cápsula, y a sesenta órdenes
+   * por segundo eso es el servidor de la sonda del 99 sin contestar durante
+   * minutos, con el perfilador parado DENTRO de `computeColliderMovement`
+   * (doc/REAPARECER_99.md §6). `PM_CheckStuck` no lo puede parar: atascarse en
+   * un bicho dejaría paralítico a quien tenga una araña encima.
+   *
+   * Así que el cilindro que ya está dentro no cuenta para ESTE paso del
+   * jugador, que es lo que pasaría en el motor si hubiera llegado a entrar: el
+   * jugador sale andando. Los que sólo le tocan siguen ahí y le paran, como
+   * siempre.
+   */
+  _bichosDentro(c) {
+    const cuerpo = c.cuerpo;
+    const w = cuerpo?.world?.world;
+    if (!w || !cuerpo.collider) return [];
+    const fuera = [];
+    const t = cuerpo.body.translation();
+    c.formaEntera ??= new RAPIER.Capsule(cuerpo.half, cuerpo.perfil.radius);
+    const jugadores = new Set([...this.clientes.values()].map((o) => o.cuerpo?.collider?.handle).filter((h) => h !== undefined));
+    w.intersectionsWithShape(t, { x: 0, y: 0, z: 0, w: 1 }, c.formaEntera, (col) => { fuera.push(col); return true; },
+      RAPIER.QueryFilterFlags.ONLY_KINEMATIC, undefined, cuerpo.collider, cuerpo.body,
+      (col) => !jugadores.has(col.handle));
+    for (const col of fuera) col.setEnabled(false);
+    c.bichosApartados = (c.bichosApartados ?? 0) + fuera.length;
+    return fuera;
   }
 
   /** EL 98: el anfitrión de efectos de este cliente si ya existe y es de su personaje; si no, `null`. */

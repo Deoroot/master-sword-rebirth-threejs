@@ -673,3 +673,118 @@ export function pasoDeVelocidad(velocidad, {
   }
   return { velocidad: v, mover };
 }
+
+// ── EL 99: LA VELOCIDAD TAMBIÉN SE RECORTA CONTRA LO QUE TOCAS ─────────────
+//
+// Corrección a la cabecera de este archivo, que dice que `PM_FlyMove` «lo hace
+// el controlador de Rapier». Es verdad del DESPLAZAMIENTO y no de la
+// VELOCIDAD: Rapier desliza la cápsula contra la pared y devuelve cuánto se ha
+// movido, pero la velocidad la lleva este archivo, y nadie la recortaba. Para
+// el techo había una regla NUESTRA en `Player.step` —«si subiste menos de la
+// mitad de lo pedido, la vertical a cero»—, que no está en el motor. Lo del
+// motor es esto: por cada plano que corta el movimiento, `PM_ClipVelocity`
+// le quita a la velocidad la parte que entra en el plano.
+//
+//     STOP_EPSILON 0.1        pm_shared.cpp:151
+//     DIST_EPSILON 0.125f     pm_shared.cpp:152  («network quantization»)
+//     PM_ClipVelocity         pm_shared.cpp:933-973
+//     PM_FlyMove, los planos  pm_shared.cpp:1021-1206
+//
+// LOS EJES: el motor tiene la Z arriba y este proyecto la Y. `angle =
+// normal[2]` del motor es aquí `n[1]`; el producto escalar no depende de los
+// ejes, así que lo demás se copia tal cual.
+export const STOP_EPSILON = 0.1;
+export const DIST_EPSILON = 0.125;
+export const MAX_CLIP_PLANES = 5;    // pm_defs.h:22
+
+/**
+ * `PM_ClipVelocity` (pm_shared.cpp:933-973): «slide off of the impacting
+ * object». Devuelve la velocidad nueva; `n` es la normal del plano, hacia
+ * fuera del sólido, y `rebote` el `overbounce`.
+ *
+ * Las líneas 961-969 son de MSR y no de Valve: «iterate once to make sure we
+ * aren't still moving through the plane». Si después de recortar la velocidad
+ * todavía no SALE del plano, se empuja hacia fuera hasta `DIST_EPSILON`. O sea
+ * que contra un techo plano la vertical no queda en 0 sino en −0,125 u/s.
+ */
+export function recortarVelocidad(v, n, rebote = 1) {
+  const backoff = (v[0] * n[0] + v[1] * n[1] + v[2] * n[2]) * rebote;
+  const out = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    out[i] = v[i] - n[i] * backoff;
+    if (out[i] > -STOP_EPSILON && out[i] < STOP_EPSILON) out[i] = 0;
+  }
+  let ajuste = out[0] * n[0] + out[1] * n[1] + out[2] * n[2];
+  if (ajuste <= 0) {
+    ajuste = Math.min(ajuste, -DIST_EPSILON);
+    for (let i = 0; i < 3; i++) out[i] -= n[i] * ajuste;
+  }
+  return out;
+}
+
+/**
+ * Los PLANOS de `PM_FlyMove` (pm_shared.cpp:1046-1203), aplicados a la lista
+ * de choques que devuelve el controlador de Rapier en vez de a los `trace`.
+ *
+ * Cada choque es `{ n: [x, y, z], toi }`, en el orden en que ocurrieron. La
+ * correspondencia con el motor:
+ *
+ *   - `toi > 0` es `trace.fraction > 0`: se avanzó algo antes de chocar, y
+ *     entonces `original_velocity = velocity` y `numplanes = 0` (:1073-1078).
+ *   - más de `MAX_CLIP_PLANES` planos sin avanzar: velocidad a cero (:1112-1119).
+ *   - `reflejar` es la rama de `MOVETYPE_WALK && (onground == -1 ||
+ *     friction != 1)` (:1128-1144), o sea **en el aire**: cada plano recorta
+ *     desde la original, y los de suelo (`n > 0.7`) la actualizan.
+ *   - si no, la rama de la arista (:1145-1196), que es la de la escalera
+ *     (`MOVETYPE_FLY`, :2295) y la del suelo.
+ *   - `seMovio` falso con choques es `allFraction == 0`: «don't stick», la
+ *     velocidad a cero (:1199-1203).
+ *
+ * `rebote` es `1 + bounce * (1 - friction)`, y `pmove->friction` es el
+ * rozamiento de la ENTIDAD (1 salvo un `func_friction`), no `sv_friction`: en
+ * la práctica vale 1.
+ */
+export function velocidadContraPlanos(velocidad, choques, {
+  reflejar = true, rebote = 1, seMovio = true,
+} = {}) {
+  let v = [...velocidad];
+  if (!choques.length) return v;
+  const primal = [...velocidad];
+  let original = [...velocidad];
+  let planos = [];
+  for (const c of choques) {
+    if (!v[0] && !v[1] && !v[2]) break;                       // :1048-1049
+    if (c.toi > 0) { original = [...v]; planos = []; }          // :1073-1078
+    if (planos.length >= MAX_CLIP_PLANES) { v = [0, 0, 0]; break; } // :1112-1119
+    planos.push(c.n);
+    if (reflejar) {
+      let nueva = v;
+      for (const p of planos) {
+        if (p[1] > 0.7) { nueva = recortarVelocidad(original, p, 1); original = nueva; }
+        else nueva = recortarVelocidad(original, p, rebote);
+      }
+      v = nueva;
+      original = nueva;
+    } else {
+      let i;
+      for (i = 0; i < planos.length; i++) {
+        v = recortarVelocidad(original, planos[i], 1);
+        let j;
+        for (j = 0; j < planos.length; j++) {
+          if (j !== i && v[0] * planos[j][0] + v[1] * planos[j][1] + v[2] * planos[j][2] < 0) break;
+        }
+        if (j === planos.length) break;
+      }
+      if (i === planos.length) {
+        if (planos.length !== 2) { v = [0, 0, 0]; break; }      // :1173-1180
+        const [a, b] = planos;
+        const dir = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        const d = dir[0] * v[0] + dir[1] * v[1] + dir[2] * v[2];
+        v = dir.map((x) => x * d);                               // :1181-1183
+      }
+      if (v[0] * primal[0] + v[1] * primal[1] + v[2] * primal[2] <= 0) { v = [0, 0, 0]; break; } // :1190-1195
+    }
+  }
+  if (!seMovio) v = [0, 0, 0];                                   // :1199-1203
+  return v;
+}

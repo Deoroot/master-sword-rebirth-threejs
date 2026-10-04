@@ -125,7 +125,7 @@ import {
   aEscena, UNIDADES_POR_METRO as U,
 } from "../src/bsp/lector.js";
 import { luzEnSuelo } from "../src/bsp/luz.js";
-import { sePuedeEstar, sueloBajo } from "../src/bsp/arbol.js";
+import { sePuedeEstar, sueloBajo, cabeDePie } from "../src/bsp/arbol.js";
 
 import { mapaDeArgv, bspDe, enSalida } from "./mapa.mjs";
 const MAPA = mapaDeArgv();
@@ -314,6 +314,13 @@ function reglasDuras(c) {
   if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) {
     mal.push("no se puede estar de pie");
   }
+  // EL 99. Los dos `sePuedeEstar` de arriba miran PUNTOS, y el rayo que se
+  // eligió en Gate City cae a 6 unidades de una pared y con la cabeza bajo el
+  // alféizar de una ventana: los dos puntos vacíos y la caja del jugador,
+  // dentro (src/bsp/arbol.js `cabeDePie`). En el motor eso es
+  // `PM_CheckStuck` y no te mueves; aquí Rapier no saca la cápsula de la
+  // pared y el primer salto se quedaba en 0,1 m. Ver doc/SALTO_99.md.
+  if (!cabeDePie(bsp, c.unidades)) mal.push("no cabe la caja del jugador (casco 1)");
   if (c.alAmigo < HUECO) mal.push(`a ${c.alAmigo} m del NPC más cercano, mínimo ${HUECO}`);
   if (HAY_PUEBLOS && !c.enPueblo) mal.push("fuera de toda zona msarea_town");
   return mal;
@@ -351,6 +358,7 @@ function apartar(c) {
       // A 72 unidades está la cabeza de un jugador de pie (`VEC_HULL_MAX.z`).
       if (!sePuedeEstar(bsp, [x, y, z + 8])) continue;
       if (!sePuedeEstar(bsp, [x, y, z + 68])) continue;
+      if (!cabeDePie(bsp, [x, y, z])) continue;   // el 99: la CAJA, no el punto
       const m = medir([x, y, z], `${c.nombre} (apartado)`, c.familia);
       if (m.hostiles15 > 0 || m.alAmigo < HUECO) continue;
       if (!mejor || m.luz > mejor.luz) mejor = m;
@@ -483,6 +491,7 @@ for (const r of rayos) {
   if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) {
     descartar("no se puede estar de pie debajo"); continue;
   }
+  if (!cabeDePie(bsp, r.unidades)) { descartar("no cabe la caja del jugador debajo (casco 1)"); continue; }
   if (r.alSuelo > RAYO_AL_SUELO) { descartar(`se corta a más de ${RAYO_AL_SUELO} unidades del suelo`); continue; }
   const visible = Number.isFinite(r.alSacerdoteVisible);
   const m = medir(
@@ -640,6 +649,10 @@ control("se puede estar de pie donde aparece",
   sePuedeEstar(bsp, [elegido.unidades[0], elegido.unidades[1], elegido.unidades[2] + 8]) &&
   sePuedeEstar(bsp, [elegido.unidades[0], elegido.unidades[1], elegido.unidades[2] + 68]),
   "vacío a la altura de los pies Y a la de la cabeza");
+// EL 99: el control de arriba es de PUNTOS y estuvo verde con el jugador
+// metido 10 unidades en una pared. Éste pregunta por la caja.
+control("cabe la CAJA del jugador donde aparece (casco 1)", cabeDePie(bsp, elegido.unidades),
+  `casco 1 en [${elegido.unidades.join(", ")}], de +37 a +55 (un escalón)`);
 control("no aparece dentro de nadie", elegido.alAmigo >= HUECO,
   `${elegido.alAmigo} m al NPC más cercano, mínimo ${HUECO}`);
 // El rumbo tiene que llevar a alguna parte. Un yaw hacia una pared a medio

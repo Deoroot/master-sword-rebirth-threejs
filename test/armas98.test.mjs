@@ -80,10 +80,17 @@ test("TODAS las astas del juego: lanza ⇔ declara `const POLE_CAN_POWER_THROW 1
   assert.ok(total >= 13, `${total}`);
 });
 
-test("el `if` VIEJO se apunta y NO se aplica (todavía): los arcos de Torkalath lo dicen", { skip: sinScripts }, () => {
+// CORRECCIÓN DEL 99, parte R: esta prueba nació como «el `if` VIEJO se apunta y
+// NO se aplica (todavía)» y pedía los TRES ataques de antes del 98. El usuario
+// decidió en el 99 imitar al motor (doc/GUION_99.md): el `if` viejo falso
+// abandona su evento (script.cpp:5754-5757) y `local` es del evento
+// (script.cpp:5696). Quedan dos: el VACÍO de `bows_base` y la esfera.
+test("el `if` VIEJO se apunta Y SE APLICA (el 99): los arcos de Torkalath lo dicen", { skip: sinScripts }, () => {
   const f = leerFichaObjeto(SCRIPTS, "items/bows_telf1");
   assert.deepEqual(f.ataquesTrasIfViejo.map((c) => c.condicion), ["!CUSTOM_ATTACK"]);
-  assert.equal(f.ataques.length, 3, "sigue con los tres ataques de antes del 98");
+  assert.equal(f.ataques.length, 2, "el vacío de bows_base y la esfera");
+  assert.equal(f.ataques[0].tipo, null);
+  assert.equal(f.ataques[1].proyectil, "proj_arrow_spiral");
 });
 
 test("en el horneado: 7 astas lanzan y la lanza del bastón ya no está entre las flechas", { skip: sinArmas }, () => {

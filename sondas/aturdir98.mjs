@@ -117,6 +117,14 @@ try {
     // rojo tres veces seguidas (17/18); esta sonda, una (−0,13 m). Es un
     // hueco del juego tras un teletransporte —ver doc/ATURDIR_98.md §7—, y
     // aquí se esquiva igual en el control positivo que en el negativo.
+    //
+    // CORRECCIÓN DEL 99: no era la regla «techo» sino EL SITIO. El nacimiento
+    // estaba a 6 unidades de una pared y con la cabeza bajo el alféizar de
+    // una ventana: la caja del jugador no cabía (casco 1), y el «techo» que
+    // veía la regla era de verdad ese alféizar. `tools/aparicion.mjs` ya pide
+    // que quepa la caja y el nacimiento es otro; sondas/salto99.mjs salta sin
+    // andar seis de seis. Esta espera andando se deja: ya no hace falta, y
+    // quitarla sería cambiar lo que esta sonda midió. Ver doc/SALTO_99.md.
     await pag.waitForTimeout(300);
     await pag.keyboard.down("KeyW");
     await pag.waitForTimeout(300);

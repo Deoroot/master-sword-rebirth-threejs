@@ -2207,7 +2207,12 @@ async function arrancarJuego() {
       console.warn("los otros jugadores no se han podido montar:", e);
     }
     red.cuerpo = player;
-    red.simular = (cuerpo, o) => {
+    // EL 99: `v` es `{maxima, tope}`, la velocidad con que el bucle corrió esta
+    // orden la primera vez (la apunta `red.apuntar`, más abajo). Hasta el 99
+    // esto leía `o.maxima`, que ninguna orden trae, y rehacía con el 160 del
+    // perfil: con servidor, cada corrección frenaba a quien anda más y la
+    // siguiente foto volvía a corregir. Ver `ClienteDeRed._correr`.
+    red.simular = (cuerpo, o, v = null) => {
       const pies = cuerpo.feet;
       cuerpo.yaw = o.yaw;
       cuerpo.pitch = o.cabeceo;
@@ -2215,10 +2220,10 @@ async function arrancarJuego() {
         forward: o.adelante, strafe: o.lado,
         jump: (o.botones & BOTON.SALTAR) !== 0,
         agachar: (o.botones & BOTON.AGACHAR) !== 0,
-        maxima: o.maxima ?? undefined,
-        // EL 98: el tope de las trabas (`pmove->maxspeed`), el último sabido:
-        // la orden no lo lleva, como en el motor no lo lleva el `usercmd`.
-        tope: velocidadConTrabas(0, ultimasTrabas?.porcentaje ?? 0).tope,
+        maxima: v?.maxima ?? undefined,
+        // EL 98: el tope de las trabas (`pmove->maxspeed`). EL 99: el que tenía
+        // la orden; sin apuntar, el último sabido.
+        tope: v?.tope ?? velocidadConTrabas(0, ultimasTrabas?.porcentaje ?? 0).tope,
         agua: volumenes.nivelDeAguaEn(pies, { agachado: (o.botones & BOTON.AGACHAR) !== 0 }),
         escalera: volumenes.escaleraEn(pies),
       });
@@ -4346,7 +4351,9 @@ async function arrancarJuego() {
       // sólo hace falta cuando hay un arco en la mano. Las flechas van en la
       // escena del MUNDO —no en la de la vista— porque son entidades de verdad:
       // se quedan clavadas donde caen y se tapan con las paredes.
-      if (equipo.brazo?.esDeTiro && !arco.flechasPuestas) {
+      // EL 99: `tiraProyectiles` y no `esDeTiro`: la Unholy Blade y las astas
+      // que lanzan también sueltan algo que vuela, y sin el conjunto volaba sin dibujo.
+      if (equipo.brazo?.tiraProyectiles && !arco.flechasPuestas) {
         const cual = catalogos.flechas?.get("proj_arrow_generic")?.clave;
         if (cual) {
           arco.flechasPuestas = await cargarFlechas(cual, { U: level.unitsPerMetre });
@@ -6105,7 +6112,17 @@ async function arrancarJuego() {
       const enAgua = volumenes.nivelDeAguaEn(pies, { agachado: q.agachar });
       const escalera = volumenes.escaleraEn(pies);
       const saltando = manda && q.saltar && player.grounded && !escalera && enAgua < 2;
-      const r = player.step(DT, manda ? {
+      // EL 99: con servidor el cuerpo anda los milisegundos ENTEROS de la orden
+      // y no el `DT`: la orden lleva `msec` en un byte (16 o 17 a 60 Hz) y eso
+      // es lo que corre el servidor y lo que rehace `red.simular`. Con `DT` el
+      // navegador iba hasta 0,67 ms por delante o por detrás en cada orden
+      // —3 mm a 184 u/s, más que el umbral de 1 mm— y corregía sin que nada
+      // estuviera mal. En el motor cada orden se mueve con su propio `msec`, en
+      // los dos lados: `pmove->frametime = pmove->cmd.msec * 0.001`
+      // (pm_shared.cpp:3166). El resto se guarda para la siguiente (`msecDe`).
+      const msOrden = red?.dentro ? red.msecDe(DT) : null;
+      const dtCuerpo = msOrden > 0 ? msOrden / 1000 : DT;
+      const r = player.step(dtCuerpo, manda ? {
         forward: q.adelante, strafe: q.lado, jump: q.saltar, agachar: q.agachar,
         maxima, tope: conTrabas.tope, agua: enAgua, escalera,
       } : { agua: enAgua, escalera });
@@ -6118,7 +6135,7 @@ async function arrancarJuego() {
       // recortada, ángulos y botones—, nunca la posición: eso es lo que hace
       // que el servidor sea la autoridad y no un notario.
       if (red?.dentro) {
-        const ms = red.msecDe(DT);
+        const ms = msOrden;
         if (ms > 0) {
           red.apuntar({
             msec: ms,
@@ -6133,7 +6150,9 @@ async function arrancarJuego() {
               // servidor lleva su propio `Brazal` con este botón: es su postura
               // la que decide el bloqueo (`Partida._pasoDelEscudo`).
               | (manda && equipo.brazal?.atacando ? BOTON.ATACAR2 : 0),
-          });
+          // EL 99: con qué velocidad se ha corrido, para rehacerla igual
+          // (`red.simular`). En el motor va dentro del `usercmd` (input.cpp:795).
+          }, { velocidad: manda ? { maxima, tope: conTrabas.tope } : null });
         }
       }
       // EL `trigger_hurt`, que trae `dmg 999999`: muerte instantanea. Es una

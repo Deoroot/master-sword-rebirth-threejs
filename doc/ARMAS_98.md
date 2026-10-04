@@ -185,6 +185,9 @@ midió. El tope de vite de esta sonda es ahora de 180 s.
 - **El `if` viejo** (56 ataques en 41 armas) y **`local` por evento** (53
   armas): medidos, no aplicados. Con los dos, un arco de Torkalath tiraría su
   esfera en el juego; sin ellos tira flechas.
+  > **El 99 (parte R):** aplicados los dos por decisión del usuario —56
+  > ataques fuera en 41 armas y 2 plantillas; `local` cambia 55 objetos—, y el
+  > arco de Torkalath tira la esfera siempre. Ver [GUION_99.md](GUION_99.md).
 - **El tiro cargado de un arma cuerpo a cuerpo** (Unholy Blade, Shadow Lance,
   tridente...) no está cableado en `Brazo`: sólo sale por la costura de la prueba.
 - `sonda:arco` «hay una flecha dibujada» mide `puestas`; el control de verdad es

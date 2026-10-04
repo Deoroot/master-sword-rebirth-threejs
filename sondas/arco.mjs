@@ -68,8 +68,14 @@ console.log(`\n  ${arco.id}: fuerza ${arco.fuerza} u/s, tensa ${arco.sostener?.j
 console.log(`    secuencias del modelo de vista: ${arco.secuencias.join(", ")}`);
 control("el arco de partida es un arma de TIRO y no un palo",
   arco.esDeTiro === true, `esDeTiro ${arco.esDeTiro}`);
-control("y registra sus dos ataques clonados, como en el juego",
-  arco.ataques === 2, `${arco.ataques} ataques`);
+// CORRECCIÓN DEL 99, parte R (doc/GUION_99.md): este control decía «y registra
+// sus dos ataques clonados, como en el juego». Son dos, pero NO clones: `local`
+// es del evento (script.cpp:5696) y el segundo `registerattack` —el de
+// `bows_base.script:34`— llega sin ningún `reg.attack.*`: es el ataque vacío,
+// que no se dispara nunca y que `Brazo` no se queda.
+control("y registra DOS ataques, la flecha y el vacío de `bows_base`, y el brazo usa uno",
+  arco.registrados === 2 && arco.vacios === 1 && arco.ataques === 1,
+  `${arco.registrados} registrados, ${arco.vacios} vacío, ${arco.ataques} en el brazo`);
 control("trae los dos tiempos de tensar", arco.sostener?.[1] === 1.3, `${arco.sostener?.join(";")}`);
 control("trae los dos conos, y el de sin tensar es el peor",
   arco.cono?.[0] === 10 && arco.cono?.[1] === 4, `${arco.cono?.join(";")}`);

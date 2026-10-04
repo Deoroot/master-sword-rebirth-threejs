@@ -494,12 +494,19 @@ export function orden({
   botones = 0, impulso = 0, lerpMsec = 100,
 } = {}) {
   return {
-    seq: Math.max(0, Math.trunc(seq)),
-    msec: Math.max(0, Math.min(255, Math.round(msec))),
+    // EL 99: lo que no es un número finito es CERO, y no `NaN`. En el motor
+    // `msec` es un `byte` y los ángulos son `float` leídos del cable: un
+    // `NaN` o un infinito no se pueden escribir ahí. Aquí sí, y `Number(x) || 0`
+    // deja pasar `Infinity`: un `yaw` infinito da un seno `NaN`, la velocidad
+    // del cuerpo se queda en `NaN` y, como cada paso parte de la anterior, el
+    // jugador no vuelve a moverse aunque las órdenes siguientes sean buenas
+    // (doc/REAPARECER_99.md §4).
+    seq: Math.max(0, Math.trunc(finito(seq))),
+    msec: Math.max(0, Math.min(255, Math.round(finito(msec)))),
     // Los ángulos van como los manda el cliente: son suyos. El motor tampoco
     // los valida — mirar a donde quieras no es hacer trampa.
-    yaw: Number(yaw) || 0,
-    cabeceo: Number(cabeceo) || 0,
+    yaw: finito(yaw),
+    cabeceo: finito(cabeceo),
     // La intención va recortada a [-1, 1]. En el motor es `forwardmove` en
     // unidades por segundo y el recorte lo hace `PM_Move` con `maxspeed`; aquí
     // el recorte es aquí, y es LA defensa más importante de todas: sin él, un
@@ -513,6 +520,11 @@ export function orden({
     lerpMsec: Math.max(0, Math.min(1000, Math.round(lerpMsec))),
   };
 }
+
+const finito = (x) => {
+  const v = Number(x);
+  return Number.isFinite(v) ? v : 0;
+};
 
 const recortar = (x) => {
   const v = Number(x);

@@ -66,7 +66,13 @@ test("`ammodrain 0`: las lanzas no gastan munición y la ballesta sí (1 por omi
   const tiro = (id) => a.get(id).ataques.find((t) => t.tipo === "charge-throw-projectile");
   assert.equal(tiro("polearms_tri").gastaMunicion, 0);
   assert.equal(tiro("polearms_tri").proyectil, "proj_pole_trident");
-  assert.equal(tiro("bows_firebird").gastaMunicion, 1);  // el primero es la flecha normal
+  // CORRECCIÓN DEL 99, parte R (doc/GUION_99.md): aquí se leía «el primero es
+  // la flecha normal» del Fénix, que es la de `base_ranged` detrás de `if
+  // !CUSTOM_ATTACK` —un `if` viejo que abandona el evento, script.cpp:5754-
+  // 5757—. Con el `if` viejo aplicado el Fénix ya no la tiene: su único tiro es
+  // el suyo. El «1 por omisión» de un arco se mira en el arco de partida.
+  assert.equal(tiro("bows_treebow").gastaMunicion, 1);
+  assert.equal(tiro("bows_firebird").proyectil, "proj_arrow_phx");
   assert.equal(a.get("bows_firebird").ataques.find((t) => t.proyectil === "proj_arrow_phx").gastaMunicion, 0);
   assert.equal(tiro("bows_crossbow_light").gastaMunicion, 1);
   assert.equal(tiro("bows_crossbow_light").proyectil, "bolt");

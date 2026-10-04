@@ -23,6 +23,7 @@ import {
   AGUANTE_CORRIENDO, regeneracionDeAguante,
 } from "../play/movimiento.js";
 import { BOTON } from "./protocolo.js";
+import { velocidadConTrabas, trabarIntencion } from "../play/trabas.js";
 
 /** Lo que un personaje puede: agilidad, fuerza, lo que carga y su aguante. */
 export function vitalesDe(personaje, porId = null) {
@@ -70,4 +71,44 @@ export function velocidadDelPaso(estado, { orden, dt, vitales, rapidez = 0 }) {
     estado.aguante = Math.min(v.aguanteMax, estado.aguante + regeneracionDeAguante(v.fuerza) * dt);
   }
   return ajustarVelocidad(maxima, {});
+}
+
+/**
+ * EL 99: UNA ORDEN, CON LO QUE LE QUITAN LAS TRABAS Y LA VELOCIDAD CON QUE SE
+ * CORRE. Es el cuerpo de `Partida._simular` (el 98) sacado a una función, y
+ * la usa el cliente de Node al predecir. El servidor TODAVÍA lleva su copia en
+ * línea: en el 99 otra sesión estaba editando `_simular` (el atasco) y no se
+ * tocó; lo que obliga a que las dos den lo mismo es `test/red99.test.mjs`, que
+ * corre el cliente contra una `Partida` de verdad con trabas. Pasar
+ * `_simular` a esto es un pendiente.
+ *
+ * `t` son las trabas (`src/play/trabas.js`) o `null`. Devuelve la intención
+ * trabada `q` —lo que obedece `step`—, la orden con los botones trabados
+ * (`orden`) y `{maxima, tope}`: la velocidad de
+ * `velocidadDelPaso` pasada por `pev->maxspeed` (clplayer.cpp:306-307 como
+ * porcentaje, pm_shared.cpp:3050-3053 como tope).
+ *
+ * `estado` se modifica como en `velocidadDelPaso` (aguante y trote): una orden
+ * se cobra UNA vez. Rehacerla tras una corrección no pasa por aquí (ver
+ * `ClienteDeRed._correr`).
+ */
+export function correrOrden(estado, o, { dt, vitales, rapidez = 0, trabas = null }) {
+  const b = o.botones ?? 0;
+  const q = trabarIntencion({
+    adelante: o.adelante, lado: o.lado,
+    correr: (b & BOTON.CORRER) !== 0, saltar: (b & BOTON.SALTAR) !== 0,
+    agachar: (b & BOTON.AGACHAR) !== 0, atacar: (b & BOTON.ATACAR) !== 0,
+    cubrir: (b & BOTON.ATACAR2) !== 0,
+  }, trabas);
+  // La orden trabada, para la cuenta del aguante (`velocidadDelPaso` mira el
+  // botón de correr y el de atacar): una orden de trotar con NORUN no trota.
+  const ot = {
+    ...o, adelante: q.adelante, lado: q.lado,
+    botones: (b & ~(BOTON.CORRER | BOTON.SALTAR | BOTON.AGACHAR | BOTON.ATACAR | BOTON.ATACAR2))
+      | (q.correr ? BOTON.CORRER : 0) | (q.saltar ? BOTON.SALTAR : 0)
+      | (q.agachar ? BOTON.AGACHAR : 0) | (q.atacar ? BOTON.ATACAR : 0)
+      | (q.cubrir ? BOTON.ATACAR2 : 0),
+  };
+  const v = velocidadConTrabas(velocidadDelPaso(estado, { orden: ot, dt, vitales, rapidez }), trabas?.porcentaje ?? 0);
+  return { q, orden: ot, maxima: v.maxima, tope: v.tope };
 }

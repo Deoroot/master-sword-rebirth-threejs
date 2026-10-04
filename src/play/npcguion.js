@@ -507,6 +507,44 @@ export function entornoDe({
       suceso?.("bueno", `You receive ${nombreVisibleDe(catalogo, clave, cuantos)}`);
     },
 
+    /**
+     * EL 99: `givehp`/`givemp` EN UN NPC. Hasta aquí el entorno de un NPC no
+     * tenía este gancho y el intérprete reventaba con «e.dar is not a
+     * function» (lo encontró la sonda del 98 con el esqueleto vampiro de
+     * gertenheld_forest2: `givehp HP_TO_GIVE` al morder,
+     * skeleton_poison_random.script:304).
+     *
+     * Sin objetivo es la entidad del guion (`pTarget = m.pScriptedEnt`,
+     * scriptcmds.cpp:3443-3449), y en un monstruo eso es `CMSMonster::Give`
+     * (msmonsterserver.cpp:1971-1998):
+     *
+     *     float AddAmount = V_min(Max - *Current, Amt);  // lo que cabe
+     *     AddAmount = V_max(-*Current, AddAmount);        // lo que se puede quitar
+     *     ...  *Current += AddAmount;  pev->health = *Current;
+     *
+     * O sea: no pasa del máximo, no baja de cero y NO MATA — el propio motor lo
+     * avisa en el comentario del comando (scriptcmds.cpp:3437, «reducing HP
+     * below zero in this fashion may not trigger death events»). Por eso se
+     * escribe la vida a pelo y no se pasa por `herir`. `FL_GODMODE`
+     * (:1991-1992) no existe en este puerto para un bicho y no se mira.
+     *
+     * Lo que NO está: el maná de un bicho (`m_MP`; ningún guion de `monsters/`
+     * ni de `NPCs/` lo da a sí mismo) y dar a OTRA entidad (`givehp MY_OWNER`
+     * de dos invocaciones, `givemp NPCATK_TARGET` de tres): se APUNTAN, no se
+     * callan.
+     */
+    dar(que, ref, cantidad) {
+      if (ref !== null && ref !== undefined && !esYo(ref)) { apuntar?.(que === "vida" ? "givehp" : "givemp", `a otra entidad (${ref})`); return; }
+      if (que !== "vida") { apuntar?.("givemp", "el maná de un bicho no está portado"); return; }
+      const inst = npc?.instancia;
+      if (!inst) { apuntar?.("givehp", "sin instancia del bicho"); return; }
+      const actual = inst.vida ?? 0;
+      const max = inst.vidaMaxima ?? 0;
+      const amt = Number.isFinite(cantidad) ? cantidad : 0;
+      const suma = Math.max(-actual, Math.min(max - actual, amt));
+      inst.vida = actual + suma;
+    },
+
     /** Lo pone el propio `GuionDeNpc` al abrir el menú. */
     registrarOpcion: () => {},
 
@@ -609,7 +647,18 @@ export function entornoDe({
           // ha medido y sigue como estaba.
           if (cuerpo && esYo(ref)) return cuerpo.vivo() ? "1" : "0";
           return esElJugador(ref) && (p?.vida ?? 0) > 0 ? "1" : "0";
-        case "id": return esElJugador(ref) ? (jugador?.ref ?? "0") : "0";
+        // `else if (Prop == "id") return EntToString(pTarget);` — scriptcmds.cpp:936.
+        // De CUALQUIER entidad, no sólo del jugador: el asa de otro NPC es su id.
+        // Devolvía «0» para todo lo que no fuera el jugador, y eso rompe el modismo
+        // con que un bicho avisa a un NPC de misión:
+        //     local MAYOR_ENT $get_by_name(dwarf_mayor)
+        //     local MAYOR_ID $get(MAYOR_ENT,id)
+        //     callexternal MAYOR_ID zombie_died      monsters/dwarf_zombie_random.script:453-460
+        // El `callexternal` salía hacia «0» y se apuntaba, sin más. Lo enseñó la
+        // primera misión nuestra (sondas/mision_anexo.mjs), que usa ese modismo.
+        case "id":
+          if (esElJugador(ref)) return jugador?.ref ?? "0";
+          return entidades?.recuperar(ref) ? String(ref) : "0";
         case "name": return esElJugador(ref) ? (p?.nombre ?? "0") : (npc?.nombre ?? "0");
         /**
          * `origin` — `RETURN_POSITION("origin", pTarget->pev->origin)`
