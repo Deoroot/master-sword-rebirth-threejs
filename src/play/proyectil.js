@@ -340,7 +340,7 @@ export class Flecha {
    */
   constructor({
     desde = [0, 0, 0], hacia = [0, 0, -1], velocidad = 0, gravedad = 1,
-    dano = 0, tipoDano = "pierce", expira = EXPIRA, ficha = null,
+    dano = 0, tipoDano = "pierce", expira = EXPIRA, ficha = null, miraAdelante = true,
   } = {}) {
     this.pos = [...desde];
     /** De dónde salió, para poder medir la caída sin el desnivel de la mano. */
@@ -361,6 +361,15 @@ export class Flecha {
     this.tipoDano = tipoDano;
     this.expira = expira;
     this.ficha = ficha;
+    /**
+     * EL 97: el rayo de 36 unidades NO lo tira un proyectil con
+     * `reg.proj.ignorenpc` — `if (ProjectileData->IgnoreNPC) return;` es la
+     * primera línea de `Projectile_CheckHit` (giprojectile.cpp:283-284). Choca
+     * sólo por el movimiento barrido, contra lo que toque, y al tocar a un bicho
+     * el motor no hace `DoDamage` y llama a `game_projectile_hitwall`
+     * (:136-152, :214-220): la flecha del Fénix explota EN el bicho.
+     */
+    this.miraAdelante = miraAdelante;
     /** Mientras vuela. Al chocar deja de volar y empieza a contar para irse. */
     this.volando = true;
     this.vida = 0;
@@ -382,7 +391,7 @@ export class Flecha {
   }
 
   _mirarAdelante(traza) {
-    if (!traza) return null;
+    if (!traza || !this.miraAdelante) return null;
     const r = this.rapidez;
     if (!(r > 0)) return null;
     const hasta = [0, 1, 2].map((k) => this.pos[k] + (this.vel[k] / r) * MIRA_ADELANTE);

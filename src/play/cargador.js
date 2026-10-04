@@ -47,12 +47,31 @@ export function resolverGuion(ruta, leer, vistos = new Set()) {
   const faltan = [];
   // EN ORDEN DE ARCHIVO: `piezas` lleva los eventos, los `const` de cabecera y
   // los `#include` intercalados donde estaban. Recorrerla es `ParseLine`.
+  // EL 96: `[override]` BORRA lo que ya había con ese nombre, y lo hace al
+  // analizar, sobre la lista ENTERA de la entidad —la de los `#include` que
+  // entraron antes también, porque se analizan en la misma `m.Events`:
+  //
+  //     if (Name.len() && Override)
+  //       for (int i = 0; i < m.Events.size(); i++)
+  //         if (Name == m.Events[i].Name) { m.Events.erase(i); i--; }
+  //                                            script.cpp:5208-5213
+  //
+  // Sin esto el fénix corría las DOS `elm_activate_effect` —la suya, que pide
+  // fuego > 20, y la de `base_elemental_resist`, que no pide nada— y daba la
+  // resistencia a cualquiera. Lo que va DESPUÉS del `[override]` con el mismo
+  // nombre se queda: el motor sólo mira hacia atrás.
+  const meter = (ev) => {
+    if (ev.anula && ev.nombre) {
+      for (let i = eventos.length - 1; i >= 0; i--) if (eventos[i].nombre === ev.nombre) eventos.splice(i, 1);
+    }
+    eventos.push(ev);
+  };
   for (const pieza of propio.piezas ?? []) {
-    if (pieza.evento) { eventos.push(pieza.evento); continue; }
+    if (pieza.evento) { meter(pieza.evento); continue; }
     if (pieza.preload) { preload.push(pieza.preload); continue; }
     if (!pieza.include) continue;
     const sub = resolverGuion(pieza.include, leer, vistos);
-    eventos.push(...sub.eventos);
+    for (const ev of sub.eventos) meter(ev);
     preload.push(...sub.preload);
     faltan.push(...sub.faltan);
   }

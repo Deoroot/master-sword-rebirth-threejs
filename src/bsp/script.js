@@ -1692,6 +1692,19 @@ export function iaDe(f) {
     /** Avisar a los aliados. El alcance sale de la vida máxima, ver `reaccion.js`. */
     noAvisa: num(v("NO_ALERT_ALLIES")) === 1,
     /**
+     * `HAS_AI` (el 95): si el guion hereda una de las dos IA de ataque. Lo
+     * escriben ellas y nadie más en los 2 884 guiones —`setvar HAS_AI 1`,
+     * base_npc_attack.script:5 y base_npc_attack_new.script:81— en el bloque
+     * sin nombre, o sea al nacer. Lo leen `game_death` para avisar a los
+     * aliados (`if HAS_AI`, base_npc.script:170) y, sin leerlo, todo lo que
+     * cuelga del `game_struck` de esas bases (huir, encogerse, devolver el
+     * golpe): quien no las incluye no tiene esos eventos. El aldeano
+     * (`NPCs/default_human`, `NPCs/default_dwarf`) incluye `base_npc` y
+     * `base_civilian` y ninguna de las dos: sus `CAN_FLEE`/`FLEE_HEALTH`/
+     * `CAN_FLINCH` son constantes que no lee nadie. Ver doc/ALDEANOS_95.md.
+     */
+    tieneIA: num(va("HAS_AI")) === 1,
+    /**
      * LA EXPERIENCIA BASE (el 93). No es `NPC_GIVE_EXP` al final del
      * nacimiento: `npcatk_set_skill` (base_self_adjust.script:264-500) la pasa
      * a `skilllevel`, le aplica `expadj` —el «+1» de la errata, la rebaja, el
@@ -1759,6 +1772,47 @@ export function iaDe(f) {
     cicloOcioso: num(va("CYCLE_TIME_IDLE")),
     cicloCombate: num(va("CYCLE_TIME_BATTLE")),
     cicloNpc: num(va("CYCLE_TIME_NPC")),
+    /**
+     * EL PRIMER PENSAMIENTO (el 95): cuántos segundos después de NACER corre
+     * la primera caza de verdad. Hasta el 94 `Cazador` nacía con el reloj a
+     * cero y pensaba en el primer paso; en el mod las dos bases esperan, y
+     * cada una lo suyo:
+     *
+     *   NUEVA. `game_spawn` llama a `npc_spawn` (base_npc.script:21-24), y
+     *   ése programa la caza con su constante:
+     *
+     *       const NPC_SPAWN_PRED2 0.75          base_npc_attack_new.script:92
+     *       callevent NPC_SPAWN_PRED2 npcatk_hunt                       :148
+     *
+     *   VIEJA. No tiene ninguna llamada: su `hunting_mode_go` lleva
+     *   `repeatdelay CYCLE_TIME` (base_npc_attack.script:62-63), que al cargar
+     *   se resuelve con `SCRIPTCONST` (script.cpp:5377-5381); `CYCLE_TIME` es
+     *   un `setvard` y no una constante, `atof` da 0 y el evento corre en el
+     *   PRIMER fotograma. Pero ahí aborta: `if NPC_INITIALIZED` (:71, un `if`
+     *   viejo, que abandona el bloque — el 67), y `NPC_INITIALIZED` lo pone
+     *   `npcatk_get_postspawn_properties` (:57), que `game_spawn` programa a
+     *   `$randf(0.5,1.0)` (:40). El `repeatdelay` se vuelve a correr como
+     *   comando (`KeepCmd`, scriptcmds.cpp:5125-5131) con el `CYCLE_TIME` de
+     *   entonces —el ocioso, 2,8 (:7, :13)—, así que la primera caza que pasa
+     *   de esa línea es la de los 2,8 s. Vale mientras el ciclo sea ≥ 1,0 (el
+     *   tope del `$randf`): con uno más corto la primera sería el primer
+     *   múltiplo del ciclo después de un instante al azar, y eso no se sabe al
+     *   hornear. Ningún guion de la vieja lo acorta en los 2 884 (el 95 los
+     *   contó: sólo `summon/base_summon` y `summon/snake_cursed` ponen
+     *   `CYCLE_TIME_IDLE`, y los dos son de la nueva). Si apareciera, `null`.
+     *
+     * Se distingue la base por la constante de la nueva, que no la escribe
+     * nadie más (`NPC_SPAWN_PRED2` sólo sale en base_npc_attack_new.script).
+     * `null` sin base: el aldeano no tiene `npcatk_hunt` en el mod, y lo que
+     * haga `Cazador` con él no tiene cita (ver `cicloOcioso`).
+     */
+    primerPensamiento: (() => {
+      const nueva = num(va("NPC_SPAWN_PRED2"));
+      if (nueva !== null) return nueva;
+      if (num(va("CYCLE_TIME_IDLE")) === null) return null;
+      const ct = num(va("CYCLE_TIME"));
+      return ct !== null && ct >= 1.0 ? ct : null;
+    })(),
     /**
      * LAS QUE NO SE SABEN (el 93): de las variables que lee esta ficha, las
      * que al nacer dependen de una condición que este lector no puede evaluar.
@@ -1843,6 +1897,14 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       // del `[override]` no se puede aplicar sobre la marcha: sólo se sabe al
       // acabar el árbol.
       acc.bloque++;
+      // EL 98, MEDIDO Y NO APLICADO: `local reg.attack.*` es una variable LOCAL
+      // del evento (`Event.SetLocal`, scriptcmds.cpp:6577-6578) que se borra al
+      // acabarlo (`Event.m_Variables.clearitems()`, script.cpp:5696), y
+      // `RegisterAttack` la lee del evento EN CURSO (`GetVar`, script.cpp:4404).
+      // Aquí `acc.ataque` NO se vacía entre bloques, así que el `registerattack`
+      // a pelo de `bows_base` (bows_base.script:34) sale como copia del anterior
+      // y no como el ataque vacío —tipo strike-land, teclas sin poner— que es en
+      // el motor. Vaciarlo aquí cambia 53 armas: ver doc/ARMAS_98.md.
       const cab = cabeceraDe(pieza.lineas);
       // `lineas` se guarda desde el 71: el cuerpo del suelo de un objeto no es
       // una constante, son las órdenes de su `game_fall` — ver `caidaDe`.
@@ -1865,11 +1927,30 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       if (!recogerObjeto(raiz, limpio, vistos, profundidad + 1, acc)) acc.faltan.push(limpio);
       continue;
     }
-    for (const l of pieza.lineas) {
+    // EL 98: las condiciones de cada `{ }` anidado, para saber bajo qué `if`
+    // se registra un ataque. Se recorre `crudo` (con las llaves) y no `lineas`
+    // (aplanado); para todo lo demás son las mismas líneas. Ver `condicionDeAtaque`.
+    //
+    // Dos clases de `if`, y las dos cuentan:
+    //   - el NUEVO, `if ( X )` con su `{ }` detrás: manda sobre lo de dentro;
+    //   - el VIEJO, `if X` sin paréntesis: si falla, `break` — abandona el RESTO
+    //     de la lista de órdenes en que está (`if (!Cmd.m_NewConditional) break;`,
+    //     script.cpp:5754-5757). Es el de `base_ranged`: `if !CUSTOM_ATTACK`
+    //     (base_ranged.script:23) delante de su `registerattack` (:46).
+    const pila = [{ si: null, viejas: [] }];
+    let pendiente = null;
+    for (const l of pieza.crudo ?? pieza.lineas) {
+      if (l === "{") { pila.push({ si: pendiente, viejas: [] }); pendiente = null; continue; }
+      if (l === "}") { if (pila.length > 1) pila.pop(); pendiente = null; continue; }
+      // `if ( X )` SOLO en su línea: lo que viene detrás es su `{ }`.
+      const si = l.match(/^if\s*\((.*)\)\s*$/i);
+      pendiente = si ? si[1].trim() : null;
+      const vieja = !si && l.match(/^if\s+([^(].*)$/i);
+      if (vieja) pila[pila.length - 1].viejas.push(vieja[1].trim());
       const c = l.match(/^const(_ovrd)?\s+(\S+)\s+(.*)$/i);
       if (c) {
         // `const` gana el primero; `const_ovrd` existe justamente para pisar.
-        if (c[1] || !acc.constantes.has(c[2])) acc.constantes.set(c[2], c[3].trim());
+        if (c[1] || !acc.constantes.has(c[2])) acc.constantes.set(c[2], valorDeConst(c[3]));
         continue;
       }
       const campo = l.match(/^([a-z]+)\s+(.+)$/i);
@@ -1975,6 +2056,23 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       }
 
       const solo = l.trim().toLowerCase();
+      // EL 98: `groupable` PIDE un número (genericitem.cpp:1846-1863): sin él es
+      // `ERROR_MISSING_PARMS` y no hace nada, con 0 BORRA la marca, y con otro
+      // la pone y es el tope del montón (`m_MaxGroupable`). Los 64 guiones que
+      // la escriben ponen `groupable 25` o `groupable 100`, y la regla de
+      // abajo —«estar escrita ya significa que sí»— sólo casaba la palabra
+      // SOLA: salían 0 apilables de 760, y nadie lo miró porque el valor de
+      // reposo («no se apila») es plausible. Lo destapó el tope de un
+      // contenedor, que tiene una excepción para los agrupables (gipack.cpp:
+      // 256-285).
+      const gr = l.trim().match(/^groupable(?:\s+(\S+))?\s*$/i);
+      if (gr) {
+        if (gr[1] !== undefined) {
+          const n = Math.trunc(Number.parseFloat(valorDe(acc.constantes, gr[1])) || 0);
+          if (n) { acc.marcas.add("groupable"); acc.apilableHasta = n; } else { acc.marcas.delete("groupable"); acc.apilableHasta = null; }
+        }
+        continue;
+      }
       if (MARCAS_OBJETO.includes(solo)) { acc.marcas.add(solo); continue; }
       if (solo === "registerattack") {
         // Un arma puede registrar VARIOS ataques —un mandoble tiene golpe y
@@ -1982,6 +2080,10 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
         // evento se queda con el índice: si ese evento resulta no ejecutarse, el
         // ataque no existe.
         acc.evento?.registros.push(acc.ataques.length);
+        acc.condiciones.push(pila.flatMap((m) => [
+          ...(m.si !== null ? [{ cond: m.si, vieja: false }] : []),
+          ...m.viejas.map((cond) => ({ cond, vieja: true })),
+        ]));
         acc.ataques.push(new Map(acc.ataque));
       }
       if (REGISTROS[solo]) acc.registros.add(solo);
@@ -1990,6 +2092,121 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
     }
   }
   return true;
+}
+
+/**
+ * EL VALOR DE UN `const` AL CARGAR, con las comillas SIMPLES que el motor quita
+ * — el 97.
+ *
+ * Esto NO contradice lo de `caidaDe` («las comillas simples no son comillas»):
+ * aquello es el parámetro de un COMANDO, que pasa por `GetConst` y sale con sus
+ * comillas (script.cpp:349-354). Una DECLARACIÓN `const` pasa además por
+ * `GetVar`, al cargar:
+ *
+ *     VarValue = msstring(GETCONST_COMPATIBLE(VarValue));          script.cpp:5410
+ *     #define GETCONST_COMPATIBLE( a ) ( a.c_str()[0] == '$' ? GetConst(a) : SCRIPTCONST(a) )   :41
+ *     #define SCRIPTCONST( a ) SCRIPTVAR(GetConst(a))                                         :40
+ *
+ * y `GetVar` trata un texto entre comillas simples como un LITERAL y se las
+ * quita (`Return = FullName.substr(1).thru_char("'")`, script.cpp:4406-4410).
+ * O sea que `const PROJ_DAMAGE '$rand(60,100)'` (proj_arrow_frost.script:10)
+ * guarda `$rand(60,100)` —sin comillas y sin tirar—, que es exactamente lo que
+ * guarda `const PROJ_DAMAGE $rand(30,60)` de la flecha gratis por la otra rama
+ * (`GetConst` reconstruye el `$rand(...)` sin evaluarlo, :329-342). La flecha
+ * de escarcha pega 60-100 en el juego; aquí no se leía y pegaba cero.
+ *
+ * Sólo cuando el valor ENTERO va entre comillas, que es la condición de
+ * `GetVar` (primer y último carácter). Las dobles las quita el lector de la
+ * línea antes (`thru_char("\"")`, :5408) y aquí se dejan como estaban.
+ */
+function valorDeConst(crudo) {
+  const v = String(crudo).trim();
+  if (v.length >= 2 && v[0] === "'" && v[v.length - 1] === "'") {
+    const dentro = v.slice(1);
+    const k = dentro.indexOf("'");
+    return k < 0 ? dentro : dentro.slice(0, k);
+  }
+  return v;
+}
+
+/**
+ * LO QUE CABE EN UN CONTENEDOR — el 98 (doc/INVENTARIO_98.md).
+ *
+ * `registercontainer` (genericitem.cpp:1699-1700 -> `RegisterContainer`,
+ * gipack.cpp:50-77) lee tres cosas del guion y NADA más que cuente:
+ *
+ *     PackData->MaxItems = atof(GetFirstScriptVar("reg.container.maxitem"));     :63
+ *     TokenizeString(GetFirstScriptVar("reg.container.accept_mask"), Accept…)   :69-70
+ *     TokenizeString(GetFirstScriptVar("reg.container.reject_mask"), Reject…)   :71-72
+ *
+ * El `Volume` de `reg.container.space` está COMENTADO (:57-60): el
+ * `CONTAINER_SPACE` que declaran los 22 contenedores no lo lee nadie. Y el
+ * `CONTAINER_BOH` de la bolsa menor sólo cambia su PESO (`Container_Weight`,
+ * :116-118), no lo que cabe.
+ *
+ * `pack_base` (pack_base.script:27-41) copia `CONTAINER_ITEM_ACCEPT` a
+ * `TRUE_ACCEPT` sólo si existe —`if ( CONTAINER_ITEM_ACCEPT isnot
+ * 'CONTAINER_ITEM_ACCEPT' )`, y una variable sin poner vale su propio nombre
+ * (script.cpp:4741)—, y si no deja `''`, que `GetVar` lee como la cadena vacía
+ * (:4406-4410): `TokenizeString("")` no da ningún trozo, y una lista vacía es
+ * «acepta todo» (gipack.cpp:289). Los trozos van por `;` (stackstring.h:218) y
+ * con `sscanf("%[^;]")`, que PARA en el primer trozo vacío (stackstring.cpp:
+ * 143-159).
+ *
+ * Esto no es un intérprete, y por eso hay una prueba que corre el
+ * `registercontainer` del intérprete de verdad sobre los 22 y compara
+ * (test/inventario98.test.mjs).
+ */
+function reglaDeContenedor(acc) {
+  const v = (n) => {
+    const crudo = acc.constantes.has(n) ? acc.constantes.get(n) : (acc.variables.has(n) ? acc.variables.get(n) : null);
+    return crudo === null ? null : texto(valorDe(acc.constantes, crudo));
+  };
+  const trozos = (s) => {
+    const out = [];
+    for (const t of String(s ?? "").split(";")) { if (t === "") break; out.push(t); }
+    return out;
+  };
+  return {
+    // `atof` de lo que no es un número es 0, y 0 es «sin tope» (gipack.cpp:254).
+    maximo: Math.trunc(Number.parseFloat(v("CONTAINER_MAXITEMS") ?? "0")) || 0,
+    acepta: trozos(v("CONTAINER_ITEM_ACCEPT")),
+    rechaza: trozos(v("CONTAINER_ITEM_REJECT")),
+    sinPeso: Number.parseFloat(v("CONTAINER_BOH") ?? "0") === 1,
+  };
+}
+
+/**
+ * ¿CORRE EL `{ }` DE ESTE `if`? — el 98, para los ataques registrados dentro.
+ *
+ * Esto sigue sin ser un intérprete, y por eso sólo decide UN caso: la condición
+ * de UN solo trozo que es una CONSTANTE del objeto (o su `!`). Es el caso de
+ * `polearms_base`, que registra el lanzamiento con
+ *
+ *     if ( POLE_CAN_POWER_THROW ) { ... local reg.attack.type charge-throw-projectile ... registerattack }
+ *                                                       polearms_base.script:298-322
+ *
+ * y la base declara `const POLE_CAN_POWER_THROW 0` (:117), que gana sólo si el
+ * arma no la ha declarado antes (`const` gana el PRIMERO, script.cpp:5419-5433).
+ * Con un parámetro el `if` del motor es `atoi(Value) != 0`, y el `!` lo da la
+ * vuelta (`ScriptCmd_If`, scriptcmds.cpp:3963-3978).
+ *
+ * Devuelve `true`/`false` si lo sabe y `null` si no: una variable (`setvard`),
+ * un `$get` o una comparación dependen de la partida, y eso se deja como
+ * estaba —el ataque se queda—, que es lo que este lector hacía con todos.
+ */
+export function condicionDeAtaque(constantes, cond) {
+  const t = String(cond ?? "").trim();
+  if (!t || /\s/.test(t)) return null;
+  const no = t[0] === "!";
+  const nombre = no ? t.slice(1) : t;
+  if (!constantes.has(nombre)) return null;
+  const v = String(valorDe(constantes, nombre)).trim();
+  // Lo que queda tiene que ser un número: si es otro nombre sin resolver, o un
+  // `$rand(...)`, no se sabe.
+  if (!/^[+-]?\d/.test(v)) return null;
+  const si = parseInt(v, 10) !== 0;
+  return no ? !si : si;
 }
 
 /** Resuelve una constante que a su vez puede ser otra constante. */
@@ -2151,7 +2368,7 @@ export function caidaDe(lineas, resolver) {
     const c = resolver(limpio);
     return c === null || c === undefined ? limpio : String(c);
   };
-  let cuerpo = null, modelo = null, animacion = null, motivo = null;
+  let cuerpo = null, modelo = null, animacion = null, motivo = null, borra = false;
   let saltando = false, dentroDeIf = false, teniaElse = false;
 
   const orden = (l) => {
@@ -2173,6 +2390,13 @@ export function caidaDe(lineas, resolver) {
       vars.set(String(m[1]).trim(), `${val(m[1]) ?? ""}${String(m[2]).trim().replace(/^"(.*)"$/s, "$1")}`); return true;
     }
     if ((m = t.match(/^playanim\s+(\S+)/i))) { animacion = val(m[1]); return true; }
+    // EL 97: `deleteme` en un `game_fall`. `FallInit` llama a `game_fall`
+    // (genericitem.cpp:1386-1389) y `deleteme` hace `game_deleted` +
+    // `DelayedRemove()` (scriptcmds.cpp:2874-2884): el objeto se borra en el
+    // mismo instante en que se suelta y no llega a posarse. Los guanteletes de
+    // hierro (blunt_gauntlets_fe1.script:242-244). Se apunta y se sigue: lo de
+    // después no se ve, pero el evento se lee entero.
+    if (/^deleteme$/i.test(t)) { borra = true; return true; }
     if ((m = t.match(/^setmodelbody\s+(\d+)\s+(\S+)$/i))) {
       // El primer parámetro es el `bodypart`, y los objetos de MSR tienen uno.
       if (Number(m[1]) !== 0) { motivo = `'${t}' toca el bodypart ${m[1]}`; return false; }
@@ -2220,7 +2444,7 @@ export function caidaDe(lineas, resolver) {
   if (!motivo && dentroDeIf && !teniaElse) {
     motivo = "un `if` en bloque sin `else`: no se sabe dónde acaba la rama";
   }
-  return { cuerpo: motivo ? null : cuerpo, modelo, animacion, motivo };
+  return { cuerpo: motivo ? null : cuerpo, modelo, animacion, motivo, borra };
 }
 
 /**
@@ -2272,7 +2496,7 @@ function condicion(txt, val) {
 export function leerFichaObjeto(raiz, ruta) {
   const acc = {
     constantes: new Map(), ficha: new Map(), marcas: new Set(),
-    registros: new Set(), ataque: new Map(), ataques: [], ficheros: [], faltan: [],
+    registros: new Set(), ataque: new Map(), ataques: [], condiciones: [], ficheros: [], faltan: [],
     variables: new Map(), ranuras: new Set(), mano: null,
     proyectil: new Map(), gravedad: null, gravedadEnMano: null,
     bloque: 0, evento: null, eventos: [],
@@ -2318,7 +2542,31 @@ export function leerFichaObjeto(raiz, ruta) {
   const usados = new Set();
   for (const e of alcanzados) for (const i of e.registros) usados.add(i);
   const fantasmas = acc.ataques.length - usados.size;
-  acc.ataques = acc.ataques.filter((_, i) => usados.has(i));
+  // EL 98: y un ataque registrado DENTRO de un `if ( CONST )` falso no existe.
+  // Ver `condicionDeAtaque`.
+  //
+  // Los de detrás de un `if` VIEJO falso tampoco existen en el motor, pero esos
+  // SE APUNTAN Y NO SE QUITAN todavía: son 56 ataques en 41 armas y 2 bases (los `charge`
+  // de serie de `base_melee` en las que registran el suyo, el tiro de
+  // `base_ranged` en los arcos con `CUSTOM_ATTACK`...), y quitarlos cambia el
+  // combate de armas que otras sondas miden. `ataquesTrasIfViejo` los cuenta;
+  // decidirlo es del integrador (doc/ARMAS_98.md).
+  const condicionados = [];
+  const trasIfViejo = [];
+  const vale = (i) => {
+    let viejaFalsa = null;
+    for (const { cond, vieja } of acc.condiciones[i] ?? []) {
+      const r = condicionDeAtaque(acc.constantes, cond);
+      if (r !== false) continue;
+      const fila = { tipo: acc.ataques[i].get("type") ?? null, condicion: cond };
+      if (vieja) { viejaFalsa ??= fila; continue; }
+      condicionados.push(fila);
+      return false;
+    }
+    if (viejaFalsa) trasIfViejo.push(viejaFalsa);
+    return true;
+  };
+  acc.ataques = acc.ataques.filter((_, i) => usados.has(i) && vale(i));
 
   const k = (n) => valorDe(acc.constantes, acc.constantes.get(n));
   // Igual que `k`, pero devolviendo `null` cuando lo que queda es el nombre de
@@ -2337,9 +2585,11 @@ export function leerFichaObjeto(raiz, ruta) {
   const caida = (() => {
     const bloques = vivos.filter((e) => e.nombre === "game_fall");
     if (!bloques.length) return { cuerpo: null, modelo: null, animacion: null, motivo: "no tiene `game_fall`" };
-    const out = { cuerpo: null, modelo: null, animacion: null, motivo: null };
+    const out = { cuerpo: null, modelo: null, animacion: null, motivo: null, borra: false };
     for (const e of bloques) {
       const r = caidaDe(e.lineas, c);
+      // El 97: un `deleteme` cuenta aunque el resto del evento no se entienda.
+      if (r.borra) out.borra = true;
       if (r.motivo) { out.motivo ??= r.motivo; continue; }
       if (r.cuerpo !== null) out.cuerpo = r.cuerpo;
       if (r.modelo) out.modelo = r.modelo;
@@ -2383,7 +2633,11 @@ export function leerFichaObjeto(raiz, ruta) {
     vestible: acc.marcas.has("wearable"),
     ranuras: [...acc.ranuras],
     apilable: acc.marcas.has("groupable"),
+    /** El 98: `m_MaxGroupable`, el número de `groupable <n>`. */
+    apilableHasta: acc.marcas.has("groupable") ? (acc.apilableHasta ?? null) : null,
     usable: acc.marcas.has("useable"),
+    // EL 98: QUÉ CABE DENTRO, si es un contenedor. Ver `reglaDeContenedor`.
+    contenedor: tipos.includes("contenedor") ? reglaDeContenedor(acc) : null,
     // La mano que pide, con el número del motor. `null` si no lo dice.
     mano: acc.mano,
     manoNumero: MANOS[acc.mano] ?? null,
@@ -2442,6 +2696,8 @@ export function leerFichaObjeto(raiz, ruta) {
       animacionSuelo: caida.animacion ?? null,
       /** Por qué no se ha podido leer, cuando no se ha podido. Se cuenta. */
       sueloSinLeer: caida.motivo ?? null,
+      /** El 97: su `game_fall` hace `deleteme` — se borra al soltarlo. */
+      seBorraAlCaer: caida.borra,
     },
     sonidos: {
       blandir: c("SOUND_SWIPE"),
@@ -2544,6 +2800,24 @@ export function leerFichaObjeto(raiz, ruta) {
         aoeCaida: numeroDe(g("aoe.falloff")),
         // Un arco no lleva daño: lo lleva su FLECHA. Aquí queda dicho cuál.
         proyectil: g("projectile") ?? null,
+        /**
+         * EL 97: `reg.attack.ammodrain`, y vale 1 si no se escribe:
+         *
+         *     attData.iAmmoDrain = !strcmp(GetFirstScriptVar("reg.attack.ammodrain"),
+         *       "reg.attack.ammodrain") ? 1 : atoi(...);           giattack.cpp:497
+         *
+         * Con 0 el tiro NO busca munición en la mochila: «Attack spawns ammo -
+         * Player doesn't carry it» y el proyectil sale del catálogo POR SU NOMBRE
+         * (giattack.cpp:910-911 y :1046-1052). Es lo que hacen las lanzas de asta
+         * (`proj_pole_*`, polearms_base.script:301), la del Unholy Blade y la
+         * esfera de los arcos élficos. Sin esto el puerto buscaba `proj_pole_ti`
+         * en la mochila, no lo encontraba y tiraba la FLECHA GRATIS.
+         */
+        gastaMunicion: (() => {
+          const v = a.get("ammodrain");
+          if (v === undefined || v === null) return 1;
+          return atoi(resueltoO(acc.constantes, v) ?? "0");
+        })(),
         // ── LOS DOS TIEMPOS DE TENSAR ──────────────────────────────────────
         //
         //     TokenizeString( GetFirstScriptVar("reg.attack.hold_min&max"), … )
@@ -2608,6 +2882,22 @@ export function leerFichaObjeto(raiz, ruta) {
       seClavaEnPared: numeroDe(k("PROJ_STICK_ON_WALL_NEW")) === 1,
       /** El submodelo de `arrows.mdl` — once flechas en un fichero. */
       submodelo: numeroDe(k("ARROW_BODY_OFS")) ?? numeroDe(k("MODEL_BODY_OFS")) ?? 0,
+      /**
+       * EL 97: `HITSCAN_BOLT`, la saeta de ballesta que NO vuela para hacer
+       * daño. `proj_base` le pone el daño del motor a CERO
+       * (`else local reg.proj.dmg 0`, proj_base.script:55-56) y en
+       * `game_tossprojectile` —dentro de `TossProjectile`, antes de su primer
+       * `Think`— corre `hitscan_bolt` (:105, :180-249): un rayo de 8 000
+       * unidades y el daño directo. Ver `src/play/proyectilguion.js`.
+       * `dano` sigue siendo `PROJ_DAMAGE`, que es la base de ese daño.
+       */
+      instantanea: numeroDe(k("HITSCAN_BOLT")) === 1,
+      /**
+       * `HEAVY_ONLY` (sólo `proj_bolt_steel`): instantánea sólo si la ballesta
+       * se llama «Heavy…» o «Steam…»; si no, vuela y pega como una flecha con
+       * su `PROJ_DAMAGE` (proj_base.script:57 y :182-198).
+       */
+      soloPesada: numeroDe(k("HEAVY_ONLY")) === 1,
     } : null,
     // ── EL ESCUDO ──────────────────────────────────────────────────────────
     //
@@ -2663,6 +2953,10 @@ export function leerFichaObjeto(raiz, ruta) {
     faltan: acc.faltan,
     /** Cuántos ataques se han tirado por un `[override]`. Cero en casi todo. */
     ataquesFantasma: fantasmas,
+    /** EL 98: los que se tiran por estar dentro de un `if ( CONST )` falso, con su condición. */
+    ataquesCondicionados: condicionados,
+    /** EL 98: los que el motor tampoco registra (detrás de un `if` viejo falso) y aquí SIGUEN. */
+    ataquesTrasIfViejo: trasIfViejo,
   };
   // `arma` es el ataque principal, que es el primero que se registra. Se deja
   // aparte de `ataques` porque casi todo el mundo quiere sólo ése.

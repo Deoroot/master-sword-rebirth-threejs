@@ -18,7 +18,7 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -29,9 +29,8 @@ const PORT = 5204;
 // de otro. Ver `sondas/mismo.mjs`.
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 6000));
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
@@ -120,6 +119,21 @@ console.log(`  postura: ${sube.antes} -> ${sube.postura} (t=${sube.arriba.t.toFi
 control("levantar el escudo cambia la postura a arriba", sube.postura === "arriba", sube.postura);
 control("y pone la animación de empujar, no la de parado",
   sube.animacion === "thrust1", `'${sube.animacion}'`);
+
+// EL 99: QUE NO SALGA DEL REVÉS. Espejado y con el sentido de giro mal, el
+// escudo se dibuja por la cara de dentro —el brazo hueco, las correas a trozos—
+// y todo lo de arriba sigue verde. Se compara lo que dibuja el juego con lo que
+// se vería de un objeto macizo (`probe.vista.caras`). El arma, que no va
+// espejada, es el control positivo: dice que el instrumento sabe dar un sí.
+const caras = await pag.evaluate(() => ({
+  escudo: window.probe.vista.caras("escudo"), arma: window.probe.vista.caras("arma"),
+}));
+const pct = (c) => c ? `${(c.fraccion * 100).toFixed(1)} % de ${c.pixeles} px${c.espejado ? ", espejado" : ""}` : "—";
+console.log(`  caras a la vista: escudo ${pct(caras.escudo)}  |  arma ${pct(caras.arma)}`);
+control("el arma, sin espejar, enseña su cara de fuera (control positivo)",
+  Boolean(caras.arma) && !caras.arma.espejado && caras.arma.pixeles > 100 && caras.arma.fraccion > 0.9, pct(caras.arma));
+control("el escudo levantado, ESPEJADO, también: no sale del revés",
+  Boolean(caras.escudo) && caras.escudo.espejado && caras.escudo.pixeles > 100 && caras.escudo.fraccion > 0.9, pct(caras.escudo));
 
 // EL FALLO 3: `tDuration = -1` pisa el `MELEE_ATK_DURATION 1.0` del script. Con
 // la duración del script el escudo se caería al segundo de levantarlo.

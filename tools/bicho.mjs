@@ -460,6 +460,41 @@ const ANIMA = [
   /^setmoveanim\s+(\S+)/i,
   /^playanim\s+\S+\s+(\S+)/i,
 ];
+/**
+ * EL 98: la ORDEN de una línea sin su condición de cabeza. Una línea de
+ * guion puede llevar delante un `if ( … )` —el `if` nuevo, con paréntesis, que
+ * guarda una sola orden (script.cpp:5310-5322)— o un `else`/`else if ( … )`, y
+ * así es como los guiones cambian `ANIM_ATTACK` entre golpes:
+ *
+ *     if ( $rand(1,100) < ATTACK2_CHANCE ) setvard ANIM_ATTACK ANIM_LEAP
+ *                                         dwarf_zombie_random.script:303
+ *     else if( NEXT_ATTACK == 1 ) setvard ANIM_ATTACK ANIM_LEFT
+ *                                         boar_base.script:107
+ *
+ * `ASIGNA` y `ANIMA` van anclados al principio de la línea y no veían ninguna
+ * de las dos: el salto del zombi enano (`attack2`) y las cornadas de lado del
+ * jabalí no se horneaban, y el visor habría caído a la secuencia 0. El 78 otra
+ * vez —*una lista blanca sólo mira donde sabe mirar*—, y esta vez el nombre
+ * estaba en la misma línea, a la derecha de un paréntesis.
+ */
+function sinCondicion(l) {
+  let s = l.trim();
+  for (let vueltas = 0; vueltas < 4; vueltas++) {
+    const e = s.match(/^else\b\s*/i);
+    if (e) { s = s.slice(e[0].length); continue; }
+    const m = s.match(/^if\s*\(/i);
+    if (!m) break;
+    // El paréntesis de cierre que casa con el de apertura.
+    let hondo = 0, k = m[0].length - 1;
+    for (; k < s.length; k++) {
+      if (s[k] === "(") hondo++;
+      else if (s[k] === ")" && --hondo === 0) break;
+    }
+    if (hondo !== 0) break;
+    s = s.slice(k + 1).trim();
+  }
+  return s;
+}
 function lineasDelGuion(raiz, rutaScript, vistos = new Set(), hondo = 0, lineas = []) {
   // Mismo tope de profundidad que `recoger` (src/bsp/script.js:315).
   if (hondo > 8) return lineas;
@@ -484,7 +519,8 @@ export function animacionesDelGuion(raiz, rutaScript) {
   const sinResolver = new Set();
   const valores = new Map();        // variable -> Set de valores asignados
   const pedidas = new Set();
-  for (const l of lineas) {
+  for (const crudo of lineas) {
+    const l = sinCondicion(crudo);
     const a = l.match(ASIGNA);
     if (a) {
       if (!valores.has(a[1])) valores.set(a[1], new Set());

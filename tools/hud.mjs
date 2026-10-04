@@ -189,6 +189,28 @@ if (existsSync(CARPETA_ESTADO)) {
   }
 }
 
+// EL 95: LAS IMÁGENES DE `hud.addimgicon`. El guion da un NOMBRE y el cliente
+// lo busca en `gfx/vgui/<nombre>.tga` (`VGUI_Image3D::LoadImg`,
+// render/clrender.cpp:595). Los nombres los compone el guion en marcha
+// —`$int(L_POINTS_RED)` + `_red` en el marcador del fútbol, el `$int` de una
+// cuenta atrás—, así que no hay una lista cerrada que hornear: se hornean los
+// `.tga` sueltos de `gfx/vgui/` (no las subcarpetas) y cada uno lleva su
+// tamaño. Los que el lector no sabe leer se dicen, no se callan.
+const imagen = {};
+const imagenesQueNo = [];
+const CARPETA_VGUI = `${ASSETS}/gfx/vgui`;
+if (existsSync(CARPETA_VGUI)) {
+  mkdirSync(`${SALIDA}/imagen`, { recursive: true });
+  for (const f of readdirSync(CARPETA_VGUI).filter((x) => /\.tga$/i.test(x)).sort()) {
+    const nombre = f.replace(/\.tga$/i, "");
+    let t;
+    try { t = decodificarTga(readFileSync(`${CARPETA_VGUI}/${f}`), f); } catch (e) { imagenesQueNo.push(`${f}: ${e.message}`); continue; }
+    const n = escribirPng(`${SALIDA}/imagen/${nombre}.png`, t.rgba, t.ancho, t.alto);
+    bytes += n;
+    imagen[nombre] = { archivo: `hud/imagen/${nombre}.png`, de: `gfx/vgui/${f}`, ancho: t.ancho, alto: t.alto, bpp: t.bpp, conAlfa: t.conAlfa, bytes: n };
+  }
+}
+
 // ── CONTROLES ───────────────────────────────────────────────────────────────
 const malos = [];
 const control = (que, bien, detalle = "") => {
@@ -307,6 +329,18 @@ control("a 1920×1080 miden más que el sprite original",
   }
 }
 
+// 8. EL 95: las imágenes que nombran los guiones (`hud.addimgicon` en
+//    player/externals.script y monsters/gabe_newell.script) están horneadas.
+//    Los nombres compuestos se escriben enteros: el marcador va de 0 a 5.
+{
+  const pedidas = ["bepilepsy1", "bepilepsy2", "gabe1", "gabe2", "red", "blue", "vs", "red_wins", "blue_wins",
+    ...[0, 1, 2, 3, 4, 5].flatMap((k) => [`${k}`, `${k}_red`, `${k}_blue`])];
+  const faltan = pedidas.filter((n) => !imagen[n]);
+  control("las imágenes que piden los guiones están horneadas", faltan.length === 0,
+    faltan.length ? `faltan ${faltan.join(", ")}` : `${pedidas.length} de ${pedidas.length} (${Object.keys(imagen).length} en gfx/vgui)`);
+  if (imagenesQueNo.length) console.log(`       no leídas: ${imagenesQueNo.join(" · ")}`);
+}
+
 // ── EL FICHERO ──────────────────────────────────────────────────────────────
 writeFileSync(`${SALIDA}/../hud.json`, JSON.stringify({
   procedencia: {
@@ -318,6 +352,8 @@ writeFileSync(`${SALIDA}/../hud.json`, JSON.stringify({
   emblema,
   // EL 93: los iconos de estado, por el nombre de archivo que pone el guion.
   estado,
+  // EL 95: las imágenes de `hud.addimgicon`, por su nombre en `gfx/vgui/`.
+  imagen,
   // Los seis colores de suceso y los cvars van también aquí, para que el
   // fichero se pueda leer solo y se vea de dónde sale cada número.
   colores: COLORES_DE_SUCESO,

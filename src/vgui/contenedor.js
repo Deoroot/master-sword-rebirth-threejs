@@ -86,6 +86,14 @@ export const MEDIDAS = {
  */
 export const VISTAS = ["Tiled", "Small", "Descriptions"];
 
+/**
+ * `ms_doubleclicktime`, en segundos: `CVAR_CREATE("ms_doubleclicktime", "0.5")`
+ * (clientlibrary.cpp:174). Lo usa `VGUI_DoubleClickDetector::Click`
+ * (vgui_mscontrols.h:371-405): el MISMO botón sobre el MISMO elemento antes de
+ * que pase este tiempo.
+ */
+export const DOBLE_CLIC = 0.5;
+
 /** Los colores, de `vgui_container.cpp:36-40` y del constructor del panel. */
 export const COLORES = {
   titulo: [255, 100, 100, 0],         // Color_TitleText — el salmón
@@ -139,9 +147,19 @@ export const CSS = `
  * @param actuar     `(idEquipo, idObjeto) => string|null`, y devuelve el aviso
  * @param oro        `() => number`
  * @param carga      `() => ({lleva, puede})`, el peso y el `Volume()`
+ *
+ * Y las tres órdenes del 97 (src/play/equipar.js), opcionales: sin ellas el
+ * panel se comporta como antes, que es lo que necesita la tienda que hereda.
+ *
+ * @param quitar     `(idEquipo) => string|null` — `remove <id>`; el texto es un aviso
+ * @param sacar      `(idEquipo, idObjeto) => string|null` — `inv transfer <id> 0`
+ * @param llevarA    `(idEquipo, idObjeto, desdeLasManos) => bool` — `inv transfer
+ *                   <id> <c>`; `false` es «no era un contenedor», y el clic elige
+ * @param reloj      `() => segundos`, para el doble clic
  */
 export class PanelDeInventario extends PanelConNombre {
-  constructor({ esquema, equipo, dentro, actuar = () => null, oro = () => 0, carga = () => null }) {
+  constructor({ esquema, equipo, dentro, actuar = () => null, oro = () => 0, carga = () => null,
+    quitar = null, sacar = null, llevarA = null, reloj = () => performance.now() / 1000 }) {
     super({
       nombre: NOMBRE,
       // El original no le pone `MENUFLAG_CLOSEONESC` —se cierra con su botón—
@@ -153,6 +171,9 @@ export class PanelDeInventario extends PanelConNombre {
     this.esquema = esquema;
     this.equipo = equipo; this.dentro = dentro; this.actuar = actuar;
     this.oro = oro; this.carga = carga;
+    this.quitar = quitar; this.sacar = sacar; this.llevarA = llevarA; this.reloj = reloj;
+    /** `VGUI_DoubleClickDetector`: qué se pulsó la última vez y cuándo. */
+    this._ultimoClic = null;
     this.elegidoEquipo = 0;
     this.elegidoObjeto = null;
     this.aviso = "";
@@ -293,8 +314,75 @@ export class PanelDeInventario extends PanelConNombre {
    * cerrar (vgui_storebuy.cpp:68-76). El gancho es del 60, con la tienda.
    */
   alPulsarObjeto(o) {
-    this.elegidoObjeto = o.id;
+    // Sin las órdenes del 97, elegir y nada más (lo de siempre).
+    if (!this.sacar) {
+      this.elegidoObjeto = o.id;
+      this.refrescar();
+      return;
+    }
+    // EL 97. `CHandler_ItemButton::mousePressed` (vgui_mscontrols.cpp:327-343):
+    // es doble clic si el detector lo dice Y el objeto ya estaba elegido —el
+    // primer clic lo eligió—; si no, `Clicked()` -> `Select(!m_Selected)`
+    // (:519-523), o sea que un clic sobre el elegido lo DESELECCIONA.
+    if (this._doble(`o:${o.id}`) && this.elegidoObjeto === o.id) {
+      this.hacerDoble(o);
+      return;
+    }
+    this.elegidoObjeto = this.elegidoObjeto === o.id ? null : o.id;
     this.refrescar();
+  }
+
+  /** `VGUI_DoubleClickDetector::Click` (vgui_mscontrols.h:388-404). */
+  _doble(cosa) {
+    const t = this.reloj();
+    const u = this._ultimoClic;
+    if (u && u.cosa === cosa && t < u.t + DOBLE_CLIC) { this._ultimoClic = null; return true; }
+    this._ultimoClic = { cosa, t };
+    return false;
+  }
+
+  /** `ItemDoubleclicked` (vgui_containerlist.cpp:199-221): a la mano, y se cierra. */
+  hacerDoble(o) {
+    const e = this.equipo?.() ?? [];
+    const cual = e[this.elegidoEquipo] ?? null;
+    // `if (m_GearPanel->m_Selected == 0) return;` — con las manos, nada.
+    if (!cual || this.elegidoEquipo === 0) return;
+    this.elegidoObjeto = null;                      // `UnSelectAllItems()`
+    this.aviso = this.sacar?.(cual.id, o.id) ?? "";
+    this._cerrarTrasOrden();
+  }
+
+  /** `gViewPort->HideTopMenu()`, que hacen las tres órdenes que mandan algo. */
+  _cerrarTrasOrden() {
+    if (this.aviso) { this.refrescar(); return; }   // si no se mandó nada, se queda abierto y lo dice
+    this.registro?.cerrar() ?? this.cerrar();
+  }
+
+  /**
+   * UN CLIC EN LA COLUMNA DEL EQUIPO. `CHandler_GearButton::mousePressed`
+   * (vgui_container.cpp:58-71) y `GearItemClicked` (vgui_containerlist.cpp:
+   * 288-327, vgui_container.cpp:232-243): con un objeto elegido, el clic lo
+   * LLEVA ahí; sin objeto, o si ahí no se puede llevar, elige la entrada. Y
+   * dos clics seguidos en una pieza puesta se la quitan (`GearItemDoubleClicked`,
+   * vgui_containerlist.cpp:329-341).
+   */
+  alPulsarEquipo(i, g) {
+    if (this.quitar && this._doble(`e:${g.id}`)) {
+      if (!g.esContenedor) {
+        this.aviso = this.quitar(g.id) ?? "";
+        this._cerrarTrasOrden();
+        return;
+      }
+    }
+    if (this.llevarA && this.elegidoObjeto !== null) {
+      const desdeLasManos = this.elegidoEquipo === 0;
+      if (this.llevarA(g.id, this.elegidoObjeto, desdeLasManos)) {
+        this.elegidoObjeto = null;
+        this.refrescar();
+        return;
+      }
+    }
+    this.elegidoEquipo = i; this.elegidoObjeto = null; this.refrescar();
   }
 
   /** Lo que hay dentro del contenedor elegido ahora, en el orden que toque. */
@@ -356,9 +444,20 @@ export class PanelDeInventario extends PanelConNombre {
   hacer() {
     const e = this.equipo?.() ?? [];
     const cual = e[this.elegidoEquipo] ?? null;
+    // EL 97: sin objeto elegido, «Remove» es `RemoveGear` -> `remove <id>`
+    // (vgui_containerlist.cpp:110-121, :170-175). Con las manos no hay botón.
+    if (cual && this.elegidoObjeto === null && this.quitar && this.elegidoEquipo !== 0) {
+      this.aviso = this.quitar(cual.id) ?? "";
+      this._cerrarTrasOrden();
+      return true;
+    }
     if (!cual || this.elegidoObjeto === null) return false;
     this.aviso = this.actuar?.(cual.id, this.elegidoObjeto) ?? "";
     this.elegidoObjeto = null;
+    // EL 98: «Drop Selected» es `DropAllSelected`, que acaba en `HideTopMenu`
+    // (vgui_containerlist.cpp:177-186). Sólo con las órdenes del 97 puestas: la
+    // tienda hereda este panel y ahí el botón no suelta nada.
+    if (this.sacar) { this._cerrarTrasOrden(); return true; }
     this.refrescar();
     return true;
   }
@@ -408,9 +507,8 @@ export class PanelDeInventario extends PanelConNombre {
       // `Color_GearNonContainer`: lo que no es un contenedor se ve más apagado,
       // porque no se puede abrir.
       if (!g.esContenedor) fila.style.color = "rgb(160, 160, 160)";
-      fila.addEventListener("click", () => {
-        this.elegidoEquipo = i; this.elegidoObjeto = null; this.refrescar();
-      });
+      fila.dataset.id = String(g.id);
+      fila.addEventListener("click", () => this.alPulsarEquipo(i, g));
       this.listaEquipo.appendChild(fila);
     }
 

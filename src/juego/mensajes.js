@@ -46,8 +46,8 @@ import {
 // regla —qué lee el servidor, qué hace el cliente con ello— está allí, con la
 // curva del motor (`V_FadeAlpha`) y el `VGUI_Status` del mod.
 import {
-  fundidoAlLlegar, alfaDelFundido, pinturaDelFundido,
-  IconosDeEstado, ICONOS, archivoDeIcono,
+  fundidoAlLlegar, alfaDelFundido, pinturaDelFundido, fundidoTrasLaVista,
+  IconosDeEstado, ICONOS, archivoDeIcono, archivoDeImagen,
 } from "../play/efectospantalla.js";
 
 /**
@@ -79,6 +79,8 @@ const CSS = `
 .ms-estado > img { position: absolute; left: 0; top: 0; width: ${ICONOS.anchoImagen}px;
   height: ${ICONOS.altoImagen}px; image-rendering: pixelated; }
 .ms-estado > i { position: absolute; left: 0; top: ${ICONOS.altoImagen}px; height: ${ICONOS.alto - ICONOS.altoImagen}px; }
+.ms-imagen { position: absolute; }
+.ms-imagen > img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
 `;
 
 const el = (tag, clase = "") => {
@@ -132,6 +134,8 @@ export function montarMensajes({ raiz = document.body, base = "" } = {}) {
   const iconos = new IconosDeEstado();
   /** El `div` de cada icono vivo, por su nombre (el `m_Name` del motor). */
   const nodosDeIcono = new Map();
+  /** EL 95: el `div` de cada imagen de `hud.addimgicon`, por su nombre. */
+  const nodosDeImagen = new Map();
   /** Los brillos que han llegado: se cuentan y NO se dibujan (primera persona). */
   const brillos = [];
 
@@ -359,6 +363,11 @@ export function montarMensajes({ raiz = document.body, base = "" } = {}) {
 
   function pintarVelo() {
     // La curva del motor, `V_FadeAlpha`, y su forma de pintar (el 93).
+    // EL 95: y ANTES, lo que Master Sword le hace al fundido cada vez que
+    // calcula la vista —`Effects_GetFade` le borra las banderas—, que en un
+    // fotograma del motor va entre leer el mensaje y pintarlo. Por eso aquí y
+    // no en `pantalla`: es de cada fotograma, no de cada mensaje.
+    if (fundido) fundidoTrasLaVista(fundido);
     const p = fundido ? pinturaDelFundido(fundido, alfaDelFundido(fundido, reloj)) : null;
     velo.style.mixBlendMode = p?.modo === "multiplica" ? "multiply" : "";
     velo.style.background = p
@@ -428,6 +437,43 @@ export function montarMensajes({ raiz = document.body, base = "" } = {}) {
       n.style.top = `${v.y}px`;
       n.lastChild.style.width = `${Math.max(0, v.anchoBarra)}px`;
     }
+    pintarImagenes();
+  }
+
+  /**
+   * EL 95. Las imágenes de `hud.addimgicon`: un TGA de `gfx/vgui/` estirado al
+   * rectángulo que da `pasoDeImagenes`, en porcentajes de la pantalla. La
+   * pantalla es esta capa (`ScreenWidth`/`ScreenHeight` del motor).
+   */
+  function pintarImagenes() {
+    const w = nodo.clientWidth || window.innerWidth;
+    const h = nodo.clientHeight || window.innerHeight;
+    const vivas = iconos.pasoDeImagenes(reloj, w, h);
+    const quedan = new Set(vivas.map((v) => v.nombre));
+    for (const [nombre, n] of nodosDeImagen) {
+      if (!quedan.has(nombre)) { n.remove(); nodosDeImagen.delete(nombre); }
+    }
+    for (const v of vivas) {
+      let n = nodosDeImagen.get(v.nombre);
+      if (!n) {
+        n = el("div", "ms-imagen");
+        n.dataset.icono = v.icono;
+        n.dataset.nombre = v.nombre;
+        const img = el("img");
+        img.alt = "";
+        const archivo = archivoDeImagen(v.icono);
+        // Sin horneado no hay dibujo, y el nodo lo dice: `npm run hud`.
+        img.onerror = () => { n.dataset.falta = "1"; img.hidden = true; };
+        if (archivo) img.src = `${base}${archivo}`; else { n.dataset.falta = "1"; img.hidden = true; }
+        n.appendChild(img);
+        nodo.appendChild(n);
+        nodosDeImagen.set(v.nombre, n);
+      }
+      n.style.left = `${v.x}px`;
+      n.style.top = `${v.y}px`;
+      n.style.width = `${v.ancho}px`;
+      n.style.height = `${v.alto}px`;
+    }
   }
 
   /**
@@ -479,7 +525,7 @@ export function montarMensajes({ raiz = document.body, base = "" } = {}) {
         pintarVelo();
       }
     }
-    if (nodosDeIcono.size || iconos.lista.length) pintarIconos();
+    if (nodosDeIcono.size || iconos.lista.length || nodosDeImagen.size || iconos.imagenes.length) pintarIconos();
 
     if (centrado) {
       centrado.t += dt;
@@ -546,6 +592,19 @@ export function montarMensajes({ raiz = document.body, base = "" } = {}) {
           };
         }),
         brillos: brillos.length,
+        // EL 95: las imágenes de `hud.addimgicon`, también LEÍDAS DEL DOM.
+        imagenes: [...nodosDeImagen.values()].map((n) => {
+          const r = n.getBoundingClientRect();
+          const img = n.firstChild;
+          return {
+            nombre: n.dataset.nombre, icono: n.dataset.icono,
+            falta: n.dataset.falta === "1",
+            cargada: Boolean(img?.complete && img.naturalWidth > 0),
+            natural: img ? [img.naturalWidth, img.naturalHeight] : null,
+            src: img?.getAttribute("src") ?? null,
+            x: Math.round(r.left), y: Math.round(r.top), ancho: Math.round(r.width), alto: Math.round(r.height),
+          };
+        }),
         centrado: {
           visible: !centro.hidden,
           texto: centro.textContent,

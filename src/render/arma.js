@@ -19,10 +19,19 @@
 //
 // ── Lo que este archivo NO hace, y se nota ────────────────────────────────
 //
-//   - **No tiene su propio campo de visión.** GoldSrc dibuja el modelo de vista
-//     en una pasada aparte con su propio FOV (`cl_viewmodelfov`), y por eso en
-//     el juego la espada no se estira al cambiar el FOV. Aquí va en la escena,
-//     con el FOV de la cámara.
+//   - **No tiene su propio campo de visión, y el motor TAMPOCO.** (Corregido
+//     en el 97; lo de abajo entre comillas era lo que decía este archivo.)
+//     «GoldSrc dibuja el modelo de vista en una pasada aparte con su propio FOV
+//     (`cl_viewmodelfov`)» — falso: `cl_viewmodelfov` no existe en `../MSC/`.
+//     `R_DrawViewModel` de Xash3D (ref/gl/gl_studio.c:3675-3715) dibuja con la
+//     MISMA proyección que el mundo; lo único que cambia es el `pglDepthRange` a
+//     un 30 % (:3700-3714) para que no se meta en las paredes. El cliente de MSR
+//     no toca la proyección (src/game/client/view.cpp:388-430). El campo de
+//     visión es el del mundo: `default_fov 90` (hud.cpp:325) en horizontal sobre
+//     640x480, o sea 73,74° en VERTICAL, que el motor conserva en pantalla ancha
+//     (`V_AdjustFov`, engine/client/cl_view.c:257-279, `r_adjust_fov 1`). Aquí la
+//     cámara es de 75° vertical (src/render/scene.js): el arma sale un 2,3 % MÁS
+//     PEQUEÑA que en el juego, no más grande. Ver doc/ARMAS_97.md.
 //   - **No se recorta contra las paredes.** El motor tampoco: el modelo de
 //     vista atraviesa la pared igual.
 //   - No hay balanceo al andar (`V_CalcBob`) ni retroceso.
@@ -169,14 +178,27 @@ export async function cargarArma(carpeta, {
   // exactamente lo que se veía. Y el espejo invierte el sentido de giro de los
   // triángulos, por eso el motor pasa a dibujar las caras de atrás: sin eso la
   // malla se queda hueca por fuera.
+  //
+  // ── EL 99: EL `DRAW_BACKFACES` YA LO HACE THREE, Y AQUÍ SE HACÍA DOS VECES ──
+  //
+  // Hasta el 99 esto además pasaba los materiales a `BackSide`, copiando el
+  // `m_DrawStyle = DRAW_BACKFACES` del motor. Pero Three.js invierte él solo el
+  // sentido de giro cuando la matriz del objeto tiene determinante negativo:
+  //
+  //     const frontFaceCW = ( object.isMesh && object.matrixWorld.determinant() < 0 );
+  //     state.setMaterial( material, frontFaceCW );
+  //                          three 0.170, src/renderers/WebGLRenderer.js:750-754
+  //
+  // Con las dos inversiones el escudo salía DEL REVÉS: se veía la cara de
+  // fuera por dentro, el brazo hueco y las correas a trozos — con forma de
+  // escudo, en su sitio y con todos los controles en verde. Medido en el juego
+  // con `probe.vista.caras`: 0,0 % de los píxeles enseñaban la superficie más
+  // cercana, contra el 100 % del arma, que no va espejada. Los materiales se
+  // quedan como están; el espejo es sólo la escala.
   let espejado = false;
   const espejar = (v) => {
     espejado = Boolean(v);
     nodo.scale.x = espejado ? -1 : 1;
-    for (const m of materiales) {
-      // `DRAW_BACKFACES`. Los grupos recortados ya van a dos caras y no cambian.
-      if (m.side !== THREE.DoubleSide) m.side = espejado ? THREE.BackSide : THREE.FrontSide;
-    }
   };
 
   return {

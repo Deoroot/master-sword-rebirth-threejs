@@ -584,6 +584,25 @@ export class Suelo {
       this.salidas.push({ tipo: "objeto_sin_guion", guion, nombre });
       return null;
     }
+    // EL 97: `deleteme` en el `game_fall`. El orden del motor es: el aviso
+    // «You drop …» de `DropItem` (playershared.cpp:962), `Drop` → `FallInit` →
+    // `game_fall` (genericitem.cpp:1386-1389) y ahí `deleteme`: `game_deleted` y
+    // `DelayedRemove()` (scriptcmds.cpp:2874-2884). Sale de la mano, el jugador
+    // lee que lo ha soltado, y no llega a posarse ni a verse. Los guanteletes de
+    // hierro (blunt_gauntlets_fe1.script:242-244). Devuelve una marca, no un
+    // objeto del suelo: quien llama tiene que vaciar la mano igual.
+    if (ficha.seBorraAlCaer) {
+      this.cuentas.tirados++;
+      this.cuentas.borrados = (this.cuentas.borrados ?? 0) + 1;
+      // Un hechizo dice otra cosa —y en el motor ni llega a `FallInit`: «Dropping
+      // spells fizzles them», genericitem.cpp:1371-1376—, con el aviso de
+      // playershared.cpp:957-958. Los 31 hechizos también traen `deleteme`.
+      const hechizo = ficha.tipo === "hechizo";
+      this.salidas.push({ tipo: "objeto_soltado", i: null, guion, nombre: comoSeLlama,
+        mensaje: hechizo ? `The ${comoSeLlama} spell is canceled` : `You drop ${comoSeLlama}`, borrado: true });
+      this.salidas.push({ tipo: "objeto_borrado", guion, por: "deleteme" });
+      return { guion, borrado: true, i: null };
+    }
     const f = rumboDeSoltar(mirando);
     const o = new ObjetoSuelto({
       guion, nombre, ficha, i: this.siguiente++, tirado: true,

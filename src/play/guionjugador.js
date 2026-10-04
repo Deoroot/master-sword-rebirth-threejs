@@ -32,7 +32,8 @@
 // CORRECCIÓN DEL 89, al lado: las transiciones ya existen, así que de los cuatro
 // consejos se disparan TRES. Sólo `game_party_join` sigue sin quien lo llame.
 
-import { Guion, entornoVacio, enteroDe } from "./guion.js";
+import { Guion, entornoVacio, enteroDe, textoDeVector } from "./guion.js";
+import { leerTemblor, temblorParaJugador } from "./temblor.js";
 import { Consejos } from "./consejos.js";
 import { RelojDeGuiones } from "./npcguion.js";
 import { desplazamientoDeVista } from "./efectosdeguion.js";
@@ -240,6 +241,14 @@ export class GuionDelJugador {
     // con tope, porque un veneno largo manda un fundido por segundo).
     this._pantalla = pantalla;
     this.pantallas = [];
+    // EL 95: el cuerpo, para `effect screenshake` (¿en el suelo? ¿dentro del
+    // radio?), y cada temblor que se decidió, llegara o no — para medir el
+    // «no» también (el apartado 4: un cero necesita su positivo al lado).
+    this._fisica = fisica;
+    this.temblores = [];
+    // EL 97: `m_nopush` de `CMSMonster`, nace en falso. Lo escribe el comando
+    // `nopush` del propio guion (src/play/guion.js).
+    this.nopush = false;
 
     const dueño = this;
     this.guion = new Guion({
@@ -316,6 +325,30 @@ export class GuionDelJugador {
     // Y a sus efectos, que son guiones de la misma entidad (script.cpp:5932-5937).
     const deEfectos = this.efectos?.llamar(String(nombre), ps) ?? false;
     return propio || deEfectos;
+  }
+
+  /**
+   * EL 98: `game_damaged`, el aviso de que un golpe ha ENTRADO. Lo llama
+   * `CMSMonster::TraceAttack` (msmonsterserver.cpp:2311) sobre todos los
+   * guiones del jugador, con el atacante, el daño y el tipo (:2284-2287). El
+   * guion apunta `PL_BEEN_ATTACKED` y `LAST_STRUCK_FOR` y enseña su barra de
+   * vida (player/player_main.script:328-358).
+   *
+   * Una función y no la línea copiada: la llaman `golpear` en solitario
+   * (src/main.js), el navegador con servidor al saber por el servidor que le
+   * han dado, y el servidor para los efectos que lleva su anfitrión
+   * (`Partida._defender`, con `soloEfectos`: el guion propio del jugador corre
+   * en el navegador, doc/SERVIDOR_98.md §4).
+   *
+   * Los parámetros 4 a 6 del motor (tirada de acierto, `inflictor`, habilidad)
+   * no se pasan. De los guiones del jugador y sus efectos sólo los lee
+   * `effects/goblin_latch.script:29` (PARAM5, «si el atacante es un
+   * jugador»), y aquí quien pega es un bicho o un efecto. Se dice.
+   */
+  danado({ atacante = "none", dano = 0, tipo = "" } = {}, { soloEfectos = false } = {}) {
+    const ps = [String(atacante ?? "none"), String(dano), String(tipo ?? "")];
+    if (soloEfectos) return this.efectos?.llamar("game_damaged", ps) ?? false;
+    return this.llamar("game_damaged", ps);
   }
 
   /**
@@ -410,8 +443,46 @@ export class GuionDelJugador {
 
 /** Los `effect <tipo>` que este módulo hace. El resto sigue al intérprete. */
 const EFECTOS_DE_PANTALLA = new Set(["glow", "screenfade"]);
+/** EL 95: los dos temblores (mseffects.cpp:847-876). Regla en `temblor.js`. */
+const TEMBLORES = new Set(["screenshake", "screenshake_one"]);
+
+/**
+ * EL 95. `effect screenshake` / `screenshake_one` desde el guion del jugador o
+ * de un efecto suyo (la sangre de demonio, el empujón, el terremoto de
+ * `ext_quake_fx`). `UTIL_ScreenShake` recorre a TODOS los jugadores
+ * (util.cpp:1075); desde este entorno sólo se ve a uno, el dueño, así que en
+ * una partida con más gente los demás no tiemblan por esta puerta — dicho en
+ * doc/PANTALLA_95.md.
+ *
+ * Lo que decide si le llega —el suelo y el radio— necesita el CUERPO
+ * (`fisica.origen` en unidades del motor y `fisica.enSuelo`); sin él se apunta,
+ * no se adivina. Cada decisión se guarda en `temblores`, llegue o no.
+ */
+function temblorDelGuion(dueño, guion, tipo, params) {
+  const etiqueta = `effect ${tipo}`;
+  const t = leerTemblor(params);
+  if (!t) { guion.anotarNoSoportado("comando", `${etiqueta} (faltan parámetros: el motor avisa y no hace nada)`); return true; }
+  let jugador = null;
+  if (t.tipo === "screenshake_one") {
+    // `RetrieveEntity` + `IsPlayer()`, o un aviso y nada (:864-875).
+    if (!esElJugador(dueño, t.aQuien)) { guion.anotarNoSoportado("comando", `${etiqueta} a otra entidad (${t.aQuien})`); return true; }
+    jugador = { origen: null, enSuelo: true };
+  } else {
+    const f = dueño._fisica;
+    if (!f?.origen || !f?.enSuelo) { guion.anotarNoSoportado("comando", `${etiqueta} (sin cuerpo del jugador)`); return true; }
+    jugador = { origen: f.origen(), enSuelo: Boolean(f.enSuelo()) };
+  }
+  const mensaje = temblorParaJugador(t, jugador);
+  dueño.temblores.push({ t: dueño._ahora(), tipo, centro: t.centro ?? null, radio: t.radio ?? null, origen: jugador.origen, enSuelo: jugador.enSuelo, mensaje, de: guion?.nombre ?? null });
+  if (dueño.temblores.length > 100) dueño.temblores.splice(0, dueño.temblores.length - 100);
+  if (mensaje) dueño.mandarAPantalla({ tipo: "temblor", todos: false, mensaje }, guion);
+  return true;
+}
 /** Los `hud.*` que este módulo hace. */
-const ICONOS_DE_PANTALLA = new Set(["hud.addstatusicon", "hud.killstatusicon", "hud.killicons"]);
+const ICONOS_DE_PANTALLA = new Set([
+  "hud.addstatusicon", "hud.killstatusicon", "hud.killicons",
+  "hud.addimgicon", "hud.killimgicon",            // EL 95 (doc/BRILLO_95.md)
+]);
 
 /**
  * ¿Es `ref` el jugador dueño de este guion? `ent_me` dentro de su guion y de
@@ -438,6 +509,7 @@ function comandoDePantalla(dueño, guion, nombre, params) {
   let etiqueta = nombre;
   if (nombre === "effect") {
     const tipo = String(params?.[0] ?? "");
+    if (TEMBLORES.has(tipo)) return temblorDelGuion(dueño, guion, tipo, params);
     if (!EFECTOS_DE_PANTALLA.has(tipo)) return false;
     etiqueta = `effect ${tipo}`;
     if (tipo === "glow") {
@@ -498,6 +570,16 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
      * `pantallas` diga de quién vino. Ver `comandoDePantalla` arriba.
      */
     comandoDePantalla: (nombre, params, { desde } = {}) => comandoDePantalla(yo, desde ?? yo.guion, nombre, params),
+
+    // EL 95: lo que pide `$relpos` (guion.js): el `Center()` del jugador —su
+    // `origin`, el centro de la caja— y su `pev->angles`, que para un jugador
+    // NO es la vista: el motor le copia la vista con un TERCIO del cabeceo y
+    // el signo cambiado (`angles[PITCH] = -(v_angle[PITCH] / 3)`, xash3d-fwgs
+    // engine/server/sv_pmove.c:651-657; igual en ReHLDS sv_user.cpp:993).
+    // Las dos en unidades, ejes y grados del motor; sin cuerpo no existen, y
+    // `$relpos` se apunta como antes.
+    ...(fisica?.origen ? { origenDeMi: () => fisica.origen() } : {}),
+    ...(fisica?.angulos ? { angulosDeMi: () => fisica.angulos() } : {}),
 
     // ── EL 89c: LO QUE CAMBIA EL ESTADO DEL JUGADOR ───────────────────────
     //
@@ -673,6 +755,9 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
      * `_gcvt`; aquí, diez cifras significativas sin ceros de cola), y siempre
      * avisa con `game_set_takedmg <tipo> <mult con %f> [adjust]` (:1096-1101).
      */
+    /** EL 97: `nopush <0|1>` (npcscript.cpp:318-330) -> `m_nopush`. */
+    inempujable(si) { yo.nopush = Boolean(si); },
+
     ponerRecibeDano(tipo, mult, extra = null) {
       yo.resistencias.poner(tipo, mult);
       const m = Math.fround(mult);
@@ -700,6 +785,16 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
         case "mp": return String(p.mana ?? 0);
         case "maxmp": return String(maximos?.().mana ?? p.manaMax ?? p.mana ?? 0);
         case "gold": return String(p.oro ?? 0);
+        // EL 95. `RETURN_POSITION("origin", pev->origin)` (scriptcmds.cpp:1144):
+        // «(x,y,z)» en unidades. Lo pide `ext_quake_fx` para centrar su
+        // temblor (player/externals.script:3388). Antes contestaba «», que
+        // `StringToVec` lee como el origen del MAPA. Sin cuerpo, como antes.
+        case "origin": return fisica?.origen ? textoDeVector(fisica.origen()) : "";
+        // EL 97: `m_nopush` (scriptcmds.cpp:1422), que pone el comando
+        // `nopush`. Antes contestaba «», que también es «no»: el valor de
+        // reposo era el bueno, y por eso el escudo no inmunizaba sin que nada
+        // lo dijera.
+        case "nopush": return yo.nopush ? "1" : "0";
         default: break;
       }
       // `skill.…` (el 66). El guion del jugador también se lee a sí mismo: el

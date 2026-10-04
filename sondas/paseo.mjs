@@ -3,15 +3,12 @@ import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { esNuestro } from "./mismo.mjs";
+import { esNuestro, arrancarVite } from "./mismo.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PORT = 5203;
-const server = await new Promise((res, rej) => {
-  const p = spawn(process.execPath, [join(ROOT, "node_modules/vite/bin/vite.js"), "--port", String(PORT), "--strictPort"],
-    { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
-  const t = setTimeout(() => rej(new Error("vite")), 30000);
-  p.stdout.on("data", (d) => { if (d.toString().includes("ready in")) { clearTimeout(t); res(p); } });
-});
+const PORT = 5606;   // el 98: era 5203, compartido con otra sonda (test/puertos98.test.mjs)
+// El 98: `arrancarVite` libera el puerto antes y lo mata al salir; antes
+// esta sonda no llamaba a `liberarPuerto` y, si se caía, dejaba su `vite`.
+const server = await arrancarVite(PORT);
 const browser = await chromium.launch({ headless: true, args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const page = await browser.newPage({ viewport: { width: 320, height: 240 } });
 page.on("pageerror", (e) => console.log("ERROR:", String(e?.message ?? e)));

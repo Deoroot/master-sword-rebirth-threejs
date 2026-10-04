@@ -199,6 +199,13 @@ la sonda siguieron verdes: lo que muerde es el control de cada regla.
    araña ya no anda tampoco: es lo que haría el motor, y ya se quedaba
    congelada en el fotograma 12.
 
+> **Corrección del 95** (doc/IA_95.md). El 2 (`movespeed`) y el 5 (`move` y
+> `hold`) están portados. El 3 sigue sin portar, y la razón es otra que la
+> que se lee: no hay efectos sobre bichos en este puerto, así que
+> `m_Framerate_Modifier` no tendría quien lo escribiera. Y el 7 no pasa por la
+> caza: el mordisco antes del primer segundo era del puerto, que hacía pensar
+> al cazador en el primer paso (ver la corrección en doc/SALTO_93.md §3).
+
 ## 6. Las sondas vecinas, y lo que no es de aquí
 
 Con el árbol compartido por otras cuatro sesiones a la vez (ciclo de pensar,

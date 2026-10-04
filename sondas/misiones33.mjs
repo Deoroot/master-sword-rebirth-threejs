@@ -30,16 +30,15 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
-const PORT = 5216;
+const PORT = 5611;   // el 98: era 5216, compartido con otra sonda (test/puertos98.test.mjs)
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 6000));
 
 const controles = [];
 const control = (que, bien, detalle = "") => controles.push({ que, bien, detalle });

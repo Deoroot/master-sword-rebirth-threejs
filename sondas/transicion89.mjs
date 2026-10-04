@@ -28,12 +28,12 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 
 const PORT = 5289;
 const liberados = liberarPuerto(PORT);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);   // el 98: espera a que conteste
 // SÍNCRONO, y no es un capricho: esta sonda termina con `process.exit`, y un
 // `taskkill` lanzado con `spawn` no llega a correr antes de salir. Así dejó su
 // vite huérfano en el 5289 dos veces, con el usuario pidiendo expresamente que

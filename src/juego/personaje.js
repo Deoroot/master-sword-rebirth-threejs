@@ -25,8 +25,25 @@ import {
   aprender, TOPE_APRENDIZAJE, habilidadDeArma, atributosDe, derivadas, valorDeHabilidad,
 } from "./stats.js";
 
-/** La versión del registro. Se sube cuando cambia la forma, no el contenido. */
-export const VERSION = 1;
+/**
+ * La versión del registro. Se sube cuando cambia la forma, no el contenido.
+ *
+ * LA 2 (el 97): **lo que va en la mano ya NO está también en `objetos`.** En el
+ * motor un objeto es una entidad con UN sitio —`m_Location`, la mano o el
+ * cuerpo o un contenedor (genericitem.h:24-28)— y el fichero lo escribe una
+ * vez con ese sitio y su mano (sv_character.cpp:615-623; `Location` y `Hand`
+ * en `ReadItem`, :413-419). `CreateChar` da el arma elegida A LA MANO y a
+ * ningún otro sitio (`AddItem(pStartingItem, true, true)`, :94-96).
+ *
+ * La versión 1 la escribía en los dos: `objetos` Y `manos.derecha`. Casi todo
+ * el código la leía ya como dos sitios distintos —`cumplir` saca de la mochila
+ * lo que empuña, `Partida._empunar` igual, `soltarDelInventario` sólo vacía la
+ * mano—, así que el duplicado se quedaba para siempre: al cambiar de arma la
+ * vieja volvía a la mochila y había DOS espadas oxidadas, y el ciclador (que
+ * busca por id) no pasaba de la segunda (doc/ARMAS_96.md). Ver `abrirPersonaje`
+ * para cómo se abre un personaje de la 1.
+ */
+export const VERSION = 2;
 
 /** Los campos que este código conoce. Lo que no esté aquí se conserva intacto. */
 //
@@ -85,10 +102,12 @@ export function crearPersonaje({ nombre, genero = "male", arma, nuevoPersonaje =
     genero,
     oro: cfg.oro ?? 0,
     habilidades: habilidadesDePartida(),
-    // Los objetos gratis y el arma elegida. El arma va a la mano derecha, que
-    // es lo que hace `CreateChar`; si la elección es un hechizo, el motor lo
-    // aprende en vez de dártelo, y aquí se distingue igual.
-    objetos: [...(cfg.gratis ?? []), ...(arma ? [arma] : [])].map((id) => ({ id, n: 1 })),
+    // Los objetos gratis a la lista y el arma elegida A LA MANO, y sólo a la
+    // mano: `AddItem(pStartingItem, true, true)` (sv_character.cpp:94-96). Hasta
+    // el 97 iba también a `objetos` y eso es lo que duplicaba la espada (ver
+    // `VERSION`). Lo que NO se distingue todavía: si la elección es un hechizo
+    // el motor lo aprende (`LearnSpell`, :87-91) en vez de dártelo.
+    objetos: (cfg.gratis ?? []).map((id) => ({ id, n: 1 })),
     manos: { derecha: arma ?? null, izquierda: null },
     hechizos: [],
     // Las 36 ranuras, vacías. Un personaje nuevo no trae ninguna puesta: en MSR
@@ -152,6 +171,28 @@ export function abrirPersonaje(doc) {
 
   p.objetos = Array.isArray(p.objetos) ? p.objetos : [];
   p.manos = { derecha: null, izquierda: null, ...(p.manos ?? {}) };
+  // DE LA 1 A LA 2 (el 97): lo que hay en una mano sale UNA vez de `objetos`.
+  //
+  // Lo que no se puede saber es si esa copia era el duplicado de la creación
+  // o una segunda espada de verdad comprada después: en la 1 las dos se
+  // escriben igual. Se quita una y se dice. Los caminos que dejaba la 1 son
+  // dos y los dos dan lo mismo: un personaje que nunca cambió de arma tiene el
+  // duplicado; uno que sí, ya no (`cumplir` sacaba de la lista TODAS las
+  // copias al empuñar), y entonces aquí no se toca nada.
+  if (p.version < 2) {
+    p.objetos = p.objetos.slice();
+    for (const mano of ["derecha", "izquierda"]) {
+      const id = p.manos[mano];
+      if (!id) continue;
+      const i = p.objetos.findIndex((o) => (o?.uid ?? o?.id) === id || o?.id === id);
+      if (i < 0) continue;
+      const o = p.objetos[i];
+      if ((o.n ?? 1) > 1) p.objetos[i] = { ...o, n: o.n - 1 };
+      else p.objetos.splice(i, 1);
+      avisos.push(`versión ${p.version}: '${id}' estaba en la mano Y en los objetos; se deja sólo en la mano`);
+    }
+    p.version = VERSION;
+  }
   p.hechizos = Array.isArray(p.hechizos) ? p.hechizos : [];
   // Un personaje de antes del 26 no trae ranuras, y uno de un juego con más
   // ranuras que éste traería más: se rellena hasta 36 y **no se recorta**, que
@@ -186,6 +227,26 @@ export function abrirPersonaje(doc) {
   const extra = Object.keys(p).filter((k) => !CONOCIDOS.has(k));
   if (extra.length) avisos.push(`campos que este código no conoce y se conservan: ${extra.join(", ")}`);
   return { personaje: p, avisos };
+}
+
+/**
+ * TODO lo que lleva encima: la lista y las dos manos, cada cosa una vez.
+ *
+ * Es el `Gear` del motor, que incluye lo de las manos: el peso es
+ * `Gear.FilledVolume()` (msmonstershared.cpp:430-433) y los guiones de objeto
+ * corren para todo el `Gear` (playershared.cpp:1524-1544). Desde la versión 2
+ * del registro lo empuñado no está en `objetos`, así que quien quiera «todo»
+ * tiene que pedirlo aquí y no leer `objetos` a pelo.
+ */
+export function loQueLleva(p) {
+  const fuera = [...(p?.objetos ?? [])];
+  for (const mano of ["izquierda", "derecha"]) {
+    const m = p?.manos?.[mano];
+    if (!m) continue;
+    const id = typeof m === "string" ? m : (m.id ?? m.clave);
+    if (id) fuera.push({ id, n: 1, mano });
+  }
+  return fuera;
 }
 
 /** Deja el documento listo para guardar: sella la fecha y nada más. */

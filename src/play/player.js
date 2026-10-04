@@ -311,7 +311,7 @@ export class Player {
       });
     } else if (nivelAgua >= NADANDO) {
       r = nadar(this.vel, {
-        intencion, yaw: this.yaw, maxima, dt,
+        intencion, yaw: this.yaw, maxima, dt, tope: input.tope ?? Infinity,
         // `upmove`: saltar sube y agacharse baja, que es como se nada en
         // GoldSrc. No hay tecla de «nadar arriba»: es la de saltar.
         subir: (input.jump ? 1 : 0) - (input.agachar ? 1 : 0),
@@ -321,6 +321,8 @@ export class Player {
         intencion,
         yaw: this.yaw,
         maxima,
+        // EL 97: el `pmove->maxspeed` que baja un efecto (src/play/trabas.js).
+        tope: input.tope ?? Infinity,
         dt,
         enSuelo: this.grounded,
         alBorde: Boolean(input.alBorde),

@@ -37,6 +37,7 @@ import { leerMision, ponerMision, limpiarMisiones, volcarMisiones } from "./misi
 import { usarOpcion, nombreVisibleDe } from "./usaropcion.js";
 import { oirFrase, limpiarTexto } from "./oir.js";
 import { Tiendas, flagsDe } from "./tienda.js";
+import { RANGO_LOCAL } from "./chat.js";
 // EL 92: `$get(<jugador>,maxhp)` es `CBasePlayer::MaxHP()`, que es esto.
 import { derivadas, atributosDe } from "../juego/stats.js";
 
@@ -402,7 +403,35 @@ export function entornoDe({
       // «make sure the text has content»: sin un carácter imprimible que no sea
       // espacio, NO se dice nada. :1605-1614.
       if (!/[^\s]/.test(t)) return;
-      suceso?.("normal", `${npc?.nombre ?? "Someone"} says,  "${t}"`);
+      // EL 95: con el ALCANCE de esta entidad (`m_SayTextRange`), porque
+      // `Speak` no se lo dice a «el jugador» sino a todo el que esté a
+      // `Length2D() <= m_SayTextRange` (msmonsterserver.cpp:1712-1716). En
+      // UNIDADES del motor, como lo escribe el guion: quien sabe dónde está
+      // cada uno (el servidor) convierte. Un navegador con un jugador no lo
+      // mira todavía (doc/RED_95.md §8).
+      suceso?.("normal", `${npc?.nombre ?? "Someone"} says,  "${t}"`, { habla: { rango: entorno.alcanceDeVoz } });
+    },
+
+    /**
+     * EL 95. `m_SayTextRange`: hasta dónde llega el `saytext` de ESTA
+     * entidad, en unidades. Nace en `SPEECH_LOCAL_RANGE` (300, msmonster.h:79;
+     * msmonstershared.cpp:458) y lo cambia `saytextrange`.
+     */
+    alcanceDeVoz: RANGO_LOCAL,
+
+    /**
+     * `saytextrange <unidades|default>` — npcscript.cpp:724-737.
+     *
+     *     if (Params[0] == "default") m_SayTextRange = SPEECH_LOCAL_RANGE;
+     *     else                        m_SayTextRange = atof(Params[0]);
+     *
+     * `==` de `msstring` es `strcmp` (stackstring.cpp:54): «Default» no es
+     * «default», y `atof("Default")` es 0 — un NPC que no oye nadie. Se porta
+     * así. El valor se queda puesto: el pregonero de Edana lo sube a 1024 para
+     * su noticia y lo devuelve con `saytextrange default` (edana/towncrier.script:30-32).
+     */
+    cambiarAlcanceDeVoz(valor) {
+      entorno.alcanceDeVoz = String(valor) === "default" ? RANGO_LOCAL : numDe(valor);
     },
 
     /**
@@ -432,7 +461,23 @@ export function entornoDe({
      * `ent_me` y `all` acaban los dos en tu pantalla — `SendHUDMsgAll` recorre
      * los jugadores y le llama a `SendHUDMsg` a cada uno (svglobals.cpp:346).
      */
-    aviso(_aQuien, titulo, texto) { ventanaDeAviso?.(titulo, texto); },
+    aviso(aQuien, titulo, texto) {
+      // ── EL 95: A QUIÉN, que con servidor ya no es lo mismo ──────────────
+      //
+      //     if (Params[0] == "all") SendToAll = true;
+      //     if (!SendToAll) pEntity = RetrieveEntity(Params[0]);
+      //     if (SendToAll || (pEntity && pEntity->IsPlayer())) ...
+      //                                   scriptcmds.cpp:4064-4075
+      //
+      // Lo de arriba («`_aQuien` sigue sin usarse y sigue siendo correcto»)
+      // era verdad con UN jugador y dejó de serlo con servidor: `all` son
+      // todos los de la partida y lo demás es UNO, el que nombre el guion. Y
+      // si lo que nombra no es un jugador (`ent_me` desde un NPC), el motor no
+      // manda nada; aquí se apunta, para que no parezca que se perdió.
+      const todos = String(aQuien) === "all";
+      if (!todos && !esElJugador(aQuien)) { apuntar?.("infomsg", `${aQuien}: no es un jugador`); return; }
+      ventanaDeAviso?.(titulo, texto, { todos });
+    },
 
     /** `offer <target> gold <n>` — npcscript.cpp:680, `pMonster->GiveGold`. */
     darOro(ref, cuanto) {
@@ -1729,6 +1774,69 @@ export class GuionDeNpc {
     return true;
   }
 
+  /**
+   * ¿Tiene este guion una de las dos plantillas de caza? La vieja define
+   * `hunting_mode_go` (base_npc_attack.script:62) y la nueva `npcatk_hunt`
+   * (base_npc_attack_new.script:230). Un NPC al que se le habla, ninguna.
+   */
+  familiaDeCaza() {
+    if (this.maneja("hunting_mode_go")) return "vieja";
+    if (this.maneja("npcatk_hunt")) return "nueva";
+    return null;
+  }
+
+  /**
+   * **`npc_targetsighted`, CON EL OBJETIVO A LA VISTA** — el 98.
+   *
+   * Lo llaman las dos bases en cada ciclo de caza en que ven a su objetivo
+   * (base_npc_attack.script:118-120 y, al fijarlo, :154-155;
+   * base_npc_attack_new.script:303-307). El parámetro es el objetivo, y antes
+   * de llamarlo la caza ya ha escrito quién es (`apuntarObjetivo`, lo mismo
+   * que escribe al atacar) y su `$cansee` ha guardado `ent_lastseen`.
+   *
+   * Es por donde embiste el jabalí (boar_base.script:114-124) y por donde
+   * hacen otras cosas otros guiones: el grito de guerra del goblin
+   * (goblin.script:98-106), el escupitajo de lejos de la araña escupidora
+   * (spider_spitting.script:104-111), el murciélago que se descuelga
+   * (bat_base.script:46)… Lo que pidan AL CUERPO dentro —un `playanim`, un
+   * `setmovedest`— se lo queda la IA (`absorbe`), como en todo evento de
+   * combate; las variables, los `movespeed` y los efectos corren enteros.
+   *
+   * @returns si el guion tenía el evento.
+   */
+  visto(ref) {
+    if (!this.guion || this.retirado || !this.familiaDeCaza()) return false;
+    this.apuntarObjetivo(ref);
+    return this.costura("npc_targetsighted", [String(ref)]);
+  }
+
+  /**
+   * **¿CON QUÉ ANIMACIÓN ATACA?** — el 98. `callevent npc_selectattack` y el
+   * valor de `ANIM_ATTACK` después (base_npc_attack.script:212-215;
+   * base_npc_attack_new.script:617-619). `null` sin plantilla de caza o sin
+   * la variable puesta: entonces manda la horneada.
+   */
+  eligeAtaque() {
+    if (!this.guion || this.retirado || !this.familiaDeCaza()) return null;
+    this.costura("npc_selectattack", []);
+    return this.animDe("ANIM_ATTACK");
+  }
+
+  /** `callevent npc_attack` tras el `playanim` — SÓLO la vieja (base_npc_attack.script:217). */
+  atacado() {
+    if (!this.guion || this.retirado || this.familiaDeCaza() !== "vieja") return false;
+    return this.costura("npc_attack", []);
+  }
+
+  /** El valor de una variable de animación del guion ahora, o `null`. */
+  animDe(variable) {
+    const v = this.guion?.vars?.get(String(variable));
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    // Sin poner vale su propio nombre (el `isnot 'X'` del 47): no es una animación.
+    return s && s !== String(variable) ? s : null;
+  }
+
   /** EL 92: ¿tiene este guion algún bloque con ese nombre? (`CallScriptEvent` sobre uno que no existe no hace nada.) */
   maneja(evento) {
     return (this.guion?.eventos ?? []).some((e) => e.nombre === String(evento));
@@ -1871,7 +1979,19 @@ export class GuionDeNpc {
    * Lo que el servidor contesta a `getmenuoptions`: se ejecuta el evento y se
    * devuelve lo que haya quedado registrado. msmonsterserver.cpp:2884-2911.
    */
-  pedirOpciones({ personaje, ref = "player", origen = "0" } = {}) {
+  pedirOpciones({ personaje, ref = "player", origen = undefined } = {}) {
+    // ── EL 95: SIN `origen`, LA POSICIÓN SE LEE VIVA ─────────────────────
+    //
+    // Aquí ponía `origen = "0"` por omisión, y NADIE lo pasa (`interacciones.pedir`
+    // da `{personaje, ref}`). Así que abrir el menú de un NPC le dejaba al
+    // jugador clavado en «0», que el getter de `jugador.origen` prefiere a
+    // `sitioDelJugador` (un «0» no es `null`), y desde ese momento todo lo que
+    // mide distancias contra el jugador en ESE guion —`$cansee(player,128)`,
+    // `$get(ent_lastspoke,range)`— salía «sin sitios». Medido con Sylphiel:
+    // abrir su menú, cerrarlo y pedirle trabajo por el chat dejaba el
+    // `say_job` (edana/barwench.script:126-137) abandonado en su `$cansee`, o sea
+    // la misión de la sidra muda para quien hablara con ella primero por la F.
+    // El parámetro con valor por omisión del 62, otra vez (doc/RED_95.md §5).
     this.jugador = { personaje, ref, origen };
     // `m_MenuCurrentOptions` se pone a la lista de ESTE jugador antes de llamar
     // y a `NULL` después (:2893): fuera del evento, `menuitem.register` no hace

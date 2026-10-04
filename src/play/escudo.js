@@ -56,6 +56,7 @@
 // Portado con el fallo, como todo lo demás, y con prueba.
 
 import { parryDelJugador } from "./parry.js";
+import { golpeContraLaArmadura } from "./armadura.js";
 
 /** Lo que el script del escudo pide: «Attack must come from in front of player». */
 export const CONO_DEL_ESCUDO = 175;
@@ -329,7 +330,7 @@ export function puedeAtacar({ objetos = [] } = {}) {
  * TODO EL GOLPE CONTRA EL JUGADOR, en el orden del motor. Es la función que usa
  * el juego, y existe para que el orden esté escrito en un sitio y no repartido:
  *
- *     1. el ESCUDO (y la armadura, que aquí todavía no hay)
+ *     1. la ARMADURA y el ESCUDO (la armadura desde el 96, `armadura.js`)
  *     2. el daño negativo se pisa a cero
  *     3. el PARRY del motor, que puede dejarlo en -1
  *
@@ -341,7 +342,19 @@ export function defensaDelJugador({
   dano = 0, tipo = "", escudo = null, postura = POSTURA.GUARDADO,
   desplegado = true, deFrente = true, esElPropio = false,
   parry = 0, consciencia = 0, acierto = 1, dados = {},
+  // EL 96: las entidades de lo que lleva —`GuionDeObjeto`, en el orden de la
+  // mochila— y quién pega. Ver `src/play/armadura.js`. Sin `equipo` no hay
+  // armadura, y por eso el juego lo pasa SIEMPRE (src/main.js, `golpear`) y
+  // la sonda del 96 mide que llega.
+  equipo = [], atacante = "none",
 } = {}) {
+  // 0. LA ARMADURA. Va en el mismo bucle que el escudo (`Gear[i]->
+  // OwnerTakeDamage`, player.cpp:403-404) y en el orden del `Gear`; aquí va
+  // ANTES del escudo. Para el daño da igual —las dos son multiplicaciones—, y
+  // `setdmg dmg` de una armadura no toca ni el tipo ni la tirada del escudo.
+  const a = golpeContraLaArmadura({ dano, tipo, atacante, equipo });
+  dano = a.dano;
+  tipo = a.tipo;
   const b = bloqueoDelEscudo({
     ficha: escudo, postura, dano, tipo, desplegado, deFrente, esElPropio, dados,
   });
@@ -352,6 +365,7 @@ export function defensaDelJugador({
   });
   return {
     dano: p.para ? 0 : d,
+    armadura: a,
     bloqueo: b, parry: p,
     parado: p.para,
     // Lo que hay que contarle al jugador, en el orden en que sale en pantalla.

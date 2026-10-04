@@ -146,6 +146,13 @@ export const ojoDe = (i) => (i?.ficha?.ia?.alto ?? i?.ficha?.alto ?? 60);
  */
 export const CADAVER = { quieto: 20, desvanece: (255 / 7) * 0.1 };
 
+/**
+ * Cada cuánto corre `CMSMonster::Think`: `pev->nextthink = gpGlobals->time +
+ * 0.1` (msmonsterserver.cpp:511). El 95 lo usa para saber cuándo pisa el
+ * `Think` una animación pedida con `playanim move` (ver `Manada.mover`).
+ */
+export const PERIODO_THINK = 0.1;
+
 /** Las unidades de GoldSrc por metro. La misma constante de siempre. */
 export const U_POR_METRO = 39.37;
 
@@ -318,11 +325,23 @@ export function avanzar(i, dt, libre, suelo, U = U_POR_METRO, { correr = true, v
   //
   // `m_SpeedMultiplier` (`movespeed`) y el `maxspeed` de los efectos no entran:
   // ver doc/ANIMACION_94.md §5.
-  const deUnaVez = i.unaVezHasta !== null ? i.actual?.seq ?? null : null;
+  // EL 95: y la de `hold`, que también es la de `pev->sequence` (`sostener`).
+  const deUnaVez = i.unaVezHasta !== null || i.sostenida ? i.actual?.seq ?? null : null;
   if (deUnaVez) v = velocidadDe(deUnaVez, U);
   v *= i.fisica?.ritmoAnim ?? 1;
+  // EL 95: y `m_SpeedMultiplier`, el `movespeed` del guion (npcscript.cpp:
+  // 514-521), que es el cuarto factor de la misma línea :1201. Lo usa el
+  // jabalí para embestir —`movespeed 3` en `boar_charge` y `movespeed 1` en
+  // `boar_charge_stop` (boar_base.script:131, :153)— y hasta aquí se guardaba
+  // en `ritmoAndar` y sólo servía para devolver el cuerpo a la IA. El
+  // `pev->maxspeed` de los efectos (`ScriptMultiplier`, :1197-1199) sigue
+  // fuera: este puerto no aplica efectos a los bichos (doc/IA_95.md).
+  // Negativo, no anda (ver arriba); la araña pone `movespeed -1` al caer
+  // (spider.script:170) con `setmovedest none` puesto desde que saltó.
+  v *= i.fisica?.ritmoAndar ?? 1;
   if (!(v > 0)) {
-    i.frenado = deUnaVez ? `la animacion ${deUnaVez.nombre} no avanza` : "sin velocidad";
+    i.frenado = deUnaVez ? `la animacion ${deUnaVez.nombre} no avanza`
+      : (i.fisica?.ritmoAndar ?? 1) <= 0 ? "movespeed" : "sin velocidad";
     return false;
   }
   const paso = Math.min(v * dt, falta - cerca);
@@ -764,6 +783,17 @@ export class Manada {
          * lo vence `relojes`.
          */
         unaVezHasta: null,
+        /**
+         * EL 95: `CAnimHold`, el manejador de `playanim hold` (ver `sostener`).
+         * El nombre de la que sujeta, o `null`. No vence con el tiempo: rechaza
+         * toda petición de andar o de reposo y suelta con cualquier otra.
+         */
+        sostenida: null,
+        /**
+         * EL 95: cuándo pisa el `Think` una de `playanim move` (ver `mover`),
+         * o `null`.
+         */
+        pisaElThink: null,
         actual: null,
         nombreActual: null,
         // La cuenta de las dos cosas: cuántas veces se rebobinó y cuántas se
@@ -1053,6 +1083,11 @@ export class Manada {
     // 1000 que trae el archivo**, o sea el 12 %: el bicho se sacude y corre en
     // el sitio. No daba ningún error porque poner una animación no falla nunca.
     if (i.unaVezHasta !== null && this.t < i.unaVezHasta) { i.sigue.rechazos++; return null; }
+    // EL 95: lo que llega aquí ha pasado la guarda, así que suelta la de
+    // `hold` —las de andar y reposo no llegan: las para `ponDeAndarOParar`— y
+    // deja sin objeto el `Think` que iba a pisar una de `move`.
+    i.sostenida = null;
+    i.pisaElThink = null;
     if (i.actual?.seq === s && s.bucle) { i.sigue.veces++; return s; }
     i.sigue.reinicios++;
     if ((i.actual?.seq?.actividad ?? null) !== (s.actividad ?? null)) i.sigue.cambiosDeActividad++;
@@ -1092,6 +1127,10 @@ export class Manada {
    * andar se rechaza igual que antes, porque `pon` mira el candado primero.
    */
   ponDeAndarOParar(i, nombre) {
+    // EL 95: `CAnimHold::CanChangeTo` dice que no a `MONSTER_ANIM_WALK`
+    // siempre (monsteranimation.cpp:183-186), y las de andar y reposo son ésas
+    // (msmonsterserver.cpp:589-594). Ver `sostener`.
+    if (i.sostenida) { i.sigue.rechazos++; return null; }
     const s = this.pon(i, nombre);
     if (s && !s.bucle) i.unaVezHasta = null;
     return s;
@@ -1122,6 +1161,10 @@ export class Manada {
     const s = buscarSecuencia(i.secuencias, nombre);
     if (!s) return false;
     i.sigue.reinicios++;
+    // EL 95: `BreakAnimation` deja `m_pAnimHandler = NULL`, también si era el
+    // de `hold`; y el `Think` que iba a pisar una de `move` ya no tiene qué.
+    i.sostenida = null;
+    i.pisaElThink = null;
     i.actual = { seq: s };
     i.nombreActual = String(nombre ?? "").toLowerCase();
     i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: true, desde: this.t, visto: 0 };
@@ -1178,10 +1221,109 @@ export class Manada {
    *     msmonsterserver.cpp:589-594) y `hold` es `CAnimHold`, que no suelta a
    *     la de andar (monsteranimation.cpp:183-189). Ninguna de las dos está
    *     portada; queda dicho en doc/ANIMACION_94.md §5.
+   *
+   * CORRECCIÓN DEL 95: las dos portadas, `hold` en `sostener` y `move` en
+   * `mover`. Y `move` no es sólo `move`: es el VALOR POR OMISIÓN,
+   *
+   *     MONSTER_ANIM AnimType = MONSTER_ANIM_WALK;
+   *     if (!_stricmp(pszAnimType, "move")) AnimType = MONSTER_ANIM_WALK;
+   *     else if (... "once") ... else if (... "hold") ... else if (... "critical")
+   *                                                  npcscript.cpp:1512-1527
+   *
+   * o sea que cualquier tipo que no sea uno de los cinco cae ahí. En los 2 884
+   * guiones `playanim move` no sale NI UNA VEZ; lo que cae en esa rama son
+   * erratas y palabras que el motor no conoce: `critial` (4, dos en el Urduaf
+   * de Edana, edana/urdauf.script:98 y :105), `critcal` (2), `loop` (6). Sin
+   * modo (`undefined`, las llamadas internas) sigue siendo `critical`.
    */
   playanim(i, nombre, modo) {
-    if (String(modo ?? "").toLowerCase() === "once") return this.unaVez(i, nombre);
-    return this.deUnaVez(i, nombre);
+    if (modo === undefined || modo === null) return this.deUnaVez(i, nombre);
+    switch (String(modo).toLowerCase()) {
+      case "once": return this.unaVez(i, nombre);
+      case "critical": return this.deUnaVez(i, nombre);
+      case "hold": return this.sostener(i, nombre);
+      // `break` con nombre: `BreakAnimation` y luego un `SetAnimation` con
+      // el tipo por omisión (npcscript.cpp:1526-1527, :1550). No lo escribe ningún
+      // guion del mod (contado en el 95); el `break` a secas no llega aquí
+      // con cuerpo (npcguion.js, `animar`), y sin cuerpo sigue como antes.
+      case "break": return this.deUnaVez(i, nombre);
+      default: return this.mover(i, nombre);
+    }
+  }
+
+  /**
+   * `playanim move <nombre>` y todo lo que cae en `MONSTER_ANIM_WALK` — EL 95.
+   *
+   * Es la misma petición que hace el `Think` para andar o estar parado, y con
+   * las mismas reglas:
+   *
+   *   - **La rechaza una de una vez sin acabar** (`CAnimOnce::CanChangeTo`,
+   *     monsteranimation.cpp:219-221) y la de `hold` (:183-186): no rompe
+   *     nada, al contrario que `critical`.
+   *   - **No echa candado**: el manejador que queda es `gAnimWalk`, cuyo
+   *     `CanChangeTo` dice que sí a todo (:144-147). Un `once` de después
+   *     entra sin esperar.
+   *   - **La pisa el siguiente `Think`** si tiene destino o `m_IdleAnim`
+   *     (msmonsterserver.cpp:589-592), que corre cada 0,1 s (:511). Se toma
+   *     el plazo entero: la fase del `Think` no existe en este puerto. Sin
+   *     destino y sin `setidleanim` —el Urduaf no lo tiene— dura hasta que la
+   *     secuencia acaba, y entonces `SetActivity(ACT_IDLE)` (:596-600), que
+   *     es el sorteo de reposo de `relojes`.
+   *   - Pedir la que ya está puesta, si es de bucle, no rebobina
+   *     (`CWalkAnim::Animate`, :160-162): es `pon`.
+   *
+   * En una escena (`MONSTERSTATE_SCRIPT`) el `Think` no pide nada, así que
+   * no hay quien la pise.
+   */
+  mover(i, nombre) {
+    const s = this.ponDeAndarOParar(i, nombre);
+    if (!s) return false;
+    i.andando = null;
+    const pidePisar = i.destino || i.fisica?.parado || i.ficha.parado;
+    i.pisaElThink = pidePisar && !i.enEscena ? this.t + PERIODO_THINK : null;
+    return true;
+  }
+
+  /**
+   * `playanim hold <nombre>` — `CAnimHold`, EL 95.
+   *
+   *     bool CAnimHold::CanChangeTo(MONSTER_ANIM NewAnim, void *vData) {
+   *       if (NewAnim == MONSTER_ANIM_WALK) return false;
+   *       if (!ReleaseAnim) return false;
+   *       return true; }                       monsteranimation.cpp:183-189
+   *
+   * `ReleaseAnim` sólo es falso con el bit 0 de las banderas, y `playanim`
+   * sólo pone el 1, y sólo para un jugador (npcscript.cpp:1532-1540): en un
+   * bicho, **dice que no a andar y a reposo para siempre y que sí a todo lo
+   * demás** —un `once`, otro `hold`, un `critical`, un `break`—. No vence con
+   * el tiempo: una de un solo pase se queda en su último fotograma.
+   *
+   * Para entrar pasa la guarda de la que esté puesta (sin `Priority` no se
+   * rompe nada antes, :1544-1550), y entra desde el fotograma 0 aunque ya
+   * fuera ésa (`IsNewAnim`, monsteranimation.cpp:172-181 y :191-194).
+   *
+   * Lo usan 55 líneas en 44 guiones; en los cinco mapas, dos: el cofre del
+   * tesoro abierto mientras comercias (`trade_success`,
+   * chests/base_treasurechest.script:160, lo cierra `playanim once ANIM_CLOSE`
+   * en :171) y el mago esqueleto dormido en piedra
+   * (monsters/skeleton_mage.script:606). Hasta aquí era `critical`: el cofre
+   * se abría y, al acabar `open`, `relojes` le ponía `idle` y se cerraba con
+   * la tienda abierta.
+   */
+  sostener(i, nombre) {
+    const s = buscarSecuencia(i.secuencias, nombre);
+    if (!s) return false;
+    if (i.unaVezHasta !== null && this.t < i.unaVezHasta) { i.sigue.rechazos++; return false; }
+    i.sigue.reinicios++;
+    i.actual = { seq: s };
+    i.nombreActual = String(nombre ?? "").toLowerCase();
+    i.anim = { nombre: s.nombre, gen: i.anim.gen + 1, unaVez: !s.bucle, desde: this.t, visto: 0 };
+    i.unaVezHasta = null;
+    i.sostenida = i.nombreActual || s.nombre;
+    i.pisaElThink = null;
+    i.andando = null;
+    i.tQuieto = 0;
+    return true;
   }
 
   // ── los relojes ───────────────────────────────────────────────────────────
@@ -1234,6 +1376,20 @@ export class Manada {
       // solo cada vez que venciera, rebobinándola. Un reposo no es una vez.
       i.unaVezHasta = null;
     }
+    // ── EL 95: EL `Think` PISA UNA DE `playanim move` ───────────────────────
+    //
+    // Con destino o con `m_IdleAnim`, el `Think` siguiente pide la de andar o
+    // la de reposo con `MONSTER_ANIM_WALK` (msmonsterserver.cpp:589-592), y
+    // `gAnimWalk` la deja entrar. Si en medio entró una de una vez o una de
+    // `hold`, esa petición se rechaza como cualquier otra: no se hace nada.
+    for (const i of this.instancias) {
+      if (i.pisaElThink === null || i.pisaElThink === undefined || this.t < i.pisaElThink) continue;
+      i.pisaElThink = null;
+      if (i.muerto || i.enEscena || i.sostenida || i.unaVezHasta !== null) continue;
+      i.andando = null;
+      const conDestino = i.destino && !i.fisica?.manda;
+      this.ponDeAndarOParar(i, conDestino ? (i.ficha.andando ?? this.quieto(i)) : this.quieto(i));
+    }
     // ── SE VUELVE A SORTEAR AL ACABAR EL CICLO ──────────────────────────────
     //
     // `SetActivity` no se llama una vez: se llama cada vez que la secuencia
@@ -1258,6 +1414,15 @@ export class Manada {
       i.tQuieto = (i.tQuieto ?? 0) + dt;
       if (i.tQuieto < dura) continue;
       i.tQuieto = 0;
+      // EL 95: y ESTA rama suelta un `hold`, que es lo único que lo suelta
+      // sin otra animación: `m_pAnimHandler = NULL` antes de `SetActivity`
+      // (msmonsterserver.cpp:596-599). Sólo llega aquí quien no tiene
+      // `m_IdleAnim`; con un `setidleanim` puesto por el guion la petición
+      // es la de :590-592, y ésa la rechaza el `hold`.
+      if (i.sostenida) {
+        if (i.fisica?.parado) continue;
+        i.sostenida = null;
+      }
       this.ponDeAndarOParar(i, this.quieto(i));
     }
     // EL CADÁVER, con los dos plazos del motor: veinte segundos quieto y luego
@@ -1334,8 +1499,28 @@ export class Manada {
     // EL CAZADOR, que la muerte pone a `null` (`herir`, más abajo) y sin el cual
     // el bicho vuelve pero no ataca a nadie — vivo, con vida llena, y pacífico.
     // Se reconstruye de la ficha, que es de donde salió.
-    if (!i.cazador && i.ficha.ia) i.cazador = new Cazador(i.ficha.ia, { azar: this.azar });
+    //
+    // EL 95: y SIEMPRE nuevo, no sólo si la muerte lo había tirado. El primero
+    // en salir de un área no ha muerto nunca —nació dormido— y conservaba el
+    // cazador del censo; con el reloj del primer pensamiento (`primerPensamiento`,
+    // iaDe) eso es pensar al aparecer en vez de 0,75 s o 2,8 s después, que es
+    // lo que hace una entidad recién creada (`game_spawn`, base_npc.script:21-24).
+    if (i.ficha.ia) i.cazador = new Cazador(i.ficha.ia, { azar: this.azar });
     i.muerto = false;
+    // EL 95: una entidad nueva no trae ni un `hold` ni un `move` pendiente.
+    i.sostenida = null;
+    i.pisaElThink = null;
+    // Ni el cuerpo que le dejó su guion: `CMSMonster::Spawn` pone
+    // `m_SpeedMultiplier = 1.0` y `m_Framerate = 1.0` (msmonsterserver.cpp:180,
+    // :190), y `m_IdleAnim` nace vacío. Sin esto un jabalí muerto embistiendo
+    // (`movespeed 3`) volvía embistiendo para siempre: su `boar_charge_stop`
+    // estaba en el guion de la vida anterior, que se retira (el 91).
+    if (i.fisica) {
+      Object.assign(i.fisica, {
+        vel: null, gravedad: 1, enSuelo: true, sigue: null, manda: false,
+        ritmoAndar: 1, ritmoAnim: 1, parado: null,
+      });
+    }
     i.desdeQueMurio = 0;
     i.opacidad = 1;
     i.vida = i.vidaMaxima;
@@ -1503,10 +1688,38 @@ export class Manada {
       // `IS_HUNTING` y `HUNT_LASTTARGET`, que el salto lee (`_avisarCaza`).
       this._avisarCaza(i);
 
-      if (r.accion === ACCION.GOLPEAR && !deja.atacar) { mirarA(i, r.destino, this.U); continue; }
+      // ── EL 98: `npc_targetsighted`, EN CADA CICLO EN QUE LO VE ───────────
+      //
+      // Las dos bases lo llaman con el objetivo a la vista, antes de decidir
+      // el ataque: la vieja tras fijar el destino y antes de `check_attack`
+      // (base_npc_attack.script:118-123), la nueva antes del `setmovedest`
+      // (base_npc_attack_new.script:303-307, «compatability»). Es de donde
+      // EMBISTE el jabalí (boar_base.script:114-124: `boar_charge`, que pone
+      // `CAN_ATTACK 0` y `movespeed 3`), así que lo que deja hacer el guion se
+      // vuelve a preguntar después. Ver doc/ATURDIR_98.md.
+      let dejaAhora = deja;
+      if (r.ve && r.objetivo !== null && r.objetivo !== undefined && this.oyente) {
+        this._costura("visto", i, { objetivo: r.objetivo, quien: r.objetivo });
+        dejaAhora = this._deja(i);
+      }
+
+      if (r.accion === ACCION.GOLPEAR && !dejaAhora.atacar) { mirarA(i, r.destino, this.U); continue; }
       if (r.accion === ACCION.GOLPEAR) {
         if (i.vagabundo?.tieneDestino) { i.vagabundo.llegado(); i.destino = null; }
         mirarA(i, r.destino, this.U);
+        // ── EL 98: LA ANIMACIÓN DE ATAQUE ES LA DEL GUION, NO LA HORNEADA ───
+        //
+        // `npcatk_attackenemy` (vieja, base_npc_attack.script:208-218) y
+        // `npcatk_attack` (nueva, base_npc_attack_new.script:614-621) hacen
+        // lo mismo: `callevent npc_selectattack` y `playanim once ANIM_ATTACK`
+        // con el valor que tenga ESA variable en ese momento. Y hay guiones que
+        // la cambian entre golpes: el zombi enano la pasa a `attack2` —el
+        // salto que aturde— con `ATTACK2_CHANCE` en cada `attack_1`
+        // (dwarf_zombie_random.script:303), y el jabalí sortea entre sus tres
+        // cornadas en `npc_attack` (boar_base.script:103-109). Hasta el 97 aquí
+        // iba siempre `ficha.ia.golpe`, el valor AL NACER: el zombi no saltaba
+        // nunca. Ver `_animDeAtaque`.
+        const golpe = this._animDeAtaque(i, r.objetivo);
         // ── EL 92: ¿EL DAÑO LO PONE EL GUION? ──────────────────────────────
         //
         // Se pregunta ANTES de poner la animación, porque la respuesta depende
@@ -1514,8 +1727,11 @@ export class Manada {
         // nombre maneja el guion del bicho, en el motor el golpe sale de ahí
         // (msmonsterserver.cpp:1484-1493 -> `bite1` -> `dodamage`) y la IA no
         // tira ningún dado. Ver `_atacaPorGuion`.
-        const porGuion = this._atacaPorGuion(i, r.objetivo);
-        this.pon(i, i.ficha.ia.golpe);
+        const porGuion = this._atacaPorGuion(i, r.objetivo, golpe);
+        this.pon(i, golpe);
+        // EL 98: y la vieja, DESPUÉS del `playanim`, `callevent npc_attack`
+        // (base_npc_attack.script:217). La nueva no lo llama.
+        if (this.oyente) this._costura("atacado", i, { objetivo: r.objetivo, quien: r.objetivo });
         // La espera entre golpes es la del ataque sin evento en el modelo:
         // `HACK_ATTACK_DELAY 1.0`. El motor la saca del evento 600 de la
         // secuencia cuando lo hay. EL 92: el evento ya se lee —es el que pone
@@ -1579,7 +1795,14 @@ export class Manada {
 
       if (r.accion === ACCION.PERSEGUIR || r.accion === ACCION.BUSCAR) {
         ponerDestino(i, r.destino, r.cerca);
-        if (i.andando !== "corre") { this.ponDeAndarOParar(i, i.ficha.ia.corriendo ?? i.ficha.andando); i.andando = "corre"; }
+        // EL 98: la de correr también es la del guion. El jabalí que embiste
+        // hace `setvar ANIM_RUN ANIM_CHARGE` y al parar la devuelve
+        // (boar_base.script:132, :154); el motor la lee en cada `Think` al
+        // perseguir. Sin esto embestía con la de correr de siempre.
+        const corre = this._animDelGuion(i, "ANIM_RUN") ?? i.ficha.ia.corriendo ?? i.ficha.andando;
+        if (i.andando !== "corre" || i.animDeCorrer !== corre) {
+          this.ponDeAndarOParar(i, corre); i.andando = "corre"; i.animDeCorrer = corre;
+        }
         // Y el vagabundo se retira: la casilla de destino la tiene la caza.
         // Es `StopWalking` al revés — al soltarla se rearma el reloj de los
         // 2 s, así que al perder de vista al jugador el bicho no se pone a
@@ -1684,7 +1907,8 @@ export class Manada {
        * reposo —la del `setidleanim`, si la hay—, que es lo que hace el `Think`
        * (msmonsterserver.cpp:590-592).
        */
-      romper: () => { i.unaVezHasta = m.t; },
+      // EL 95: y suelta un `hold`: `BreakAnimation` deja el manejador a `NULL`.
+      romper: () => { i.unaVezHasta = m.t; i.sostenida = null; },
       manda: () => Boolean(f.manda),
     };
   }
@@ -1837,9 +2061,9 @@ export class Manada {
    * la que `pon` va a poner, y `pon` cae en la 0 si el nombre no existe — lo
    * que se dispara es lo de la que SUENA, como en el motor.
    */
-  _atacaPorGuion(i, objetivo) {
+  _atacaPorGuion(i, objetivo, golpe = i.ficha?.ia?.golpe) {
     if (!this.oyente) return false;
-    const s = buscarSecuencia(i.secuencias, i.ficha?.ia?.golpe);
+    const s = buscarSecuencia(i.secuencias, golpe);
     const eventos = [...new Set((s?.eventos ?? [])
       .filter((e) => EVENTOS_QUE_LLAMAN_AL_GUION.has(e.evento) && e.opciones)
       .map((e) => e.opciones))];
@@ -1852,6 +2076,47 @@ export class Manada {
     if (r.porGuion !== true) return false;
     i.objetivoDelGuion = objetivo;
     return true;
+  }
+
+  /**
+   * **LA ANIMACIÓN DE ATAQUE QUE PIDE EL GUION** — el 98.
+   *
+   * `callevent npc_selectattack` y después el valor de `ANIM_ATTACK`: las dos
+   * primeras líneas de `npcatk_attackenemy`/`npcatk_attack`
+   * (base_npc_attack.script:212-215, base_npc_attack_new.script:617-619). Lo
+   * contesta el oyente (`GuionDeNpc.eligeAtaque`); sin oyente, o sin guion
+   * que la nombre, la horneada al nacer, que es la de siempre.
+   *
+   * Si el nombre no es una secuencia del modelo HORNEADO, `pon` caería en la
+   * 0 —que es lo que haría `LookupSequence`—; pero eso aquí es casi siempre
+   * un hueco del horneado y no del modelo (el 78, el 93), así que se cuenta
+   * en `golpesDelGuion.animSinHornear` para que se vea.
+   */
+  _animDeAtaque(i, objetivo) {
+    const base = i.ficha?.ia?.golpe;
+    if (!this.oyente) return base;
+    const r = { anim: null };
+    this._costura("eligeAtaque", i, { objetivo, quien: objetivo, r });
+    const pedida = r.anim || base;
+    if (pedida && i.secuencias?.length &&
+        !i.secuencias.some((s) => String(s.nombre).toLowerCase() === String(pedida).toLowerCase())) {
+      const c = this.golpesDelGuion;
+      c.animSinHornear = (c.animSinHornear ?? 0) + 1;
+      const k = `${i.ficha?.script ?? "?"} ${pedida}`;
+      (c.cualesSinHornear ??= {})[k] = (c.cualesSinHornear[k] ?? 0) + 1;
+    }
+    return pedida;
+  }
+
+  /**
+   * El valor de una `ANIM_*` en el guion del bicho AHORA, o `null` si no hay
+   * oyente o el guion no la tiene puesta. Para `ANIM_RUN` (el 98).
+   */
+  _animDelGuion(i, variable) {
+    if (!this.oyente) return null;
+    const r = { anim: null };
+    this._costura("anim", i, { variable, r });
+    return r.anim || null;
   }
 
   /**
@@ -1979,7 +2244,12 @@ export class Manada {
     const arnes = this._arnesDeCaza;
     if (!arnes) { c.sinArnes++; return { porQue: "sin arnes de caza" }; }
     if (p?.forma !== "traza" && p?.forma !== "directo") { c.formaSinPortar++; return { porQue: `forma ${p?.forma}` }; }
-    const objetivo = p.alJugador ? (i.objetivoDelGuion ?? null) : null;
+    // EL 98: o el que caza la IA. Un `dodamage` que no sale de un ataque —la
+    // embestida del jabalí, desde su bloque de `repeatdelay 0.1`
+    // (boar_base.script:164-176)— llega sin que la IA haya atacado, y
+    // `objetivoDelGuion` sólo lo escribe `_atacaPorGuion`. `BOAR_CHARGE_TARGET`
+    // es `HUNT_LASTTARGET`, que es a quien caza (`GuionDeNpc.cazando`).
+    const objetivo = p.alJugador ? (i.objetivoDelGuion ?? i.objetivoCazado ?? null) : null;
     const cand = objetivo ? (arnes.objetivos?.(i) ?? []).find((x) => x.id === objetivo) : null;
     if (!cand) { c.sinObjetivo++; return { porQue: "el guion apunta a alguien que no es el objetivo de la IA" }; }
     const U = this.U;
@@ -2083,9 +2353,13 @@ export class Manada {
     // pasa, `game_struck` (TakeDamage, :2385, ANTES de `GiveHP`). Se avisa
     // aquí, antes de restar, porque es el orden del motor; la costura sabe
     // cuál de los dos toca con `parado`.
+    // EL 97: `vuelta` vuelve con `hablaElGuion` si un guion recibió el `game_parry`
+    // (src/juego/interacciones.js): entonces el mensaje es SUYO y quien llama
+    // no lo repite.
+    const vuelta = {};
     this._costura("recibe", i, {
       quien: dados.quien ?? quien ?? null, dano, tipo, cubo,
-      acierto: tiradaDeAcierto, parado: Boolean(p.para),
+      acierto: tiradaDeAcierto, parado: Boolean(p.para), r: vuelta,
     });
     if (p.para) {
       i.reaccion.parados++;
@@ -2093,7 +2367,7 @@ export class Manada {
       // vez y sin que la interrumpa nada.
       if (ia.esquiva) this.deUnaVez(i, ia.esquiva);
       this._suceso("para", { id: i.id });
-      return { muerto: false, vida: i.vida, parado: true, mensaje: ia.mensajeDeParry, tirada: p };
+      return { muerto: false, vida: i.vida, parado: true, mensaje: ia.mensajeDeParry, tirada: p, hablaElGuion: Boolean(vuelta.hablaElGuion) };
     }
     if (cubo) i.recibido[cubo] = (i.recibido[cubo] ?? 0) + dano;
     // 2. LA REACCIÓN se calcula con la vida ANTES de restar, porque el umbral
@@ -2144,7 +2418,9 @@ export class Manada {
     //
     // Va aquí y no en `reaccion.js` porque quien tiene el cazador es la manada.
     const aQuien = dados.quien ?? quien ?? null;
-    if (i.cazador && aQuien !== null && aQuien !== undefined) {
+    // EL 95: es una rama del `game_struck` de la IA (:1075), y sin `HAS_AI`
+    // no existe (ver `reaccionAlGolpe`).
+    if (i.cazador && ia.tieneIA !== false && aQuien !== null && aQuien !== undefined) {
       const a = apuntaAlQueTePega({
         relacion: ia?.relacion ?? i.ficha.relacion ?? null,
         tengoObjetivo: i.cazador.objetivo !== null,
@@ -2177,6 +2453,12 @@ export class Manada {
    */
   avisar(i, quien, { esAliado = null } = {}) {
     if (!i || i.ficha.ia?.noAvisa || quien === null || quien === undefined) return [];
+    // EL 95: `if HAS_AI` delante del aviso (base_npc.script:168-172), y
+    // `HAS_AI` sólo lo ponen las dos IA de ataque (ver `tieneIA` en `iaDe`).
+    // Un aldeano muere sin avisar a nadie; aquí avisaba a todo aldeano con
+    // cazador que tuviera a tiro de grito, y ése te tomaba de objetivo.
+    // `undefined` (ficha a mano, horneado viejo) sigue avisando, como antes.
+    if (i.ficha.ia?.tieneIA === false) return [];
     const U = this.U;
     const candidatos = this.instancias
       .map((o, n) => ({ i: n, o, donde: [o.donde[0] * U, o.donde[1] * U, o.donde[2] * U] }))

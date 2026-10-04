@@ -36,8 +36,10 @@ import { vitalesDe, velocidadDelPaso } from "./andar.js";
 // eso es lo que hace que sea un techo y no un número inventado.
 import { fraccionDePotencia, TOPE_PROPIEDAD, CRITICO, expDeLaMuerte } from "../play/golpe.js";
 import { entrenar } from "../juego/personaje.js";
-import { hablar, MAX_LETRAS, RANGO_LOCAL, HABLA } from "../play/chat.js";
+import { hablar, MAX_LETRAS, RANGO_LOCAL, HABLA, loOye, distancia2D, dentroDelCorral } from "../play/chat.js";
 import { InteraccionesNpc } from "../juego/interacciones.js";
+// EL 95: el brillo de un jugador viaja en SU foto (doc/BRILLO_95.md).
+import { brilloDeLaEntidad, podarBrillos, mismoBrillo } from "../play/brillo.js";
 // El 81: `setmovedest` y el rayo de `$cansee` también en el camino del SERVIDOR.
 // `ganchoDeMovedest` y `loVe` son los mismos que usa `src/main.js`; lo único que
 // cambia entre los dos mundos es la física que se les inyecta.
@@ -49,7 +51,17 @@ import { comprar as comprarEnTienda, vender as venderEnTienda, MAX_OBJETOS } fro
 // juegos, el 63).
 import { GuionDelJugador } from "../play/guionjugador.js";
 import { TablaDeEfectos } from "../play/efectos.js";
-import { golpeRecibido } from "../play/mensajesdecombate.js";
+import { golpeRecibido, parryDelJugador as fraseDeParry } from "../play/mensajesdecombate.js";
+// EL 97: LA DEFENSA DEL JUGADOR, la MISMA que en solitario (`golpear` en
+// src/main.js): armadura, escudo, daño negativo a cero y parry del motor. No
+// se copia ninguna regla; aquí sólo se le pregunta al mundo del servidor lo
+// que en el navegador se le pregunta al suyo (doc/DEFENSARED_97.md).
+import { defensaDelJugador, dentroDelCono2D, Brazal, POSTURA } from "../play/escudo.js";
+import { valorDeParryDelJugador, manosDelParry } from "../play/parry.js";
+import { seVisteAlCargar, correEnElServidor } from "../play/armadura.js";
+// EL 98: las trabas de los efectos, las mismas que en solitario (doc/SERVIDOR_98.md).
+import { trabasDelJugador, velocidadConTrabas, trabarIntencion, trabasParaElCable } from "../play/trabas.js";
+import { GuionesDeObjeto, GuionDeObjeto, QUIEN_VISTE } from "../play/guionobjeto.js";
 import { atributosDe, derivadas } from "../juego/stats.js";
 import {
   PARTIDA, vidaTotal, jugadoresActivos, autoajustar, experienciaDelBicho,
@@ -168,6 +180,11 @@ export class Partida {
     // por su camino (doc/BICHOS_GUION_91.md §2: `G_MAP_ADDPARAMS`). Perilla del
     // operador, como `oroInicial`: ver `--params` en `tools/servidor.mjs`.
     paramsDeBicho = null,
+    // EL 97: `build/msr/objetosguion.json`, los guiones de los objetos. Con
+    // ellos la armadura PUESTA protege también con servidor: su
+    // `game_takedamage` corre aquí (`_equipoDe`). Sin ellos no hay armadura,
+    // y se cuenta en `defensa.sinGuiones`.
+    objetosGuion = null,
   } = {}) {
     if (!mundo) throw new Error("una partida necesita un mundo que simular");
     if (!almacen) throw new Error("una partida necesita dónde guardar los personajes");
@@ -207,7 +224,7 @@ export class Partida {
     this.fauna = fauna ?? null;
     if (this.fauna) {
       this.fauna.jugadores = () => [...this.clientes.values()].filter((c) => c.cuerpo);
-      this.fauna.golpear = (i, j, dano) => this._bichoPega(i, j, dano);
+      this.fauna.golpear = (i, j, dano, tipo) => this._bichoPega(i, j, dano, tipo);
     }
     /**
      * Las fotos de la manada, por número. Una sola cola para TODOS los clientes,
@@ -239,10 +256,30 @@ export class Partida {
     this.tablaDeEfectos = efectos ? new TablaDeEfectos(efectos) : null;
     this.fichaDelJugador = fichaDelJugador;
     this.paramsDeBicho = paramsDeBicho ?? null;
+    this.guionesDeObjeto = objetosGuion ? new GuionesDeObjeto(objetosGuion) : null;
+    /**
+     * EL 97: lo que ha hecho la defensa con los golpes de los bichos, para
+     * medirlo desde fuera (`/costura`). Se cuenta en el servidor, que es
+     * donde se decide.
+     */
+    this.defensa = { golpes: 0, conArmadura: 0, bloqueos: 0, desvios: 0, parados: 0, sinGuiones: 0, danados: 0, ultimo: null, historial: [] };
+    /**
+     * Las tiradas de la defensa, fijas, para las pruebas (`dados` de
+     * `defensaDelJugador`: `parry`, `acierto`, `arriba`, `abajo`). `null` es
+     * el azar de verdad, que es lo que hace el juego.
+     */
+    this.dadosDeDefensa = null;
     /** Los guiones de bicho a los que ya se les ha llamado `paramsDeBicho`. */
     this._conParams = new WeakSet();
     /** El 92: cuántos `applyeffect` pidió un guion sin jugador a quien ponérselo. */
     this.efectosSinJugador = 0;
+    /**
+     * EL 95: lo que han dicho los guiones de los NPC y a quién le llegó. `sinJugador`
+     * es un mensaje para «su» jugador desde un guion que no tiene ninguno
+     * atado (no se adivina a quién: se cuenta); `sinSitio`, un `saytext` de un
+     * NPC del que no se sabe dónde está.
+     */
+    this.voz = { dichas: 0, oidas: 0, sinSitio: 0, sinJugador: 0, avisos: 0 };
     if (guiones && this.fauna) {
       this.interacciones = new InteraccionesNpc({
         sesion: null,
@@ -279,15 +316,10 @@ export class Partida {
         animar: (instancia, nombre, modo) => this.fauna?.manada?.playanim?.(instancia, nombre, modo),
         // A quién va cada recado: `this.hablandoCon` es la sesión del que
         // habló, y de la sesión se saca su cliente. `MSG_ONE`, no `MSG_ALL`.
-        suceso: (tipo, texto) => this._aQuienHabla()?.mandar(MENSAJE.TEXTO, {
-          // Un `suceso` del guion es de la consola de SUCESOS, no del chat;
-          // viaja por el mismo mensaje con el canal marcado para que el
-          // cliente sepa en qué caja va.
-          tipo: -1, texto, suceso: tipo,
-        }),
-        ventanaDeAviso: (titulo, texto) => this._aQuienHabla()?.mandar(MENSAJE.TEXTO, {
-          tipo: -2, texto, titulo,
-        }),
+        // EL 95: eso valía para lo que dice el MENÚ mientras se contesta; lo
+        // que dice un GUION va a quien diga el guion. Ver `_sucesoDeGuion`.
+        suceso: (tipo, texto, o = null) => this._sucesoDeGuion(tipo, texto, o),
+        ventanaDeAviso: (titulo, texto, _sesion, o = null) => this._avisoDeGuion(titulo, texto, o),
         abrirTienda: (o) => this._ofrecerTienda(o),
         comoEstaElCliente: (vendedor, cliente) => this._comoEstaElCliente(vendedor, cliente),
         // El 79. Quién habla cambia en cada llamada, así que `_decir` pone los
@@ -438,6 +470,99 @@ export class Partida {
   }
 
   /**
+   * **LO QUE DICE EL GUION DE UN NPC, Y A QUIÉN LE LLEGA** — el 95.
+   *
+   * Hasta aquí todo iba a `_aQuienHabla()`, el último jugador de la partida
+   * que abrió un menú. Lo mismo que el 94 quitó de `setmovedest`/`$cansee`, en
+   * los dos ganchos que quedaban. En el motor son tres reglas y ninguna es ésa:
+   *
+   *   - `saytext` es `Speak(…, SPEECH_LOCAL)` (npcscript.cpp:708-719): recorre
+   *     a TODOS los jugadores y se lo manda a los que estén a
+   *     `Length2D() <= m_SayTextRange` (msmonsterserver.cpp:1712-1716), hayan
+   *     hablado con él o no. Lo trae `o.habla.rango`, en unidades.
+   *   - `playermessage` y sus cinco colores: `RetrieveEntity(Params[0])` y, si
+   *     es un jugador, a ése (scriptcmds.cpp:4249-4250). El guion ya filtra que
+   *     el nombre sea SU jugador (`mensajeAlJugador`, con `esElJugador`), así
+   *     que aquí es el cliente de ese guion. Lo mismo `offer` («You receive…»):
+   *     el oro va al personaje de su jugador, y el aviso con él.
+   *   - lo que no trae instancia es lo que `InteraccionesNpc` dice MIENTRAS
+   *     contesta un menú (`pedir`/`elegido`, que ponen `hablandoCon` en la
+   *     misma llamada): ahí sí es el que pregunta.
+   *
+   * **Sin jugador no se adivina** (la regla del 94): se cuenta en `voz`.
+   */
+  _sucesoDeGuion(tipo, texto, o = null) {
+    const datos = { tipo: -1, texto, suceso: tipo };
+    const instancia = o?.instancia ?? null;
+    if (o?.habla) {
+      this.voz.dichas++;
+      for (const c of this._quienOyeA(instancia, o.habla.rango)) { c.mandar(MENSAJE.TEXTO, datos); this.voz.oidas++; }
+      return;
+    }
+    // Lo que dice el propio jugador (`hablaElJugador`) va a SU consola: trae
+    // su sesión, y el que escribe en el chat no ha abierto ningún menú.
+    if (o?.sesion) {
+      for (const c of this.clientes.values()) if (c.sesion === o.sesion) { c.mandar(MENSAJE.TEXTO, datos); return; }
+      return;
+    }
+    if (!instancia) { this._aQuienHabla()?.mandar(MENSAJE.TEXTO, datos); return; }
+    const c = this._clienteDelGuion(instancia);
+    if (!c) { this.voz.sinJugador++; return; }
+    c.mandar(MENSAJE.TEXTO, datos);
+  }
+
+  /**
+   * `infomsg <player|all> <título> <texto>` — el 95. `all` es `SendHUDMsgAll`,
+   * que recorre los `maxClients` (svglobals.cpp:346-351); lo demás es UNO, el
+   * que nombre el guion (scriptcmds.cpp:4064-4075), y el guion ya ha
+   * comprobado que es su jugador (`entorno.aviso`).
+   */
+  _avisoDeGuion(titulo, texto, o = null) {
+    const datos = { tipo: -2, texto, titulo };
+    this.voz.avisos++;
+    if (o?.todos) {
+      for (const c of this.clientes.values()) if (c.dentro) c.mandar(MENSAJE.TEXTO, datos);
+      return;
+    }
+    if (!o?.instancia) { this._aQuienHabla()?.mandar(MENSAJE.TEXTO, datos); return; }
+    const c = this._clienteDelGuion(o.instancia);
+    if (!c) { this.voz.sinJugador++; return; }
+    c.mandar(MENSAJE.TEXTO, datos);
+  }
+
+  /**
+   * Los clientes que oyen un `saytext` de `instancia` con alcance `rango` (en
+   * UNIDADES, `m_SayTextRange`).
+   *
+   * El bucle de `Speak` (msmonsterserver.cpp:1652-1730): `UTIL_EntitiesInBox`
+   * con la caja de ±6000 (`dentroDelCorral`), y `Length2D` de centro a centro
+   * contra el alcance con `>` (:1714: lo que está JUSTO en el borde, oye). En
+   * 2D el centro y los pies dan lo mismo.
+   *
+   * **LAS POSICIONES SON METROS Y EL ALCANCE SON UNIDADES** (la trampa del 81
+   * y del 61): la distancia se pasa a unidades aquí, que es donde está la
+   * escala, y el corral también, que en `_decir` se compara en metros y es por
+   * eso de 6 000 m (doc/RED_95.md §8). Y una distancia que no es un número no
+   * pasa (`NaN > rango` es `false`, el 79): se cuenta en `voz.sinSitio`.
+   */
+  _quienOyeA(instancia, rango) {
+    const n = instancia?.donde ?? null;
+    if (!n || !n.every?.((x) => Number.isFinite(x))) { this.voz.sinSitio++; return []; }
+    const U = this.mundo?.perfil?.unidadesPorMetro ?? 39.37;
+    const alcance = Number(rango);
+    const oyen = [];
+    for (const c of this.clientes.values()) {
+      if (!c.dentro || !c.cuerpo) continue;
+      const p = c.cuerpo.feet;
+      const d = distancia2D(n, p) * U;
+      if (!Number.isFinite(d) || !Number.isFinite(alcance)) continue;
+      if (!dentroDelCorral([p[0] * U, p[1] * U, p[2] * U])) continue;
+      if (loOye(HABLA.NPC, { distancia2D: d, rango: alcance, hablaUnJugador: false })) oyen.push(c);
+    }
+    return oyen;
+  }
+
+  /**
    * El cliente de un id de objetivo de la manada: «j3» es el hueco 3
    * (`Fauna.nombreDeJugador`). Cualquier otra cosa no es un cliente.
    */
@@ -529,17 +654,25 @@ export class Partida {
    * dentro (`UTIL_ScreenFadeAll`, :1164-1177, y el bucle de :3738-3753).
    *
    * El brillo NO viaja aquí. En el motor es el `renderfx` de la entidad
-   * (mseffects.cpp:318-344) y lo ven los DEMÁS sobre su modelo, no él: este
-   * puerto no dibuja todavía el brillo en el modelo de otro jugador, así que se
-   * cuenta (`costura().efectos[].brillos`) y se dice pendiente
-   * (doc/EFECTOS_RED_93.md). Mandarlo a su propio navegador sería inventarse
-   * un brillo que el jugador del juego no ve.
+   * (mseffects.cpp:318-344) y lo ven los DEMÁS sobre su modelo, no él.
+   * Mandarlo a su propio navegador sería inventarse un brillo que el jugador
+   * del juego no ve.
+   *
+   * EL 95: se apunta en el CLIENTE —`c.brillos`, un `CEntGlow` por línea
+   * (mseffects.cpp:923)— con la hora del servidor, y viaja en la foto de ese
+   * jugador (`_estado`), que es por donde viaja `renderfx` en el motor
+   * (`AddToFullPack`, server/client.cpp:2313-2318). Lectura vieja (93): «este
+   * puerto no dibuja todavía el brillo en el modelo de otro jugador, así que
+   * se cuenta y se dice pendiente».
    */
   _pantalla(c, p) {
     if (!c || !p) return;
     c.pantallas ??= { fundido: 0, icono: 0, brillo: 0 };
     c.pantallas[p.tipo] = (c.pantallas[p.tipo] ?? 0) + 1;
-    if (p.tipo === "brillo") return;
+    if (p.tipo === "brillo") {
+      if (p.brillo) (c.brillos ??= []).push({ ...p.brillo, desde: this.t });
+      return;
+    }
     const datos = { que: p.tipo, ...p.mensaje };
     const a = p.todos ? [...this.clientes.values()].filter((x) => x.dentro) : [c];
     for (const x of a) x.mandar(MENSAJE.PANTALLA, datos);
@@ -559,13 +692,17 @@ export class Partida {
     if (!c?.sesion || !c.vivo || !(golpe?.dano > 0)) return null;
     const a = golpe.atacante ?? null;
     const nombre = a?.nombre ?? a?.instancia?.ficha?.nombre ?? a?.propiedad?.("name") ?? null;
-    const r = c.sesion.danar(golpe.dano, { porQue: nombre ?? "un efecto", deQuien: a?.id ?? null, tipo: "monstruo" });
-    c.mandar(MENSAJE.TEXTO, {
-      tipo: -1, suceso: "atacado",
-      texto: golpeRecibido({ nombre: nombre && nombre !== "0" ? nombre : null, dano: golpe.dano, tipo: golpe.tipo }),
+    // EL 97: por la MISMA defensa que el mordisco, como en el navegador (el
+    // `herir` del guion del jugador va a `golpear`, src/main.js). Con un
+    // veneno («poison_effect») el escudo no bloquea («effect») y el parry no
+    // para («poison»), pero la armadura puesta lo deja a la mitad
+    // (armor_base.script:191-238): antes del 97, con servidor, entraba entero.
+    return this._defender(c, {
+      dano: golpe.dano, tipo: String(golpe.tipo ?? ""),
+      nombre, porQue: nombre ?? "un efecto",
+      desde: Array.isArray(a?.instancia?.donde) ? a.instancia.donde : null,
+      deQuien: a?.id ?? null, efecto: true,
     });
-    this._suceso("dano", { id: c.id, de: a?.id ?? null, dano: Math.round(golpe.dano * 10) / 10, efecto: true });
-    return r;
   }
 
   /**
@@ -603,6 +740,11 @@ export class Partida {
           cerrados: { ...g.costuraCuenta.cerrados }, absorbidos: { ...g.costuraCuenta.absorbidos },
           dodamage: ultimo("game_dodamage"), damaged: ultimo("game_damaged"),
           veneno: g.guion?.buscarVar?.("NPC_DOT_POISON")?.valor ?? null,
+          // EL 95: el jugador atado a este guion (su asa) y su alcance de voz.
+          jugador: g.jugador?.ref ?? null, alcanceDeVoz: g.entorno?.alcanceDeVoz ?? null,
+          yaw: i.yaw ?? null, donde: i.donde ? [...i.donde] : null,
+          mandado: i.mandado ? { origen: [...i.mandado.origen], proximidad: i.mandado.proximidad } : null,
+          frenado: i.frenado ?? null, velocidad: i.velocidad ?? null,
         });
       }
     }
@@ -615,6 +757,10 @@ export class Partida {
         activos: g.efectos.activos, aplicados: g.efectos.historial.length, heridas: g.heridas.length,
         // EL 93: lo que sus efectos han mandado a la pantalla (y el brillo, que no viaja).
         pantallas: { fundido: 0, icono: 0, brillo: 0, ...(c.pantallas ?? {}) },
+        // EL 98: las trabas que leyó `_simular` (no recalculadas: el 65) y las
+        // piezas cuyo reloj corre aquí.
+        trabas: trabasParaElCable(c.trabas),
+        piezas: [...(c.equipoVivo?.vivos?.values() ?? [])].map((e) => ({ id: e.id, puesto: Boolean(e.puesto) })),
       });
     }
     return {
@@ -622,6 +768,11 @@ export class Partida {
       sinOyente: m?.costuraSinOyente ?? null, fallos: m?.costuraFallos ?? 0,
       ...(I ? { ...I.costura } : {}),
       efectosSinJugador: this.efectosSinJugador,
+      // EL 97: lo que la defensa del jugador ha hecho con los golpes.
+      defensa: { ...this.defensa, historial: [...this.defensa.historial] },
+      // EL 95: a quién contestaría `_aQuienHabla()` ahora (el valor de reposo
+      // que se quitó de los cuatro ganchos), y lo que los guiones han dicho.
+      hablaCon: this._aQuienHabla()?.id ?? null, voz: { ...this.voz },
       clientes: [...this.clientes.values()].map((c) => ({ id: c.id, personaje: c.sesion?.personaje?.id ?? null })),
       bichos, efectos,
     };
@@ -760,6 +911,9 @@ export class Partida {
         case MENSAJE.PEDIRMENU: return this._pedirMenu(c, m);
         case MENSAJE.ELIGEMENU: return this._eligeMenu(c, m);
         case MENSAJE.TRADE: return this._trade(c, m);
+        case MENSAJE.EMPUNAR: return this._empunar(c, m);
+        case MENSAJE.VESTIR: return this._vestir(c, m);
+        case MENSAJE.SOLTAR: return this._soltar(c, m);
         case MENSAJE.PONG: return this._pong(c, m);
         case MENSAJE.ADIOS: return this.desconectar(id, { porque: "adiós" });
         default: return null;
@@ -768,6 +922,45 @@ export class Partida {
       c.mandar(MENSAJE.FALLO, { que: m.t, porque: String(e?.message ?? e) });
       return null;
     }
+  }
+
+  /**
+   * SOLTAR — el 97 (`MENSAJE.SOLTAR`). Sólo lo de la mano derecha, que es lo que
+   * suelta la `c` (`ActiveItem()`). Lo soltado no vuelve a la mochila: en el
+   * motor queda en el SUELO como entidad (`FallInit`), y este servidor no tiene
+   * suelo todavía —ni lo ve nadie más ni se puede volver a coger con red—, así
+   * que aquí desaparece. Eso es un pendiente dicho, no una regla
+   * (doc/ARMAS_97.md).
+   */
+  _soltar(c, m) {
+    const p = c.sesion?.personaje;
+    if (!p) return null;
+    const id = m?.id === null || m?.id === undefined ? null : String(m.id).slice(0, 64);
+    // EL 98: «Drop Selected» suelta de un CONTENEDOR (`drop <id>`, client.cpp:
+    // 932-947: «Items could be anywhere on the player», playershared.cpp:942).
+    // Una unidad de una entrada de SU lista que no esté puesta ni sea un
+    // contenedor (un contenedor no se suelta desde dentro de sí mismo, y
+    // quitárselo no está en este puerto).
+    if (m?.desde === "mochila") {
+      const lista = p.objetos ?? [];
+      const e = id ? lista.find((o) => o.id === id && !o.puesto && this._porId?.get?.(o.id)?.tipo !== "contenedor") : null;
+      if (!e) {
+        c.mandar(MENSAJE.FALLO, { que: MENSAJE.SOLTAR, porque: `not carrying ${id}` });
+        return null;
+      }
+      if ((e.n ?? 1) > 1) e.n -= 1;
+      else lista.splice(lista.indexOf(e), 1);
+      c.sesion.tocado?.();
+      return { soltado: id, desde: "mochila" };
+    }
+    const enMano = p.manos?.derecha ?? null;
+    if (!id || id !== enMano) {
+      c.mandar(MENSAJE.FALLO, { que: MENSAJE.SOLTAR, porque: `not holding ${id}` });
+      return null;
+    }
+    p.manos.derecha = null;
+    c.sesion.tocado?.();
+    return { soltado: id };
   }
 
   _hola(c, m) {
@@ -969,6 +1162,15 @@ export class Partida {
     if (!this.fauna || !c.cuerpo) return null;
     const id = Math.trunc(Number(m.id));
     if (!Number.isFinite(id)) return null;
+    // EL 98: NOATTACK. `CGenericItem::Attack` sale en su primera guarda si el
+    // jugador lo lleva (giattack.cpp:252-254), y ese código es compartido: el
+    // servidor lo comprueba también. El navegador ya no lo manda si lo sabe
+    // (las trabas viajan en la foto); esto es por si no lo sabe todavía.
+    if (this._trabasDe(c).noAtacar) {
+      const r = { vale: false, porque: "PLAYER_MOVE_NOATTACK", trabado: true };
+      c.sucesosPendientes.push({ que: "tupegas", id, ...r });
+      return r;
+    }
     const techo = this._techoDeDano(c);
     const dano = Math.min(Math.max(0, Number(m.dano) || 0), techo);
     const pies = c.cuerpo.feet;
@@ -1298,18 +1500,279 @@ export class Partida {
   }
 
   /**
+   * EMPUÑAR — el 96. La misma regla que `cumplir` en el navegador
+   * (src/main.js): lo que había en la mano vuelve a la mochila y lo nuevo sale
+   * de ella (`inv transfer <id> 0`). Con dos condiciones que en el navegador no
+   * hacen falta porque allí el inventario es suyo: el objeto TIENE que estar en
+   * la mochila de la sesión del servidor, y tiene que ser algo que el catálogo
+   * conozca. Si no, no se toca nada y se dice por qué.
+   */
+  _empunar(c, m) {
+    const p = c.sesion?.personaje;
+    if (!p) return null;
+    const id = m?.id === null || m?.id === undefined ? null : String(m.id).slice(0, 64);
+    p.manos ??= { derecha: null, izquierda: null };
+    // EL 97: `mano: "izquierda"` es embrazar un escudo. La misma regla —de la
+    // mochila a la mano y lo de antes de vuelta—, con una condición más: en
+    // este puerto la mano izquierda sólo lleva escudos (`embrazar`, src/main.js),
+    // así que lo que no tenga ficha `escudo` no entra. El servidor lo necesita
+    // para la defensa (`_defender`): sin esto no sabía que llevabas escudo.
+    const lado = m?.mano === "izquierda" ? "izquierda" : "derecha";
+    const antes = p.manos[lado] ?? null;
+    const dice = (x) => (lado === "izquierda" ? { escudo: x } : { arma: x });
+    if (id === antes) return dice(antes);
+    if (id !== null) {
+      if (this._porId && !this._porId.has(id)) {
+        c.mandar(MENSAJE.FALLO, { que: MENSAJE.EMPUNAR, porque: `unknown item ${id}` });
+        return null;
+      }
+      if (lado === "izquierda" && this._porId && !this._porId.get(id)?.escudo) {
+        c.mandar(MENSAJE.FALLO, { que: MENSAJE.EMPUNAR, porque: `not a shield ${id}` });
+        return null;
+      }
+      const i = (p.objetos ?? []).findIndex((o) => o?.id === id);
+      if (i < 0) {
+        c.mandar(MENSAJE.FALLO, { que: MENSAJE.EMPUNAR, porque: `not carrying ${id}` });
+        return null;
+      }
+      p.objetos.splice(i, 1);
+    }
+    if (antes) (p.objetos ??= []).push({ id: antes, n: 1 });
+    p.manos[lado] = id;
+    c.sesion.tocado?.();
+    return dice(id);
+  }
+
+  /**
+   * VESTIR — el 97 (`MENSAJE.VESTIR`). Sólo la marca `puesto` de una entrada que
+   * la sesión del servidor TIENE en `objetos` y que el catálogo dice que se
+   * viste; si no, `FALLO` y no se toca nada. La regla de si cabe la corre el
+   * navegador con el guion de la pieza (src/play/equipar.js); aquí no se repite.
+   */
+  _vestir(c, m) {
+    const p = c.sesion?.personaje;
+    if (!p) return null;
+    const id = String(m?.id ?? "").slice(0, 64);
+    const entrada = (p.objetos ?? []).find((o) => o?.id === id) ?? null;
+    const ficha = this._porId?.get(id) ?? null;
+    if (!entrada || (this._porId && !ficha?.vestible)) {
+      c.mandar(MENSAJE.FALLO, { que: MENSAJE.VESTIR, porque: entrada ? `${id} is not wearable` : `not carrying ${id}` });
+      return null;
+    }
+    if (m?.puesto) entrada.puesto = true;
+    else delete entrada.puesto;
+    c.sesion.tocado?.();
+    return { id, puesto: Boolean(entrada.puesto) };
+  }
+
+  /**
    * UN BICHO LE PEGA A UN JUGADOR. Lo cobra la sesión **del servidor**, que es
    * la que se guarda: el navegador se enterará por la foto, que ya lleva la vida
    * y el estado.
+   *
+   * EL 97: y antes de cobrarlo, LA DEFENSA (`_defender`). Hasta el 96 se
+   * restaba tal cual: con servidor no había armadura, ni escudo, ni parry.
+   * Devuelve lo mismo que `golpear` en el navegador —`{parado, dano}`—, que es
+   * de donde sale el PARAM1 de `game_dodamage` del bicho (`Manada.cazar`).
    */
-  _bichoPega(i, cliente, dano) {
-    if (!cliente?.sesion || !cliente.vivo) return null;
-    const r = cliente.sesion.danar(dano, {
-      porQue: i.ficha.nombre ?? i.ficha.clase ?? "un monstruo",
-      deQuien: i.id, tipo: "monstruo",
+  _bichoPega(i, cliente, dano, tipo = i?.ficha?.ia?.tipoDano ?? "") {
+    return this._defender(cliente, {
+      dano, tipo: String(tipo ?? ""),
+      nombre: i?.ficha?.nombre ?? null,
+      porQue: i?.ficha?.nombre ?? i?.ficha?.clase ?? "un monstruo",
+      desde: Array.isArray(i?.donde) ? i.donde : null,
+      deQuien: i?.id ?? null,
     });
-    this._suceso("dano", { id: cliente.id, de: i.id, dano: Math.round(dano * 10) / 10 });
-    return r;
+  }
+
+  /**
+   * ── EL 97: LA DEFENSA DEL JUGADOR, EN EL SERVIDOR ─────────────────────────
+   *
+   * El orden es el del motor y lo escribe UNA función, `defensaDelJugador`
+   * (src/play/escudo.js), la misma que usa `golpear` en src/main.js:
+   *
+   *     for (i) Gear[i]->OwnerTakeDamage(Damage);   la armadura y el ESCUDO
+   *     if (Damage.flDamage <= 0) Damage.flDamage = 0;
+   *     Damage.flDamage = CMSMonster::TraceAttack(Damage);   el PARRY
+   *                                                   player.cpp:403-414
+   *
+   * Lo único que se hace aquí es contestar las preguntas que la regla le hace
+   * al mundo, con el mundo del servidor:
+   *
+   *   - QUÉ LLEVA PUESTO: las entidades con guion de su armadura
+   *     (`_equipoDe`), del `puesto` del personaje que guarda ESTE proceso.
+   *   - SI EL ESCUDO ESTÁ ARRIBA: el `Brazal` del servidor (`_brazalDe`),
+   *     que se mueve con el botón `ATACAR2` de las órdenes.
+   *   - DE DÓNDE VIENE: el cono de 53° (`dentroDelCono2D`) con el `yaw` de la
+   *     última orden, que es el que tiene el cuerpo del servidor.
+   *   - CUÁNTO PARRY: `update_parry` (`manosDelParry`) con el arma y el escudo
+   *     de sus manos en el catálogo del servidor.
+   *
+   * Y lo que se le DICE va a SU consola y a ninguna otra (`MSG_ONE`): «X hits
+   * you» con el daño que queda (giattack.cpp:1994), «Deflected!» del escudo,
+   * y el parry por el `game_parry` de su guion de jugador, que es quien lo
+   * dice en el mod (player/player_main.script). Los mensajes de la armadura
+   * salen de su propio guion, que aquí tiene la consola de este cliente.
+   */
+  _defender(c, { dano, tipo = "", nombre = null, porQue = null, desde = null, deQuien = null, efecto = false } = {}) {
+    if (!c?.sesion || !c.vivo || !(dano > 0)) return null;
+    const p = c.sesion.personaje;
+    const decir = (texto) => c.mandar(MENSAJE.TEXTO, { tipo: -1, texto, suceso: "atacado" });
+    // El «adelante» del jugador en el plano —lo único que mira el cono—, con
+    // la misma cuenta que el navegador (`golpear`, src/main.js).
+    let deFrente = true;
+    if (desde && c.cuerpo) {
+      const yo = c.cuerpo.feet;
+      const yaw = Number(c.cuerpo.yaw) || 0;
+      deFrente = dentroDelCono2D(desde, [yo[0], yo[1], yo[2]], [-Math.sin(yaw), 0, -Math.cos(yaw)]);
+    }
+    const brazal = this._brazalDe(c);
+    // Con la mano vacía se empuñan los puños, como en `empunar` (src/main.js).
+    const arma = this._porId?.get(p?.manos?.derecha ?? "fist_bare") ?? this._porId?.get("fist_bare") ?? null;
+    const d = defensaDelJugador({
+      dano, tipo,
+      escudo: brazal?.ficha ?? null,
+      postura: brazal?.postura ?? POSTURA.GUARDADO,
+      desplegado: Boolean(brazal?.desplegado),
+      deFrente,
+      parry: valorDeParryDelJugador({
+        manos: manosDelParry({ habilidades: p?.habilidades, arma, escudo: brazal?.ficha ?? null }),
+      }),
+      equipo: this._equipoDe(c),
+      atacante: nombre ?? "none",
+      dados: this.dadosDeDefensa ?? {},
+    });
+    const D = this.defensa;
+    D.golpes++;
+    if (d.armadura?.piezas?.length) D.conArmadura++;
+    D.ultimo = {
+      n: D.golpes, cliente: c.id, antes: dano, tipo, deFrente,
+      armadura: { dano: d.armadura?.dano ?? dano, piezas: (d.armadura?.piezas ?? []).map((x) => ({ ...x })) },
+      bloqueo: { bloquea: d.bloqueo.bloquea, arriba: Boolean(d.bloqueo.arriba), porque: d.bloqueo.porque },
+      parry: { para: d.parry.para, tirada: d.parry.tirada, acc: d.parry.acc, valor: d.parry.valor },
+      dano: d.dano, efecto,
+    };
+    D.historial.push(D.ultimo);
+    if (D.historial.length > 200) D.historial.shift();
+    if (d.bloqueo.bloquea) {
+      if (d.bloqueo.arriba) D.bloqueos++; else D.desvios++;
+      if (d.mensaje) decir(d.mensaje);
+    }
+    if (d.parado) {
+      D.parados++;
+      // LA FRASE LA DICE EL GUION, como en `golpear`: `game_parry` con los
+      // seis parámetros del motor (msmonsterserver.cpp:2237-2245). Sin guion
+      // del jugador aquí, la misma frase armada por `mensajesdecombate.js`.
+      const dicho = this._efectosDe(c)?.llamar?.("game_parry", [
+        nombre ?? "none", String(dano), tipo,
+        String(Math.round(d.parry.tirada)), String(Math.abs(Math.round(d.parry.acc))),
+        String(Math.round(d.parry.valor)),
+      ]);
+      if (!dicho) decir(fraseDeParry(d.parry.tirada, Math.abs(d.parry.acc)));
+      this._suceso("dano", { id: c.id, de: deQuien, dano: 0, parado: true, ...(efecto ? { efecto: true } : {}) });
+      return { parado: true, dano: 0 };
+    }
+    if (!(d.dano > 0)) return { parado: false, dano: 0 };
+    decir(golpeRecibido({ nombre: nombre && nombre !== "0" ? nombre : null, dano: d.dano, tipo }));
+    // EL 98: `game_damaged` (msmonsterserver.cpp:2311), en el mismo sitio que
+    // `golpear` en solitario: tras el aviso y antes de restar. Dos mitades,
+    // porque el guion del jugador está partido: los EFECTOS del anfitrión de
+    // aquí lo reciben aquí, y el guion propio —regeneración, barra de vida,
+    // `PL_BEEN_ATTACKED`— y el descanso de sentarse son del navegador, que lo
+    // llama al recibir este `golpeado` (MSG_ONE, sólo a este cliente).
+    const atacante = nombre && nombre !== "0" ? nombre : "none";
+    // El anfitrión SI LO HAY (`_anfitrionSiHay`): sin él no hay efectos que
+    // avisar, y crearlo aquí daba uno a todo el que recibe un golpe.
+    this._anfitrionSiHay(c)?.danado({ atacante, dano: d.dano, tipo }, { soloEfectos: true });
+    c.sucesosPendientes.push({ que: "golpeado", de: deQuien, atacante, dano: d.dano, tipo, ...(efecto ? { efecto: true } : {}) });
+    this.defensa.danados++;
+    c.sesion.danar(d.dano, { porQue: porQue ?? nombre ?? "un monstruo", deQuien, tipo: "monstruo" });
+    this._suceso("dano", { id: c.id, de: deQuien, dano: Math.round(d.dano * 10) / 10, ...(efecto ? { efecto: true } : {}) });
+    return { parado: false, dano: d.dano };
+  }
+
+  /**
+   * EL 97: el escudo de este cliente, en el servidor. Un `Brazal` (la
+   * máquina de `hold-strike` de src/play/escudo.js, la misma del navegador)
+   * por lo que haya en `manos.izquierda`, desplegado al embrazarlo como hace
+   * `embrazar` (`weapon_deploy`). Se rehace si cambia lo que hay en la mano.
+   */
+  _brazalDe(c) {
+    const id = c?.sesion?.personaje?.manos?.izquierda ?? null;
+    if (c._brazalDeId === id) return c.brazal ?? null;
+    c._brazalDeId = id;
+    const ficha = id ? this._porId?.get(id) ?? null : null;
+    c.brazal = ficha?.escudo ? new Brazal(ficha) : null;
+    c.brazal?.desplegar(true);
+    return c.brazal;
+  }
+
+  /**
+   * EL 97: LO QUE LLEVA, CON SU GUION, en el orden de la mochila (el `Gear`).
+   *
+   * Es lo que en el navegador es `objetosVivos` (`sincronizarObjetosVivos`,
+   * src/main.js), recortado a lo que la defensa usa: `golpeContraLaArmadura`
+   * sólo llama a lo PUESTO y a lo que es armadura (src/play/armadura.js), así
+   * que aquí sólo se montan ésos. Una poción de la mochila no corre su guion
+   * en el servidor —sus relojes siguen siendo del navegador, como hasta hoy—,
+   * y montarla aquí la haría curar dos veces.
+   *
+   * El anfitrión es el guion del jugador de los efectos (`_efectosDe`), que es
+   * su `ent_owner`. Lo que el objeto dice va a la consola de ESTE cliente.
+   *
+   * Una entidad se rehace si su `puesto` ha cambiado: ponerse una pieza es
+   * `game_wear` y quitársela `game_remove`, y lo que llama a eso es quien
+   * cambia el `puesto` (`vestir`, src/play/armadura.js). Aquí no se adivina.
+   */
+  _equipoDe(c) {
+    const p = c?.sesion?.personaje;
+    if (!p) return [];
+    if (!this.guionesDeObjeto) {
+      if ((p.objetos ?? []).some((o) => o?.puesto)) this.defensa.sinGuiones++;
+      return [];
+    }
+    let e = c.equipoVivo;
+    if (!e || e.personaje !== p) e = c.equipoVivo = { personaje: p, vivos: new Map(), cargado: false };
+    // EL 98: el anfitrión se pide SÓLO si hay una pieza que montar. Desde que
+    // `_paso` llama a esto en cada paso (los relojes de las piezas), pedirlo
+    // arriba daba un anfitrión a todo cliente, y `costura().efectos` —«a
+    // quién le ha caído un efecto»— pasaba a listar a todos (lo cazó
+    // `sondas/costurared92`, el control negativo de Beto).
+    let host = null;
+    const lista = [];
+    const vistos = new Set();
+    for (const o of p.objetos ?? []) {
+      const ficha = this._porId?.get(o?.id) ?? null;
+      if (!correEnElServidor(ficha, o?.puesto)) continue;
+      const clave = String(o.uid ?? o.id);
+      if (vistos.has(clave)) continue;
+      vistos.add(clave);
+      let ent = e.vivos.get(clave);
+      if (!ent || ent.puesto !== Boolean(o.puesto)) {
+        if (!this.guionesDeObjeto.tiene(o.id)) continue;
+        host ??= this._efectosDe(c);
+        ent = new GuionDeObjeto({
+          guiones: this.guionesDeObjeto, id: o.id, jugador: host,
+          ahora: () => this.t,
+          suceso: (tipo, texto) => c.mandar(MENSAJE.TEXTO, { tipo: -1, texto, suceso: tipo }),
+          maximos: () => {
+            const d = derivadas(atributosDe(p.habilidades));
+            return { vida: d.vidaMax, mana: d.manaMax };
+          },
+        });
+        ent.arrancar({
+          genero: p.genero === "female" ? "female" : "male",
+          quien: e.cargado ? QUIEN_VISTE.JUGANDO : QUIEN_VISTE.CARGA,
+          viste: seVisteAlCargar(ficha, o),
+          puesto: Boolean(o.puesto),
+        });
+        e.vivos.set(clave, ent);
+      }
+      lista.push(ent);
+    }
+    for (const k of [...e.vivos.keys()]) if (!vistos.has(k)) e.vivos.delete(k);
+    e.cargado = true;
+    return lista;
   }
 
   /** Un suceso de la manada, a la cola de cada cliente. */
@@ -1396,6 +1859,19 @@ export class Partida {
     // lleva los suyos (`IScripted::RunScriptEvents`, script.cpp:5906-5922).
     this._ponerParams();
     for (const c of this.clientes.values()) c.anfitrionDeEfectos?.efectos?.paso(this.paso);
+    // EL 98: Y LOS RELOJES DE LAS PIEZAS que corren aquí (`correEnElServidor`,
+    // src/play/armadura.js): el `failed_str_req_loop` de una armadura que pesa
+    // demasiado (armor_base.script:100, :173-181) y lo que cualquier pieza
+    // puesta tenga en `callevent` o `repeatdelay`. Cada objeto es su propio
+    // `CScript` con sus relojes (script.cpp:5906-5922). Hasta el 98 las
+    // entidades se montaban al primer golpe y nunca se les daba `paso`, así
+    // que con servidor el fénix de un débil no le frenaba nunca.
+    if (this.guionesDeObjeto) {
+      for (const c of this.clientes.values()) {
+        if (!c.dentro || !c.sesion?.personaje) continue;
+        for (const ent of this._equipoDe(c)) ent.paso(this.paso);
+      }
+    }
     // Una vez por segundo, como el motor.
     if (this.t - this._ultimoChequeo >= 1) {
       this._ultimoChequeo = this.t;
@@ -1486,13 +1962,69 @@ export class Partida {
     const cuerpo = c.cuerpo;
     cuerpo.yaw = o.yaw;
     cuerpo.pitch = o.cabeceo;
+    // ── EL 98: LAS TRABAS, como en solitario ─────────────────────────────
+    //
+    // `PreThink` y `SetSpeed` son del SERVIDOR en el motor
+    // (player.cpp:4033-4054, msmonsterserver.cpp:2819-2857): un aturdimiento
+    // o un `effect_slow` que cae en el anfitrión de efectos de este cliente
+    // frena AQUÍ, con la misma `trabasDelJugador` y la misma
+    // `trabarIntencion` que el bucle de src/main.js. Hasta el 98 un jugador
+    // aturdido con servidor andaba, saltaba y pegaba como si nada.
+    const t = this._trabasDe(c);
+    const b = o.botones ?? 0;
+    const q = trabarIntencion({
+      adelante: o.adelante, lado: o.lado,
+      correr: (b & BOTON.CORRER) !== 0, saltar: (b & BOTON.SALTAR) !== 0,
+      agachar: (b & BOTON.AGACHAR) !== 0, atacar: (b & BOTON.ATACAR) !== 0,
+      cubrir: (b & BOTON.ATACAR2) !== 0,
+    }, t);
+    // La orden trabada, para la cuenta del aguante (`velocidadDelPaso` mira el
+    // botón de correr y el de atacar): una orden de trotar con NORUN no trota.
+    const ot = {
+      ...o, adelante: q.adelante, lado: q.lado,
+      botones: (b & ~(BOTON.CORRER | BOTON.SALTAR | BOTON.AGACHAR | BOTON.ATACAR | BOTON.ATACAR2))
+        | (q.correr ? BOTON.CORRER : 0) | (q.saltar ? BOTON.SALTAR : 0)
+        | (q.agachar ? BOTON.AGACHAR : 0) | (q.atacar ? BOTON.ATACAR : 0)
+        | (q.cubrir ? BOTON.ATACAR2 : 0),
+    };
+    // `pev->maxspeed`: porcentaje para el cliente y TOPE para `pmove`
+    // (clplayer.cpp:306-307, pm_shared.cpp:3050-3053). Ver src/play/trabas.js.
+    const conTrabas = velocidadConTrabas(this._velocidad(c, ot, dt), t.porcentaje);
+    c.maxima = conTrabas.maxima;
     cuerpo.step(dt, {
-      forward: o.adelante,
-      strafe: o.lado,
-      jump: (o.botones & BOTON.SALTAR) !== 0,
-      agachar: (o.botones & BOTON.AGACHAR) !== 0,
-      maxima: this._velocidad(c, o, dt),
+      forward: q.adelante,
+      strafe: q.lado,
+      jump: q.saltar,
+      agachar: q.agachar,
+      maxima: conTrabas.maxima,
+      tope: conTrabas.tope,
     });
+    // EL 97: EL ESCUDO, con el mismo paso que el cuerpo. El botón es el de la
+    // otra mano (`IN_ATTACK2`, giattack.cpp:118), y sólo jugando, como el
+    // `cubre` del navegador. Su postura es la que mira `_defender`. EL 98:
+    // con NOATTACK no se levanta (`q.cubrir`).
+    this._brazalDe(c)?.tic(dt, { pulsado: c.vivo && q.cubrir });
+  }
+
+  /** EL 98: el anfitrión de efectos de este cliente si ya existe y es de su personaje; si no, `null`. */
+  _anfitrionSiHay(c) {
+    const h = c?.anfitrionDeEfectos ?? null;
+    return h && h.personaje === c.sesion?.personaje ? h : null;
+  }
+
+  /**
+   * EL 98: LAS TRABAS DE ESTE CLIENTE, de los efectos que lleva su anfitrión
+   * (`_efectosDe`). Sin anfitrión —una partida sin efectos horneados—, ninguna.
+   * Se guardan en `c.trabas` para la foto (`trabasParaElCable`) y para medir.
+   *
+   * No CREA el anfitrión: si no lo hay, no hay efectos que lean. Crearlo aquí
+   * —en cada orden— daba un anfitrión a todo cliente, y `costura().efectos`
+   * dejaba de decir a quién le ha caído algo (lo cazó costurared92b).
+   */
+  _trabasDe(c) {
+    const t = trabasDelJugador(this._anfitrionSiHay(c));
+    c.trabas = t;
+    return t;
   }
 
   /**
@@ -1581,7 +2113,24 @@ export class Partida {
       rapidez: red(c.cuerpo.rapidez ?? 0),
       vida: c.sesion?.personaje?.vida ?? null,
       estado: c.sesion?.estado ?? null,
+      // EL 95: `renderfx`/`rendercolor`/`renderamt`, o `null`. Se calcula a la
+      // hora de la foto, como el `Think` de `CEntGlow` los reescribe en `pev`
+      // (mseffects.cpp:361-389), y se apaga si el jugador está muerto (:367).
+      brillo: this._brillo(c),
+      // EL 96: lo que lleva en la mano derecha, que es lo que el cliente de los
+      // demás cuelga de su figura (`CRenderPlayer::RenderGearItem`,
+      // clrenderent.cpp:321-365). El id y no el modelo: el modelo lo saca cada
+      // cliente de su propio catálogo.
+      arma: c.sesion?.personaje?.manos?.derecha ?? null,
     };
+  }
+
+  /** EL 95. El brillo de este jugador ahora, y los controladores gastados fuera. */
+  _brillo(c) {
+    if (!c.brillos?.length) return null;
+    const vivo = c.vivo !== false;
+    c.brillos = podarBrillos(c.brillos, this.t, { vivo });
+    return brilloDeLaEntidad(c.brillos, this.t, { vivo });
   }
 
   /**
@@ -1662,6 +2211,12 @@ export class Partida {
     };
     if (this.fauna) foto.bichos = bichos;
     if (sucesos.length) foto.sucesos = sucesos;
+    // EL 98: LAS TRABAS de este cliente, que en el motor viajan en SU
+    // `clientdata` —`iuser3` con las banderas (client.cpp:2800) y `maxspeed`
+    // (sv_pmove.c:561)—, no en la entidad que ven los demás. El navegador las
+    // junta con las suyas para construir la orden y predecir. Sólo si hay.
+    const trabas = trabasParaElCable(c.trabas);
+    if (trabas) foto.trabas = trabas;
     return foto;
   }
 
@@ -1750,6 +2305,6 @@ function igual(a, b) {
   return a.pies[0] === b.pies[0] && a.pies[1] === b.pies[1] && a.pies[2] === b.pies[2] &&
     a.yaw === b.yaw && a.cabeceo === b.cabeceo && a.suelo === b.suelo &&
     a.rapidez === b.rapidez && a.vida === b.vida && a.estado === b.estado &&
-    a.nombre === b.nombre &&
+    a.nombre === b.nombre && mismoBrillo(a.brillo, b.brillo) && (a.arma ?? null) === (b.arma ?? null) &&
     (a.vel?.[0] === b.vel?.[0] && a.vel?.[1] === b.vel?.[1] && a.vel?.[2] === b.vel?.[2]);
 }

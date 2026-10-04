@@ -218,6 +218,45 @@ export const MENSAJE = Object.freeze({
    * El cliente dice qué fila quiere, no cuánto cuesta ni cuánto oro le queda.
    */
   TRADE: "trade",
+  /**
+   * EMPUÑAR — el 96. `inv transfer <id> 0` (el comando que manda el ciclador,
+   * src/play/ranuras.js), o sea pasar un objeto de la mochila a la mano.
+   *
+   * El cliente dice QUÉ quiere en la mano; el servidor comprueba que lo lleva y
+   * es él quien lo cambia. Sin esto el servidor no se enteraba nunca de un
+   * cambio de arma: el techo del daño (`_techoDeDano`) seguía siendo el del arma
+   * con que se creó el personaje y los demás no veían qué llevabas.
+   *
+   * EL 97: con `mano: "izquierda"` es EMBRAZAR un escudo (`manos.izquierda`),
+   * con la misma comprobación y una más —que sea un escudo—. Es lo que le dice
+   * al servidor que llevas escudo, y el servidor es quien defiende
+   * (`Partida._defender`, doc/DEFENSARED_97.md). Si está ARRIBA no viaja aquí:
+   * es el botón `ATACAR2` de las órdenes, como `+attack2` en el motor.
+   */
+  EMPUNAR: "empunar",
+  /**
+   * VESTIR — el 97. `use` sobre una pieza en la mano (se la pone, `WearItem`) o
+   * `remove <id>` (se la quita), src/play/equipar.js. Lleva `{ id, puesto }`.
+   * El servidor sólo cambia la marca `puesto` de esa entrada de SU `objetos`:
+   * el paso intermedio por la mano no viaja (una armadura en la mano no tiene
+   * modelo ni ataque que enseñar). Lo necesita quien defienda con servidor,
+   * que corre el `game_takedamage` de lo puesto.
+   */
+  VESTIR: "vestir",
+  /**
+   * SOLTAR — el 97. La `c`: `drop` sin argumento, que suelta `ActiveItem()`
+   * (client.cpp:931-957 → `CBasePlayer::DropItem` → `CGenericItem::Drop`). Lleva
+   * `{ id }`, el de la mano, y el servidor comprueba que ES el de su mano. Sale
+   * de la mano y NO vuelve a la mochila (`m_pOwner->RemoveItem(this)`,
+   * genericitem.cpp:1355-1356). Hasta el 97 la `c` vaciaba la mano en el
+   * navegador y el servidor seguía creyendo que la llevabas: los demás te veían
+   * con ella, y su `_techoDeDano` seguía siendo el de esa arma.
+   *
+   * EL 98: con `{ id, desde: "mochila" }` es «Drop Selected» del panel
+   * (`DropAllSelected`, vgui_containerlist.cpp:177-186): una unidad de esa
+   * entrada de la lista, que no esté puesta ni sea un contenedor.
+   */
+  SOLTAR: "soltar",
   // del servidor al cliente
   BIENVENIDA: "bienvenida",
   LISTA: "lista",

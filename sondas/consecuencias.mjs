@@ -17,7 +17,7 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto, esperarApariciones } from "./mismo.mjs";
+import { liberarPuerto, esperarApariciones, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -28,9 +28,8 @@ const PORT = 5203;
 // de otro. Ver `sondas/mismo.mjs`.
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 6000));
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
 const errores = [];
@@ -77,9 +76,11 @@ const uno = (script) => de(script)[0] ?? null;
 console.log(`\n  censo de reacción: ${censo.length} bichos`);
 const conParry = censo.filter((c) => c.parry > 0);
 console.log(`    con parry:     ${conParry.length} — ${[...new Set(conParry.map((c) => `${c.nombre} ${c.parry}`))].join(", ") || "ninguno"}`);
-const huidores = censo.filter((c) => c.huir?.puede && c.huir.vida > 0);
+// EL 95: sólo quien tiene IA de ataque (`HAS_AI`) huye o se encoge por la IA;
+// los `FLEE_HEALTH`/`CAN_FLINCH` de un aldeano son constantes que nadie lee.
+const huidores = censo.filter((c) => c.huir?.puede && c.huir.vida > 0 && c.tieneIA !== false);
 console.log(`    que huyen:     ${huidores.length} — ${[...new Set(huidores.map((c) => `${c.nombre} <${c.huir.vida}hp ${c.huir.probabilidad}%`))].join(", ") || "ninguno"}`);
-const encogedores = censo.filter((c) => c.struck || c.encogerseIA);
+const encogedores = censo.filter((c) => c.struck || (c.encogerseIA && c.tieneIA !== false));
 console.log(`    que se encogen:${encogedores.length} — ${[...new Set(encogedores.map((c) => `${c.nombre} (${c.animacionDeEncogerse})`))].join(", ") || "ninguno"}`);
 
 const arana = uno("monsters/spider");
@@ -219,7 +220,17 @@ console.log(`    cría de araña: ${cria?.vidaMaxima} de vida, huir ${JSON.strin
 // de 20 u y `m_StepSize` son 18, así que huyen sin moverse. No se había visto
 // nunca porque una rata RECELA del jugador: nunca persigue, y sin perseguir
 // nunca usa `avanzar`. La aldeana tiene FLEE_CHANCE 100 % y está en la plaza.
-const aldeanas = censo.filter((c) => c.huir?.probabilidad === 100 && c.vida > 0).map((c) => c.n);
+//
+// CORRECCIÓN DEL 95: la aldeana NO HUYE POR LA IA, y nunca lo hizo en el mod.
+// `NPCs/default_human` no incluye ninguna IA de ataque (no hay `HAS_AI`,
+// base_npc_attack_new.script:81), así que su `FLEE_CHANCE 100%` es una
+// constante que no lee nadie: huye por su guion (`setmovedest ent_laststruck
+// 1024 flee`, default_human.script:66-72), y eso lo mide sondas/guardias94.mjs.
+// Esta sección medía una huida que el juego no tiene. Ahora mide la de quien sí
+// tiene `npcatk_flee`: los zombis enanos (`FLEE_HEALTH 25`, 25 %, el dado a
+// favor), y la aldeana pasa a ser el control negativo de al lado.
+const aldeanas = censo.filter((c) => c.huir?.puede && c.huir.vida > 0 && c.tieneIA === true && c.vida > 0)
+  .map((c) => c.n);
 const huida = await pag.evaluate((ns) => {
   const out = [];
   for (const n of ns) {
@@ -233,6 +244,7 @@ const huida = await pag.evaluate((ns) => {
     out.push({
       n, nombre: q.nombre, vida: conUno.vida,
       huyendo: tras.huyendo, animacion: corriendo.animacion, frenado: corriendo.frenado,
+      corre: window.probe.reaccion.censo()[n]?.corriendo ?? null,
       paso: Math.hypot(corriendo.donde[0] - tras.donde[0], corriendo.donde[2] - tras.donde[2]),
       antes: tras.distanciaAlJugador, despues: corriendo.distanciaAlJugador,
       queda: corriendo.quedaDeHuida,
@@ -246,8 +258,11 @@ for (const h of huida) {
 }
 control("con un punto de vida y el dado a favor, huye",
   huida.every((h) => h.huyendo === true), `${huida.filter((h) => h.huyendo).length} de ${huida.length}`);
-control("y corre: pone su animación de correr",
-  huida.every((h) => h.animacion === "run"), `'${huida[0]?.animacion}'`);
+control("con IA de ataque: hay a quién medir (los zombis enanos, `HAS_AI`)", huida.length > 0,
+  `${huida.length}: ${[...new Set(huida.map((h) => h.nombre))].join(", ")}`);
+control("y corre: pone su animación de correr (`ANIM_RUN` de su ficha)",
+  huida.length > 0 && huida.every((h) => h.corre && h.animacion === h.corre),
+  huida.map((h) => `'${h.animacion}'/'${h.corre}'`).join(", "));
 control("y se mueve de verdad", huida.every((h) => h.paso > 1), 
   `${huida.map((h) => h.paso.toFixed(1)).join(", ")} m en 3 s`);
 control("y se ALEJA, que es el signo que se puede equivocar",
@@ -259,6 +274,21 @@ const paraDeHuir = await pag.evaluate((n) => {
 }, aldeanas[0]);
 control("y deja de huir a los diez segundos de FLEE_TIME",
   paraDeHuir?.huyendo === false, `quedaban ${huida[0]?.queda?.toFixed(1)} s`);
+// EL 95: Y EL ALDEANO, CON EL MISMO DADO A FAVOR, NO HUYE POR LA IA. El
+// control positivo es el de arriba: el mismo `pegarA` con `huir: 1` hace huir a
+// un zombi. Hasta el 95 el aldeano huía (`FLEE_CHANCE 100%` sin `HAS_AI`).
+const sinIA = censo.filter((c) => c.script === "NPCs/default_human" && c.tieneIA === false && c.vida > 0)
+  .map((c) => c.n).slice(0, 1);
+const aldeanoHuye = await pag.evaluate((ns) => ns.map((n) => {
+  const q = window.probe.reaccion.quien(n);
+  window.probe.reaccion.pegarA(n, q.vida - 1, { tipo: "slash", parry: 0 });
+  window.probe.reaccion.pegarA(n, 0.0001, { tipo: "slash", parry: 0, huir: 1 });
+  const r = window.probe.reaccion.quien(n);
+  return { n, vida: r.vida, huyendo: r.huyendo, muerto: r.muerto };
+}), sinIA);
+control("EL 95: el aldeano (sin `HAS_AI`) NO huye por la IA, con el mismo dado a favor",
+  aldeanoHuye.length === 1 && aldeanoHuye.every((r) => r.huyendo === false && !r.muerto),
+  JSON.stringify(aldeanoHuye));
 
 // Y LAS BOLSAS DE HUEVOS, que hasta el 67 se creían ratas.
 //

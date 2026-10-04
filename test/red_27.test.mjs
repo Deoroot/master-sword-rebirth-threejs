@@ -723,9 +723,14 @@ test("una partida entera por un socket de verdad", async () => {
   const partida = new Partida({ mundo, almacen, aparicion: APARICION, nombre: "de prueba" });
   const { http, ws, puerto } = await servir({ ruta: "/juego" });
   const anfitrion = new Anfitrion({ partida, ws }).arrancar({ cada: 5 });
+  // EL 98: el servidor se cierra en un `finally`. Si una aserción de en medio
+  // fallaba, el HTTP y el reloj del anfitrión quedaban abiertos y `npm test`
+  // no terminaba nunca: un rojo convertido en un cuelgue (aviso del integrador).
+  let enlace = null;
+  try {
 
   const mundoCliente = await mundoLiso();
-  const enlace = await conectar(`ws://127.0.0.1:${puerto}/juego`);
+  enlace = await conectar(`ws://127.0.0.1:${puerto}/juego`);
   const cuerpo = mundoCliente.crearCuerpo([0, 0.2, 0]);
   const cliente = new ClienteDeRed({ enlace, cuerpo });
   const bienvenido = new Promise((r) => cliente.al("bienvenida", r));
@@ -744,8 +749,14 @@ test("una partida entera por un socket de verdad", async () => {
   assert.equal(m.personaje.nombre, "Sonda");
 
   cuerpo.colocar(m.donde.escena);
-  const t0 = Date.now();
-  while (Date.now() - t0 < 900) {
+  // EL 98: 54 pasos de 1/60 s CONTADOS, no «lo que quepa en 900 ms de
+  // reloj de pared». El juego avanza lo que se le manda (`msec`), y con la
+  // máquina cargada —`npm test` corre los archivos en paralelo, y había cinco
+  // sesiones a la vez— un `setTimeout(16)` tardaba tanto que en 900 ms sólo
+  // cabían unos pocos pasos y «le ha movido de verdad» (> 1 m) salía rojo con
+  // el juego bien. Medía la carga, no el servidor (el 97 ya lo sospechaba,
+  // doc/ATURDIR_97.md §3). Contados, son 0,9 s de juego pase lo que pase.
+  for (let k = 0; k < 54; k++) {
     cliente.paso(1 / 60, { adelante: 1 });
     await new Promise((r) => setTimeout(r, 16));
   }
@@ -760,7 +771,10 @@ test("una partida entera por un socket de verdad", async () => {
   enlace.cerrar(1000, "fin");
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(partida.clientes.size, 0, "el servidor se entera de que se fue");
-  anfitrion.parar();
-  http.closeAllConnections?.();
-  http.close();
+  } finally {
+    try { enlace?.cerrar?.(1000, "fin"); } catch {}
+    anfitrion.parar();
+    http.closeAllConnections?.();
+    http.close();
+  }
 });

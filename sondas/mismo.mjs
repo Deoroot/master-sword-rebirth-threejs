@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 // ¿ESTÁ LA SONDA MIRANDO NUESTRO JUEGO, O EL DE OTRO?
 //
@@ -62,6 +62,98 @@ export async function esNuestro(pag, puerto) {
  * las únicas sondas inmunes eran las dos que ya lo habían resuelto.
  */
 export function liberarPuerto(puerto) {
+  const pids = matarEnPuerto(puerto);
+  // ── Y AL SALIR, OTRA VEZ — el 98 ─────────────────────────────────────────
+  //
+  // Las sondas acaban con `spawn("taskkill", …)` y `process.exit()` justo
+  // detrás, y en Windows eso **no mata nada**: libuv mete a cada hijo en un
+  // job object que muere con el padre, así que el `taskkill` cae antes de
+  // correr; y `cmd` → `npx` → `vite` se salen del job (BREAKAWAY silencioso)
+  // y siguen vivos. Medido el 98: **54 `vite` huérfanos** de un día de
+  // sondas, cada uno vigilando el árbol entero, y la entrada por el menú
+  // pasaba de 5,6 s a 13,8 s con ellos encima. Un `spawnSync` en `exit` sí
+  // corre antes de que el proceso muera, y lo cubre todo —el final normal,
+  // `process.exit` y una excepción sin capturar— sin tocar las 89 sondas.
+  process.once("exit", () => matarEnPuerto(puerto));
+  return pids;
+}
+
+/**
+ * ARRANCA EL `vite` DE LA SONDA Y ESPERA A QUE CONTESTE — el 98.
+ *
+ * Antes cada sonda hacía `spawn("npx", ["vite", …])` y luego **dormía 6 o 7 s
+ * fijos**, por si acaso. Medido el 98: `vite` contesta HTTP en **~2 s** en frío,
+ * así que eran 4-5 s tirados por sonda, y en una máquina cargada (otra sesión
+ * corriendo sondas) 6 s podían no bastar, y entonces el `goto` se comía un
+ * «connection refused» que nadie atribuía al sueño.
+ *
+ * Ahora: libera el puerto (que además lo mata al salir, ver `liberarPuerto`),
+ * arranca `vite` y **pregunta por HTTP cada 100 ms** hasta que conteste. Si el
+ * proceso muere antes —un `--strictPort` que pierde la carrera, un error de
+ * configuración— o pasa el tope, **revienta con el motivo**: una sonda que
+ * sigue sin servidor mide un `ERR_CONNECTION_REFUSED`, y eso no es un rojo
+ * del juego.
+ *
+ * Devuelve el proceso, como el `spawn` de antes, para que las sondas que lo
+ * matan a mano con su `matar(dev)` sigan igual.
+ *
+ * Lo que NO hace: no espera al **primer** `transform` de `vite` (las
+ * dependencias se preempaquetan al pedir la primera página). Eso lo espera el
+ * `goto` de la sonda, que ya tenía su propio plazo.
+ *
+ * Las sondas que levantan ADEMÁS un servidor de partida no quieren esperar a
+ * `vite` antes de lanzarlo (el servidor tarda en cargar el mapa, y en paralelo
+ * se solapan): ésas usan las dos mitades, `lanzarVite` ahora y `esperarHttp`
+ * después de lanzar el servidor.
+ */
+export async function arrancarVite(puerto, { tope = 60_000, stdio = "ignore", config } = {}) {
+  const dev = lanzarVite(puerto, { stdio, ...(config !== undefined ? { config } : {}) });
+  await esperarHttp(`http://localhost:${puerto}/`, { tope, proceso: dev, quien: `vite en el puerto ${puerto}` });
+  return dev;
+}
+
+/**
+ * La primera mitad de `arrancarVite`: libera el puerto y lanza, sin esperar.
+ *
+ * Con `sondas/vite.sondas.mjs`: sin recarga en caliente ni vigilancia de
+ * archivos, y con su propia caché (ver allí por qué). `{ config: null }` lo
+ * lanza con los valores por omisión, como `npm run dev`.
+ */
+export function lanzarVite(puerto, { stdio = "ignore", config = "sondas/vite.sondas.mjs" } = {}) {
+  liberarPuerto(puerto);
+  const args = ["vite", "--port", String(puerto), "--strictPort"];
+  if (config) args.push("--config", config);
+  return spawn("npx", args, { shell: true, stdio });
+}
+
+/**
+ * Pregunta por HTTP cada 100 ms hasta que `url` conteste (cualquier código: un
+ * 404 también dice que alguien escucha). Si se le da el `proceso` que tiene que
+ * contestar y se muere antes, revienta en seguida con su código en vez de
+ * agotar el tope. Sirve para `vite` y para `tools/servidor.mjs`, que no abre el
+ * puerto hasta haber cargado el mapa (servidor.mjs:241).
+ */
+export async function esperarHttp(url, { tope = 60_000, proceso = null, quien = url } = {}) {
+  let murio = null;
+  proceso?.once("exit", (codigo) => { murio = codigo ?? "señal"; });
+  const t0 = Date.now();
+  for (;;) {
+    if (murio === null && proceso?.exitCode != null) murio = proceso.exitCode; // ya muerto al llamar
+    if (murio !== null) {
+      throw new Error(`${quien} se murió antes de contestar (código ${murio}). ` +
+        `¿Otro proceso con el puerto y '--strictPort'? Pruébalo a mano.`);
+    }
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      await r.arrayBuffer().catch(() => {});
+      if (r.status > 0) return Date.now() - t0;
+    } catch { /* todavía no escucha */ }
+    if (Date.now() - t0 > tope) throw new Error(`${quien} no contestó HTTP en ${tope / 1000} s.`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+function matarEnPuerto(puerto) {
   const r = spawnSync("cmd", ["/c", `netstat -ano | findstr LISTENING | findstr :${puerto}`], { encoding: "utf8" });
   const pids = new Set(String(r.stdout ?? "").split(/\r?\n/)
     .map((l) => l.trim().split(/\s+/).pop()).filter((x) => /^[0-9]+$/.test(x) && x !== "0"));

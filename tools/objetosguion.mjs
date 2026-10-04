@@ -152,6 +152,23 @@ for (const ruta of hechizos.values()) {
   }
 }
 
+// ── Y LAS ARMADURAS, DEL 96 ─────────────────────────────────────────────────
+//
+// La protección de una armadura NO es un número de la ficha: es su
+// `game_takedamage` (items/armor_base.script:191-238), que el motor llama por
+// cada cosa que llevas (`Gear[i]->OwnerTakeDamage`, player.cpp:403-404). Y la
+// del fuego del fénix y la del aturdimiento del casco son `callexternal` a tu
+// guion. O sea que sin su GUION una armadura puesta no hace nada. Ninguna
+// tienda de los dos mapas vende la del fénix ni el yelmo gris —salen de cofres
+// de otros mapas (`ms_wicardoven/chest_maldora.script:7`,
+// `chests/fmines_spider.script:8`)—, así que entran a mano: TODO lo vestible
+// que registra armadura más los yelmos, que no la registran (ver
+// `src/play/armadura.js`). Se dicen cuántos.
+const armaduras = objetos.filter((o) => o.vestible
+  && ((o.tipos ?? []).includes("armadura") || /^armor_helm_/.test(o.id)));
+for (const o of armaduras) crudos.add(o.id);
+console.log(`  armaduras y yelmos (96)    ${armaduras.length}`);
+
 // Un `addstoreitem` puede llevar una VARIABLE en vez de un nombre
 // (`RND_ITEM`, `$get_array(...)`): eso se resuelve al correr y aquí no hay
 // tienda. Se descartan y **se dicen**, que un filtro callado es donde cabe un

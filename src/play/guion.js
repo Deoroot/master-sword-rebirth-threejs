@@ -239,11 +239,29 @@ export function partirGuion(texto) {
         unaSola = false;
         return;
       }
+      // EL 96: LAS MARCAS ENTRE CORCHETES SON VARIAS Y NO SON TODAS ÁMBITO.
+      //
+      //     if (Param == "[client]") ...  else if (Param == "[server]") ...
+      //     else if (Param == "[override]") Override = true;  else Name = Param;
+      //                                            script.cpp:5180-5191
+      //
+      // Aquí se leía la PRIMERA como ámbito y la segunda palabra como nombre,
+      // así que `{ [override] elm_activate_effect` salía con ámbito
+      // «override» y sin anular nada: el fénix registraba su resistencia al
+      // fuego por el evento de la plantilla aunque el suyo dijera que no.
+      // Quién borra al padre es `resolverGuion` (src/play/cargador.js).
       let ambito = "shared";
-      let nombre = tras[0] ?? "";
-      if (/^\[/.test(nombre)) { ambito = nombre.replace(/[[\]]/g, ""); nombre = tras[1] ?? ""; }
+      let anula = false;
+      let nombre = "";
+      for (const p of tras) {
+        if (p === "[client]") ambito = "client";
+        else if (p === "[server]") ambito = "server";
+        else if (p === "[shared]") ambito = "shared";
+        else if (p === "[override]") anula = true;
+        else nombre = p;
+      }
       // Sin nombre es el bloque de constantes de la cabecera del script.
-      evento = { nombre, ambito, cmds: [], linea: n + 1, ...(nombre ? {} : { cabecera: true }) };
+      evento = { nombre, ambito, cmds: [], linea: n + 1, ...(nombre ? {} : { cabecera: true }), ...(anula ? { anula: true } : {}) };
       eventos.push(evento);
       piezas.push({ evento });
       actual = evento.cmds; pila = []; unaSola = false;
@@ -376,7 +394,24 @@ export function partirGuion(texto) {
     cerrarSiEsDeUna();
   };
 
-  for (let n = 0; n < lineas.length; n++) procesar(lineas[n], n);
+  // EL 97: EL `//` SE CORTA ANTES DE ANALIZAR, ESTÉ DONDE ESTÉ.
+  //
+  //     if (ch == '/' && (p + 1) < pCur && *(p + 1) == '/')
+  //       break;                                   script.cpp:5118-5121
+  //
+  // `ParseScriptFile` copia cada línea hasta el primer `//` y SÓLO ENTONCES
+  // llama a `ParseLine`, así que el corte de `palabras` (`:5637`, al principio
+  // de una palabra) nunca ve un `//` pegado: ya no está. Aquí sólo existía el
+  // segundo, y `{ [server] npc_struck//Hit by someone` se llamaba
+  // «npc_struck//Hit» —y desde el 96, que se queda con la ÚLTIMA palabra como
+  // el motor, «someone»—; `addvelocity ent_laststruckbyme PUSH_VEL//Push` del
+  // jabalí empujaba con una constante que no existe. 82 líneas en el mod, y
+  // ninguna con `//` dentro de comillas (que el motor también cortaría).
+  // `src/bsp/script.js` (`sinComentarios`) lo hacía bien desde siempre.
+  for (let n = 0; n < lineas.length; n++) {
+    const corte = lineas[n].indexOf("//");
+    procesar(corte < 0 ? lineas[n] : lineas[n].slice(0, corte), n);
+  }
 
   return { eventos, includes, preload, piezas };
 }
@@ -758,6 +793,14 @@ export const COMANDOS = new Set([
   "callevent", "calleventtimed", "callexternal",  // scriptcmds.cpp:93-95
   "quest",                                        // scriptcmds.cpp:171
   "infomsg",                                      // scriptcmds.cpp:166
+  // EL 96: dos comandos de OBJETO (genericitem.cpp:354 y :377). Sin gancho se
+  // apuntan; el del objeto los tiene (src/play/guionobjeto.js).
+  "registerarmor", "setdmg",
+  // EL 98: `registercontainer` (genericitem.cpp:352 y :1699-1700). Igual.
+  "registercontainer",
+  // EL 97: comando de `CMSMonster` (npcscript.cpp:37 y :318-330), que el
+  // jugador también es. Sin gancho se apunta; el del jugador lo tiene.
+  "nopush",
   // El 83. `exit` NO existe en el motor y lo quitamos: `m_GlobalCmdHash` tiene
   // `exitevent` (scriptcmds.cpp:48) y `return`/`returndata` (:167), y en los
   // 2 884 guiones hay cero `exit` sueltos. El que corta un evento es
@@ -766,6 +809,10 @@ export const COMANDOS = new Set([
   "dbg",                                          // no hace nada fuera del build de desarrollo
   // `npcscript.cpp`, comandos del NPC
   "saytext",                                      // npcscript.cpp:52 / :708
+  // EL 95: el alcance de ese `saytext`. 207 líneas en 141 guiones del mod
+  // (`saytextrange 1024` en 93, `2048` en 75), y el grito del aldeano y la
+  // frase del guardia de Gate City entre ellas (doc/RED_95.md).
+  "saytextrange",                                 // npcscript.cpp:53 / :724
   "offer",                                        // npcscript.cpp:50 / :636
   "playanim",                                     // npcscript.cpp:88 / :1487
   "menuitem.register",                            // npcscript.cpp:83 / :940
@@ -885,6 +932,8 @@ export const COMANDOS = new Set([
   "effect",                                       // scriptcmds.cpp:140 / :3040
   "hud.addstatusicon", "hud.killstatusicon",      // scriptcmds.cpp:60, :63 / :3706-3847
   "hud.killicons",                                // scriptcmds.cpp:62
+  // EL 95: las imágenes, la otra mitad de `ScriptCmd_HudIcon` (doc/BRILLO_95.md).
+  "hud.addimgicon", "hud.killimgicon",            // scriptcmds.cpp:61, :64 / :3765-3875
 ]);
 
 /** Los `$getters` portados. `m_GlobalGetterHash`, script.cpp:41-170. */
@@ -892,6 +941,7 @@ export const GETTERS = new Set([
   "$item_exists",     // script.cpp:87
   "$get_quest_data",  // script.cpp:112
   "$int",             // script.cpp:123
+  "$neg",             // script.cpp:82 / :3461-3471 — `-atof`, con «%.2f». El 96
   "$rand",            // script.cpp:135
   "$get",             // script.cpp:70  — sólo un puñado de propiedades, ver `PROPIEDADES`
   "$dist",            // script.cpp:131
@@ -928,6 +978,8 @@ export const GETTERS = new Set([
   // EL 93: el salto de la araña sale con `setvelocity ent_me $relvel(0,320,120)`
   // (spider.script:119). 610 de los 724 guiones con modelo lo piden.
   "$relvel",          // script.cpp:90  / :3597-3628
+  // EL 95: el centro de casi todo `effect screenshake` es `$relpos(0,0,0)`.
+  "$relpos",          // script.cpp:91  / :3557-3595
 ]);
 
 /** Las propiedades de `$get(<ent>,<prop>)` que este puerto sabe contestar. */
@@ -940,6 +992,7 @@ export const PROPIEDADES = new Set([
   "gold",                                 // :1263
   "steamid",                              // :1232
   "race",                                 // :1390 — EL 94, el guardia
+  "nopush",                               // :1422 — EL 97, la inmunidad al aturdimiento
 ]);
 
 /**
@@ -1098,7 +1151,22 @@ export class Guion {
     // error, en todas las partidas de este puerto.
     if (t === "game.serverside") return "1";
     if (t === "game.clientside") return "0";
-    if (t === "game.time") return String(this.ahora());
+    // EL 97: y con «%.2f», que es `RETURN_FLOAT(gpGlobals->time)`
+    // (script.cpp:4500-4503; iscript.h:224-228). A pelo, `base_effect`
+    // comparaba un fin redondeado (`$math(add,…)`, :67) contra un reloj sin
+    // redondear: con el reloj en 20,0999999 y el fin en «20.10», lo que queda
+    // sale «0.00», `callevent 0.00` es «Can't call myself recursively»
+    // (scriptcmds.cpp:2297) y **el efecto no se acababa nunca**. Medido con el
+    // fénix: tres `effect_slow` vivos a la vez a los 50 s. Ver doc/ATURDIR_97.md.
+    //
+    // Y SIN `Math.fround`, a diferencia de `flotanteDelMotor`: el reloj del
+    // motor empieza cerca de cero al cargar el mapa, y en este puerto hay
+    // relojes que son `Date.now() / 1000` (src/red/partida.js:161), 1,7e9 s,
+    // donde un `float` sólo distingue saltos de 128 s. Con `fround` el
+    // servidor dejó de mover al jugador (test/red_27, «y el servidor le ha
+    // movido de verdad»). El «%.2f» es lo que cuenta; la precisión del `float`
+    // sería la de un reloj que este puerto no tiene.
+    if (t === "game.time") { const n = Number(this.ahora()); return (Number.isFinite(n) ? n : 0).toFixed(2); }
     // ── EL 83: `game.map.name`, que son 265 usos en los 2 884 guiones ──────
     //
     //     else if (Name.starts_with("map."))
@@ -1193,6 +1261,11 @@ export class Guion {
       // script.cpp:2175 — y **"0" cuando la misión no está puesta**, no vacío.
       case "$get_quest_data": return e.leerMision(a[0], a[1]) ?? "0";
       case "$int": return String(enteroDe(a[0]));                       // script.cpp:3075
+      // EL 96. `$neg(<valor>)`: `RETURN_FLOAT((-atof(Params[0])))` y «0» sin
+      // parámetro (script.cpp:3461-3471). Sin él, `cat_resistances` del guion
+      // del jugador (player/server/element_resist.script:87) sumaba el texto
+      // sin resolver y NINGUNA resistencia elemental llegaba a `takedmg`.
+      case "$neg": return a.length ? flotanteDelMotor(-numDe(a[0])) : "0";
       // ── EL 91 ────────────────────────────────────────────────────────────
       // `$math(<op>,<a>,<b>[,<c>])`, `$string_upto/from` y `$pass` son de
       // cadenas y números: la regla entera está en las funciones de abajo,
@@ -1266,6 +1339,40 @@ export class Guion {
           rel = vectorDeTexto(texto.slice(7));
         }
         return textoDeVector(velocidadRelativa(ang, rel));
+      }
+
+      // ── EL 95: `$relpos(<derecha,adelante,arriba>)` ─────────────────────
+      //
+      //     if (m.pScriptedEnt && Params.size() >= 1) {
+      //       if (Params[0].c_str()[0] != '(') {
+      //         StartPos = modelindex ? Center() : pev->origin;
+      //         Angle = pev->angles; PosString = FullName.substr(7); }
+      //       else { Angle = StringToVec(Params[0]); PosString = Params[1];
+      //              StartPos = g_vecZero; }
+      //       RETURN_VECTOR(StartPos + GetRelativePos(Angle, StringToVec(PosString))) }
+      //     else return "0";                       script.cpp:3564-3595
+      //
+      // El hermano de `$relvel` con el ORIGEN sumado, y con `pev->angles` SIEMPRE
+      // —no la vista del jugador, que es lo que elige `$relvel`—.
+      // `GetRelativePos` es la misma suma que `$relvel` (sharedutil.cpp:134-145).
+      // El origen lo da el gancho `origenDeMi` (unidades y ejes del motor, el
+      // `Center()` de la caja); el entorno que no lo tenga lo apunta y devuelve
+      // el texto entero, como antes de existir el getter.
+      case "$relpos": {
+        if (!a.length) return "0";                                  // :3594
+        let ang, rel, base;
+        if (String(a[0]).startsWith("(")) {
+          ang = vectorDeTexto(String(a[0]));
+          rel = vectorDeTexto(String(a[1] ?? ""));
+          base = [0, 0, 0];
+        } else {
+          if (!e.origenDeMi || !e.angulosDeMi) { this.anotarNoSoportado("getter", `${nombre} (sin origen ni ángulos de la entidad)`); return texto; }
+          base = e.origenDeMi();
+          ang = e.angulosDeMi();
+          rel = vectorDeTexto(texto.slice(7));
+        }
+        const d = velocidadRelativa(ang, rel);
+        return textoDeVector([0, 1, 2].map((k) => (Number(base?.[k]) || 0) + d[k]));
       }
 
       // `$get_token(<lista>,<n>)` — script.cpp:2628-2649.
@@ -1842,6 +1949,15 @@ export class Guion {
       // SPEECH_LOCAL. npcscript.cpp:708-720.
       case "saytext": e.hablar(params.join(" ")); return true;
 
+      // EL 95. `saytextrange <unidades|default>` — npcscript.cpp:724-737. Sin
+      // parámetro, `ERROR_MISSING_PARMS` y nada. Sólo lo tiene quien habla con
+      // alcance (el entorno de un NPC); los demás lo apuntan.
+      case "saytextrange":
+        if (!params.length) return true;
+        if (!e.cambiarAlcanceDeVoz) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.cambiarAlcanceDeVoz(String(params[0]));
+        return true;
+
       // `say <sonido>[duración] ...`. npcscript.cpp:109-140.
       //
       // No es `saytext`: `saytext` son PALABRAS y esto son SONIDOS. Cada
@@ -2136,7 +2252,15 @@ export class Guion {
       case "playanim": e.animar(params[params.length - 1], params[0]); return true;
 
       // `infomsg <player|all> <title> <text>`. scriptcmds.cpp:4058.
-      case "infomsg": e.aviso(params[0], params[1] ?? "", params[2] ?? ""); return true;
+      // EL 95: el texto es TODO lo que va detrás del título, juntado con un
+      // espacio (`for (i…) { if (i) sTemp += " "; sTemp += Params[i + 2]; }`,
+      // scriptcmds.cpp:4083-4087), y con menos de tres no hay mensaje
+      // (`if (Params.size() >= 3)`, :4061). Hasta aquí se quedaba con la
+      // primera palabra: `infomsg all Title some words` decía «some».
+      case "infomsg":
+        if (params.length < 3) return true;
+        e.aviso(params[0], params[1], params.slice(2).join(" "));
+        return true;
 
       // `offer <target> <item|gold> [cantidad]`. npcscript.cpp:636.
       // El fallo se porta: la rama del oro comprueba `Params.size() >= 2` y
@@ -2642,6 +2766,58 @@ export class Guion {
       // apuntarla como hueco.
       case "noxploss": return true;
 
+      // ── EL 97: `nopush <0|1>` ────────────────────────────────────────
+      // npcscript.cpp:318-330: `SetScriptVar("IMMUNE_PUSH", Params[0])` y
+      // `m_nopush = atoi(Params[0]) != 0`. Lo que vale para el aturdimiento:
+      // `$get(ent_me,nopush)` (scriptcmds.cpp:1422) es la inmunidad de
+      // `debuff_stun` (effects/debuff_stun.script:66-74). El jugador lo pone
+      // desde su `game_scriptflag_update` (player/externals.script:164-173).
+      case "nopush": {
+        if (params.length < 1) return true;            // `ERROR_MISSING_PARMS`
+        if (!e.inempujable) { this.anotarNoSoportado("comando", "nopush (sin cuerpo)"); return true; }
+        this.vars.set("IMMUNE_PUSH", String(params[0]));
+        e.inempujable(Math.trunc(numDe(params[0])) !== 0);
+        return true;
+      }
+
+      // ── EL 96: LA ARMADURA ───────────────────────────────────────────
+      // `registerarmor` (genericitem.cpp:1705-1706 -> giarmor.cpp:19-74) lee
+      // `ARMOR_TYPE`, `ARMOR_PROTECTION` y `ARMOR_PROTECTION_AREA` del guion EN
+      // ESE MOMENTO, y `setdmg <dmg|type|hit> <valor>` (genericitem.cpp:2174-
+      // 2191) cambia el golpe que el motor está repartiendo — sólo si hay uno
+      // (`if (m_CurrentDamage)`): fuera de `game_takedamage` no hace nada, y
+      // eso lo decide el gancho. Los dos son del OBJETO; sin gancho se apuntan.
+      case "registerarmor": {
+        if (!e.registrarArmadura) { this.anotarNoSoportado("comando", "registerarmor (no es un objeto)"); return true; }
+        e.registrarArmadura({
+          tipo: this.resolver("ARMOR_TYPE"),
+          proteccion: this.resolver("ARMOR_PROTECTION"),
+          zonas: this.resolver("ARMOR_PROTECTION_AREA"),
+        });
+        return true;
+      }
+      // EL 98: `registercontainer` -> `RegisterContainer` (gipack.cpp:50-77):
+      // `GetFirstScriptVar` de las tres claves, que es `GetVar` y por eso mira
+      // primero los `local` del evento en curso (pack_base.script:35-42 las
+      // pone con `local`). Sin poner, `GetVar` devuelve el propio nombre, y el
+      // `strcmp` con el nombre (:69-72) deja la lista vacía.
+      case "registercontainer": {
+        if (!e.registrarContenedor) { this.anotarNoSoportado("comando", "registercontainer (no es un objeto)"); return true; }
+        const leer = (n) => { const x = this.resolver(n, ev); return x === n ? null : String(x); };
+        e.registrarContenedor({
+          maximo: leer("reg.container.maxitem"),
+          acepta: leer("reg.container.accept_mask"),
+          rechaza: leer("reg.container.reject_mask"),
+        });
+        return true;
+      }
+      case "setdmg": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        if (!e.cambiarDano) { this.anotarNoSoportado("comando", "setdmg (no es un objeto)"); return true; }
+        e.cambiarDano(String(params[0]), String(params[1]));
+        return true;
+      }
+
       // ── LOS EFECTOS ──────────────────────────────────────────────────
       // `applyeffect <objetivo> <guion> [params…]` (scriptcmds.cpp:1865-1929),
       // `removeeffect <objetivo> <id>` (:5068-5106) y `removescript`
@@ -2724,7 +2900,8 @@ export class Guion {
       // igual que hacía el `default`. Sin gancho (un NPC), lo mismo. Hasta este
       // `case` lo hacía un PUENTE que envolvía `ejecutarComando` de cada
       // instancia (doc/EFECTOS_RED_93.md §5.1 y §6).
-      case "effect": case "hud.addstatusicon": case "hud.killstatusicon": case "hud.killicons": {
+      case "effect": case "hud.addstatusicon": case "hud.killstatusicon": case "hud.killicons":
+      case "hud.addimgicon": case "hud.killimgicon": {   // EL 95
         if (!e.comandoDePantalla?.(c.nombre, params.map(String), { desde: this })) this.anotarNoSoportado("comando", c.nombre);
         return true;
       }

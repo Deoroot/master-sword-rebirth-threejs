@@ -52,16 +52,15 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 
 const MAPA = "edana";
 const PORT = 5239;
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 6000));
 
 // Ver el final: el «X de Y» se calcula sobre los DECLARADOS y no sobre los que
 // llegaron a correr, que es el fallo del 65.

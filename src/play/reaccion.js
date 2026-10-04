@@ -312,14 +312,35 @@ export function reaccionAlGolpe({
     // El sonido de recibir. Lo pone cada bicho y es lo único que pasa SIEMPRE.
     suena: "golpeado",
   };
-  fuera.cambia = cambiaDeObjetivo({ ficha, ahora, proximo: estado.proximoCambio ?? 0, huyendo: estado.huyendo });
-  const h = huyeDelGolpe({ ficha, vida, huyendo: estado.huyendo, tirada: dados.huir });
+  // ── EL 95: SIN IA DE ATAQUE NO HAY `game_struck` DE IA ─────────────────
+  //
+  // Cambiar de objetivo, huir y el encogerse de la IA son las tres ramas del
+  // `game_struck` de base_npc_attack_new.script:1065-1093 (y de la vieja,
+  // base_npc_attack.script:228-246). Un guion que no incluye ninguna de las
+  // dos no tiene ese evento, y lo que decida al recibir lo decide SU guion:
+  // el aldeano huye por `setmovedest ent_laststruck 1024 flee`
+  // (NPCs/default_human.script:66-72) y el enano se gira y hace
+  // `beatdoor`/`attack` (NPCs/default_dwarf.script:79-82). Sus `CAN_FLEE`,
+  // `FLEE_HEALTH 25`, `FLEE_CHANCE 100%` y `CAN_FLINCH 1` son constantes que
+  // no lee nadie, y aquí hacían que el aldeano huyera DOS veces y se encogiera
+  // la mitad de los golpes. `tieneIA` es `HAS_AI` (ver `iaDe`); `undefined`
+  // —una ficha escrita a mano o un horneado anterior al 95— se lee como «sí»,
+  // que es lo que se hacía antes. El horneado lo comprueba
+  // test/aldeanos95.test.mjs.
+  const conIA = ficha?.tieneIA !== false;
+  fuera.cambia = conIA
+    ? cambiaDeObjetivo({ ficha, ahora, proximo: estado.proximoCambio ?? 0, huyendo: estado.huyendo })
+    : { cambia: false, porque: "sin HAS_AI" };
+  const h = conIA
+    ? huyeDelGolpe({ ficha, vida, huyendo: estado.huyendo, tirada: dados.huir })
+    : { huye: false, porque: "sin HAS_AI" };
   if (h.huye) fuera.huye = h;
   // Los dos sistemas de encogerse, en el orden en que los ve un golpe: el de
   // `base_struck` corre en `game_damaged`, o sea ANTES que el `game_struck` de
-  // la IA. El primero que diga que sí, gana.
+  // la IA. El primero que diga que sí, gana. El de `base_struck` no depende de
+  // la IA: es otro `#include`, y lo decide su propia ficha (`struck`).
   const s = seEncogeStruck({ ficha, vida, dano, tipo, ahora, desde: estado.proximoEncogerse ?? -Infinity, vulnerabilidad, quieto: estado.quieto });
-  const e = s.encoge
+  const e = s.encoge || !conIA
     ? s
     : seEncogeIA({ ficha, vida, dano, ahora, desde: estado.proximoEncogerse ?? -Infinity, tirada: dados.encogerse });
   if (e.encoge) fuera.encoge = e;

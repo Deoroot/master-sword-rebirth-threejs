@@ -52,6 +52,11 @@ describe("partir una línea como la parte el motor", () => {
     // por espacios, así que un `//` pegado a otra cosa no corta. script.cpp:5637
     assert.deepEqual(palabras("saytext hola // esto no se dice"), ["saytext", "hola"]);
     assert.deepEqual(palabras("saytext a//b"), ["saytext", "a//b"]);
+    // CORRECCIÓN DEL 97: esto sigue siendo verdad de `palabras`, que es el
+    // `sscanf` de `ParseLine`, pero NO del juego: `ParseScriptFile` corta la
+    // línea en el primer `//` antes de llamar a `ParseLine`
+    // (script.cpp:5118-5121), así que un `//` pegado no llega aquí nunca. Lo
+    // hace ahora `partirGuion`; ver test/override97.test.mjs §2.
   });
 
   test("una comilla sin cerrar se queda con el resto, y no lanza", () => {
@@ -319,7 +324,7 @@ describe("los comandos, con sus rarezas", () => {
 });
 
 describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", () => {
-  test("son 78 comandos de los 223 del motor, y éstos", () => {
+  test("son 80 comandos de los 223 del motor, y éstos", () => {
     // Si esta prueba se cae es porque alguien añadió un comando: hay que
     // volver a correr `npm run guiones` y actualizar la cuenta de
     // `doc/MISIONES_33.md`, porque la cobertura cambia.
@@ -346,7 +351,26 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
     // entraban por un puente en `guionjugador.js`: `effect`,
     // `hud.addstatusicon`, `hud.killstatusicon` y `hud.killicons`. Ver
     // `test/efectos93b.test.mjs`. Lectura vieja: `90 + 9 + 3 + 4 + 5`.
-    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4 + 5 + 4);
+    // El 95 (pieza E) sumó dos, la otra mitad de `ScriptCmd_HudIcon`:
+    // `hud.addimgicon` y `hud.killimgicon`. Ver `test/brillo95.test.mjs`.
+    // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4`.
+    // El 95 (pieza B) sumó uno, `saytextrange`: el alcance del `saytext` de
+    // un NPC, que con servidor decide quién lo oye. Ver `test/voz95.test.mjs`.
+    // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4 + 2`.
+    // El 96 sumó dos, los de la ARMADURA, que sólo tienen gancho en el entorno
+    // de un objeto: `registerarmor` y `setdmg`. Ver `test/armadura96.test.mjs`.
+    // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4 + 2 + 1`.
+    // El 97 sumó uno, `nopush` (npcscript.cpp:318-330): `m_nopush`, la
+    // inmunidad al aturdimiento. Ver `test/aturdir97.test.mjs`.
+    // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2`.
+    // El 98 sumó uno, `registercontainer` (genericitem.cpp:352, gipack.cpp:
+    // 50-77): lo que cabe en un contenedor. Ver `test/inventario98.test.mjs`.
+    // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2 + 1`.
+    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2 + 1 + 1);
+    assert.ok(COMANDOS.has("registercontainer"), "falta registercontainer, que es del 98");
+    for (const c of ["registerarmor", "setdmg"]) assert.ok(COMANDOS.has(c), `falta ${c}, que es del 96`);
+    assert.ok(COMANDOS.has("nopush"), "falta nopush, que es del 97");
+    assert.ok(COMANDOS.has("saytextrange"), "falta saytextrange, que es del 95 (pieza B)");
     for (const c of ["effect", "hud.addstatusicon", "hud.killstatusicon", "hud.killicons"]) {
       assert.ok(COMANDOS.has(c), `falta ${c}, que es de la pieza G del 93`);
     }
@@ -400,14 +424,21 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
       assert.ok(COMANDOS.has(`g_${c}`), `falta la global de ${c}`);
     }
   });
-  test("y 29 getters", () => {
+  test("y 30 getters", () => {
     // 21 hasta el 90; el 91 sumó seis para los venenos: `$get_takedmg`,
     // `$math`, `$string_upto` y su gemelo `$string_from` (la MISMA función,
     // script.cpp:98 y :119), `$get_scriptflag` y `$pass`; y uno más que pidió
     // el censo de los bichos, `$can_damage`.
     // Y el 93, `$relvel`, con el que salta la araña (spider.script:119).
-    assert.equal(GETTERS.size, 21 + 6 + 1 + 1);
+    // EL 95, `$relpos`: el centro de casi todo `effect screenshake`.
+    // (Lectura vieja: `21 + 6 + 1 + 1`.)
+    // EL 96, `$neg`: sin él ninguna resistencia elemental del jugador llegaba
+    // a `takedmg` (player/server/element_resist.script:87).
+    // (Lectura vieja: `21 + 6 + 1 + 1 + 1`.)
+    assert.equal(GETTERS.size, 21 + 6 + 1 + 1 + 1 + 1);
+    assert.ok(GETTERS.has("$neg"), "falta $neg, que es del 96");
     assert.ok(GETTERS.has("$relvel"), "falta $relvel, que es del 93");
+    assert.ok(GETTERS.has("$relpos"), "falta $relpos, que es del 95");
     for (const g of ["$get_takedmg", "$math", "$string_upto", "$string_from", "$get_scriptflag", "$pass", "$can_damage"]) {
       assert.ok(GETTERS.has(g), `falta ${g}, que es del 91`);
     }
@@ -525,7 +556,13 @@ describe("EL GUARDADO CAMBIA DE FORMA, y los viejos tienen que abrirse", () => {
   test("y sigue teniendo sus 36 ranuras y sus objetos: no se ha roto nada más", () => {
     const { personaje } = abrirPersonaje(structuredClone(DEL_32));
     assert.equal(personaje.ranuras.length, 36);
-    assert.deepEqual(personaje.objetos, [{ id: "swords_rsword", n: 1 }]);
+    // EL 97: este documento es de la VERSIÓN 1 y trae la espada en la mano Y en
+    // `objetos` —el duplicado que escribía `crearPersonaje`—. Al abrirlo se
+    // queda sólo en la mano (src/juego/personaje.js, `VERSION`; el motor la da
+    // a la mano y a nada más, sv_character.cpp:94-96). Antes del 97 esta línea
+    // pedía `[{ id: "swords_rsword", n: 1 }]`.
+    assert.deepEqual(personaje.objetos, []);
+    assert.equal(personaje.manos.derecha, "swords_rsword");
   });
 
   test("un personaje CON misiones las conserva al abrirlo", () => {

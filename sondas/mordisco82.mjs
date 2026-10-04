@@ -41,15 +41,14 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 
 const PORT = 5282;
 const liberados = liberarPuerto(PORT);
 if (liberados) console.log(`  (puerto ${PORT} liberado: ${liberados})`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 7000));
 
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });

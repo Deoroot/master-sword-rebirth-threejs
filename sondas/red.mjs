@@ -31,6 +31,7 @@
 //   12. anda y la figura no mueve las piernas -> la animación no cambia
 
 import { spawn, spawnSync } from "node:child_process";
+import { lanzarVite, esperarHttp } from "./mismo.mjs";
 import { chromium } from "playwright";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { mkdirSync, rmSync, readdirSync, existsSync } from "node:fs";
@@ -83,7 +84,7 @@ function liberarPuerto(puerto) {
 const liberados = [...liberarPuerto(PUERTO_WEB), ...liberarPuerto(PUERTO_PARTIDA)];
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) ocupando los puertos: matados)`);
 
-const dev = spawn("npx", ["vite", "--port", String(PUERTO_WEB), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = lanzarVite(PUERTO_WEB);
 // El servidor SIN `shell: true`: así el `pid` es el de Node y matarlo lo mata
 // de verdad. Con shell, el pid es el de `cmd.exe` y el nieto puede sobrevivir —
 // que es cómo se quedó ocupado el puerto la primera vez.
@@ -102,7 +103,10 @@ const matar = (p) => { try { spawnSync("taskkill", ["/F", "/T", "/PID", String(p
 // servidor, y la segunda vuelta midió **el proceso viejo**: `--strictPort` no
 // pudo abrir el puerto, los navegadores hablaron con el servidor de antes y los
 // controles fallaron por un fallo que ya estaba arreglado. Media hora en eso.
-await new Promise((r) => setTimeout(r, 9000));   // vite y el mapa del servidor
+// vite y el mapa del servidor: se les PREGUNTA en vez de dormir a ciegas (el 98;
+// el servidor no abre el puerto hasta haber cargado el mapa, servidor.mjs:241).
+await esperarHttp(`http://localhost:${PUERTO_WEB}/`, { tope: 90_000, proceso: dev, quien: "vite" });
+await esperarHttp(`http://localhost:${PUERTO_PARTIDA}/partidas`, { tope: 90_000, proceso: partida, quien: "el servidor de partida" });
 
 const nav = await chromium.launch();
 const controles = [];

@@ -46,13 +46,19 @@ function dado(semilla = 1) {
  * números de verdad de `monsters/giant_rat.mdl` (medido: `attack f14 ev600
  * 'bite1'`).
  */
-function secuencias({ evento = null, frame = 14, codigo = 600, enReposo = null } = {}) {
+// EL 98: el ataque se llama como lo llama el GUION del bicho (`golpe`, su
+// `ANIM_ATTACK` al nacer). Hasta el 97 se llamaba siempre `attack` y la ficha
+// se reescribía a `golpe: "attack"`; desde que la IA pone el `ANIM_ATTACK` que
+// pide el guion (`Manada._animDeAtaque`), el goblin pedía
+// `battleaxe_swing1_L`, el modelo de prueba no lo traía y caía en la 0. El
+// arnés tiene que ser el del juego (el 59): el nombre lo pone el guion.
+function secuencias({ evento = null, frame = 14, codigo = 600, enReposo = null, golpe = "attack" } = {}) {
   return [
     { indice: 0, nombre: "idle1", fps: 15, fotogramas: 30, bucle: true, actividad: 1, pesoActividad: 15, avance: [0, 0, 0],
       eventos: enReposo ? [{ frame: 5, evento: 500, opciones: enReposo }] : [] },
     { indice: 1, nombre: "walk", fps: 30, fotogramas: 60, bucle: true, actividad: 3, pesoActividad: 1, avance: [-72, 0, 0], eventos: [] },
     { indice: 2, nombre: "run", fps: 30, fotogramas: 25, bucle: true, actividad: 4, pesoActividad: 1, avance: [76, 0, 0], eventos: [] },
-    { indice: 3, nombre: "attack", fps: 30, fotogramas: 30, bucle: false, actividad: 28, pesoActividad: 1, avance: [0, 0, 0],
+    { indice: 3, nombre: golpe, fps: 30, fotogramas: 30, bucle: false, actividad: 28, pesoActividad: 1, avance: [0, 0, 0],
       eventos: evento ? [{ frame, evento: codigo, opciones: evento }] : [] },
     { indice: 4, nombre: "die", fps: 30, fotogramas: 40, bucle: false, actividad: 36, pesoActividad: 1, avance: [0, 0, 0], eventos: [] },
   ];
@@ -61,7 +67,7 @@ function secuencias({ evento = null, frame = 14, codigo = 600, enReposo = null }
 /**
  * Un bicho del mod y un jugador a `lejos.aU` unidades (se puede mover a
  * mitad de prueba), con la costura enchufada como la enchufa `src/main.js`.
- * La animación de ataque se llama `attack` en las secuencias de prueba.
+ * La animación de ataque se llama como el `ANIM_ATTACK` del guion (el 98).
  */
 function montar(script, {
   evento = null, frame = 14, codigo = 600, enReposo = null, aU = 30, azar = dado(5),
@@ -75,6 +81,7 @@ function montar(script, {
   const ficha = modeloYAnimaciones(leerFichaNpc(SCRIPTS, script));
   const guion = cargarGuion(script);
   const lejos = { aU, alto: 36 };
+  const golpe = ficha.ia?.golpe ?? "attack";
   const manada = new Manada({
     mapa: "liso", unidadesPorMetro: U,
     razas: [], modelos: [{ clave: "b", carpeta: "x" }],
@@ -85,10 +92,10 @@ function montar(script, {
       escena: [0, 0, 0], yaw: 0, luz: [0, 0, 0],
       hostil: true, relacion,
       ...(postspawn ? { postspawn } : {}),
-      ia: { ...ficha.ia, golpe: "attack", ...(hp ? { vida: hp } : {}), ...(pasea === null ? {} : { pasea }) },
+      ia: { ...ficha.ia, golpe, ...(hp ? { vida: hp } : {}), ...(pasea === null ? {} : { pasea }) },
     }],
   }, {
-    secuenciasPorClave: new Map([["b", reales ?? secuencias({ evento, frame, codigo, enReposo })]]),
+    secuenciasPorClave: new Map([["b", reales ?? secuencias({ evento, frame, codigo, enReposo, golpe })]]),
     cajasPorClave: new Map([["b", { min: [-16, -16, 0], max: [16, 16, 32] }]]),
     azar,
   });
@@ -140,7 +147,7 @@ function montar(script, {
     manada.relojes(DT);
     manada.cazar(DT, arnes);
     inter.paso(DT);
-    if (i.anim.gen !== gen) { gen = i.anim.gen; if (i.anim.nombre === "attack") ataques.push(manada.t); }
+    if (i.anim.gen !== gen) { gen = i.anim.gen; if (i.anim.nombre === golpe) ataques.push(manada.t); }
   };
   const correr = (segundos) => { for (let t = 0; t < segundos; t += DT) paso(); };
   const g = () => inter.guionesVivos.get(i.id) ?? null;
@@ -386,13 +393,24 @@ describe("Gate City: el goblin y el zombi pegan con lo que dice SU guion", { ski
     // `dwarf_zombie_random` sortea `WEAPON_TYPE` y con él `ATTACK_DAMAGE`
     // 20/30/40/55/50 (dwarf_zombie_random.script:165-252); el horneado lee el
     // primero. Con el daño en el guion, pega el de verdad.
+    //
+    // EL 98: con el modelo de VERDAD (`dwarf/male1`), porque desde que la IA
+    // pone el `ANIM_ATTACK` del guion el zombi SALTA (`attack2`,
+    // dwarf_zombie_random.script:303), y el salto pega con `ATTACK2_DAMAGE`
+    // (:310). Con las secuencias de prueba `attack2` no existía, caía en la 0
+    // y pegaba la IA con el 20 horneado: rojo «55 y [55,…,20,20]». Así que
+    // cada golpe es el de `attack` o el del salto, los dos del guion, y al
+    // menos uno es el de `attack`.
     const vistos = new Set();
     for (let semilla = 1; semilla <= 6; semilla++) {
-      const r = montar("monsters/dwarf_zombie_random", { evento: "attack_1", aU: 40, azar: dado(semilla) });
+      const r = montar("monsters/dwarf_zombie_random", { aU: 40, azar: dado(semilla), reales: secuenciasDelModelo("dwarf/male1.mdl") });
       r.correr(10);
       const suyo = Number(r.g().guion.vars.get("ATTACK_DAMAGE"));
+      const salto = Number(r.g().guion.vars.get("ATTACK2_DAMAGE"));
       assert.ok(r.golpes.length >= 1, `semilla ${semilla}`);
-      assert.ok(r.golpes.every((x) => Math.abs(x.dano - suyo) < 1e-6), `semilla ${semilla}: ${suyo} y ${JSON.stringify(r.golpes.map((x) => x.dano))}`);
+      assert.ok(r.golpes.some((x) => Math.abs(x.dano - suyo) < 1e-6), `semilla ${semilla}: ${suyo} y ${JSON.stringify(r.golpes.map((x) => x.dano))}`);
+      assert.ok(r.golpes.every((x) => Math.abs(x.dano - suyo) < 1e-6 || Math.abs(x.dano - salto) < 1e-6),
+        `semilla ${semilla}: ${suyo}/${salto} y ${JSON.stringify(r.golpes.map((x) => x.dano))}`);
       vistos.add(suyo);
     }
     // El segundo caso (el 50): si todas las semillas sacaran el arma de 20,
@@ -414,13 +432,27 @@ describe("el reloj de los eventos de animación", { skip: !HAY_MOD }, () => {
     assert.ok(n >= 4 && n <= 5, `${n} en 9 s`);
   });
 
-  test("un `dodamage` fuera de un evento de animación no pega y se apunta", () => {
-    const r = montar("monsters/giantrat", { evento: "bite1" });
-    r.correr(0.2);
+  // ── CORRECCIÓN DEL 98 ────────────────────────────────────────────────
+  // Esto decía «un `dodamage` fuera de un evento de animación no pega y se
+  // apunta», y medía el hueco declarado del 92, no una regla del motor:
+  // `dodamage` pega desde cualquier evento (npcscript.cpp:1110-1200 no mira
+  // quién lo llama). Lo pidió la embestida del jabalí, que pega desde un
+  // `repeatdelay` (boar_base.script:164-176) y es la única puerta a su
+  // aturdimiento. Ahora `InteraccionesNpc` le pone a cada bicho de combate un
+  // gancho fijo (`_golpeDelGuion`) y el caso `animacion` lo sigue tapando
+  // mientras corre. La prueba mide lo contrario, y la de antes queda escrita.
+  test("un `dodamage` fuera de un evento de animación PEGA, con el mismo gancho (el 98)", () => {
+    // Con la caza ya en marcha (su primer mordisco pedido): es ella la que
+    // apunta a quién (`ent_lastseen`, `objetivoCazado`). Un dado alto, para
+    // que la tirada de `ATTACK_HITCHANCE` entre.
+    const r = montar("monsters/giantrat", { evento: "bite1", azar: () => 0.99 });
+    for (let t = 0; t < 10 && r.manada.golpesDelGuion.pedidos < 1; t += DT) r.paso();
     const g = r.g();
+    const antes = { golpes: r.golpes.length, pedidos: g.danoCuenta.pedidos };
     g.guion.llamar("bite1", []);
-    assert.equal(g.danoCuenta.sinGancho, 1);
-    assert.ok(g.guion.noSoportados.some((x) => /fuera de un evento de animación/.test(x.nombre)));
-    assert.equal(r.golpes.length, 0);
+    assert.equal(g.danoCuenta.pedidos, antes.pedidos + 1);
+    assert.equal(g.danoCuenta.sinGancho, 0);
+    assert.ok(!g.guion.noSoportados.some((x) => /fuera de un evento de animación/.test(x.nombre)));
+    assert.equal(r.golpes.length, antes.golpes + 1, JSON.stringify(r.manada.golpesDelGuion));
   });
 });

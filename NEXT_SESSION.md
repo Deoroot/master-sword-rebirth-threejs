@@ -1,5 +1,169 @@
 # Dónde se quedó esto
 
+> **EL 98: POR QUÉ LAS SONDAS IBAN CADA VEZ MÁS LENTAS.** No eran las pruebas de
+> Node (2 837 en **14 s**, en paralelo). Eran **54 `vite` huérfanos**, uno por
+> sonda pasada en el día: `spawn("taskkill")` + `process.exit()` no mata nada en
+> Windows (el job object de libuv se lleva al `taskkill` y `npx`/`vite` se
+> escapan), cada uno vigilando el árbol entero; entrar por el menú pasaba de
+> 5,6 s a 13,8 s con ellos encima. Arreglado en un sitio: `liberarPuerto`
+> (sondas/mismo.mjs) mata su puerto también en `exit`, con `spawnSync` — cubre
+> las 89 sondas que lo llaman (las 8 que arrancaban `vite` sin llamarlo y seguían
+> fugando ya usan `arrancarVite`, abajo). Y `entrarPorElMenu` ya no se come los **8 s** de `waitForURL` cuando
+> «Start» no recarga (Gate City): golpe 24,3 → 21,0 s.
+>
+> Y después, seis agentes a la vez:
+> (N) **`arrancarVite`** (sondas/mismo.mjs) en 89 sondas, sin el sueño fijo;
+> `sondas/vite.sondas.mjs` sin HMR ni vigilancia; `test/puertos98` (14 puertos
+> repetidos, 19 sondas movidas al 56xx); **`npm run sondas -- [-j N] <nombres>`**
+> con logs en `build/sondas/` y las líneas rojas en la tabla
+> ([doc/SONDAS_98.md](doc/SONDAS_98.md)). Cazó en su primera pasada que
+> `personaje96` salía SIEMPRE con código 1 (`DECLARADOS` 15 y 16 controles).
+> (I) El zombi enano salta y aturde y el `boarhard`/jefe embisten: la caza
+> llama a `npc_targetsighted` y respeta el `ANIM_ATTACK` del guion
+> ([doc/ATURDIR_98.md](doc/ATURDIR_98.md)). (J) Con servidor: trabas en
+> `_simular`, la frase de parry sólo al que pega, relojes de las piezas,
+> `game_damaged`; `red_27` ya no se cuelga ([doc/SERVIDOR_98.md](doc/SERVIDOR_98.md)).
+> (K) `proj_pole_sl`, `proj_arrow_spiral`, `proj_ub` (12 de 12); 6 astas sin
+> tiro (`if ( POLE_CAN_POWER_THROW )`); sonda de la flecha dibujada en vuelo
+> ([doc/ARMAS_98.md](doc/ARMAS_98.md)). (L) Qué contenedor recibe cada objeto
+> (`FindPackForItem`), su tope, «Drop Selected» con red; `groupable 25` se leía
+> 0 de 760 ([doc/INVENTARIO_98.md](doc/INVENTARIO_98.md)). (M) `edana82`
+> nunca había estado verde: la sonda metía la cabeza en el techo; armas96 y
+> armas97, controles que medían su espera ([doc/ROJOS_98.md](doc/ROJOS_98.md)).
+>
+> **Pendiente del 98:** (1) **decisión del usuario**: el `if` viejo que
+> abandona el evento (script.cpp:5754-5757) quitaría 56 ataques de 41 armas
+> —el golpe cargado de la Blood Drinker entre ellos— y el `local` por evento
+> cambia 53; medidos por K, sin aplicar. (2) El salto tras un teletransporte se
+> queda en 0,1 m 2 de cada 6: la regla «techo» de `Player.step` es nuestra;
+> lo fiel es `PM_FlyMove`/`ClipVelocity` (aturdir98 se asienta andando 0,3 s).
+> (3) El arco de Torkalath, Unholy Blade y Shadow Lance no tiran su proyectil
+> jugando (`Brazo` sin tiro cargado cuerpo a cuerpo). (4) Con servidor el
+> navegador predice 160 u/s para todos (servidor 184/91); reaparecer dentro de
+> la roca cuelga a Rapier; `givehp` de NPC: «e.dar is not a function». (5)
+> `npc_targetsighted` corre ya en todos: grito del goblin, murciélago, zombi
+> ballestero sin medir; `HUNT_AGRO 0` del jabalí feroz sin respetar. (6) Al
+> coger, el motor pone en la mano primero; selección múltiple; «You drop» en
+> `DropItem`. (7) `sonda:arco` sigue verde sin el `escena.add` (lee `puestas`).
+> (8) **En paralelo (`-j 3`) las sondas con servidor y las de esperas reales
+> flaquean** (red, red95, efectosred93, veneno91 rojas en tanda, verdes
+> sueltas): ésas con `-j 1`. guardias94 sigue sin atribuir.
+>
+> Integrado: `npm test` **2 908/2 910** (0 rojas, 1 omitida, 1 todo) en ~10 s;
+> tanda de 26 sondas con `-j 3`: 20 verdes en 26 min, y sueltas las 6 restantes
+> verdes tras las segundas vueltas de I y J (aturdir98 18/18 ×3, servidor98
+> 18/18 ×3).
+
+> **EL 97: LOS PENDIENTES DEL 96, POR CINCO AGENTES A LA VEZ.**
+> (D) `[override]` rehorneado (script.cpp:5185, 5206-5211): en Gate City cambian
+> 10 eventos de 7 guiones (el «28» del 96 contaba `[override]`, no cambios) — la
+> araña para 1 vez y no 3, la escupidora muerde 1 y no 2. Y dos más: el `//`
+> pegado a una palabra (script.cpp:5118-5121) y la frase de parry doble del 91
+> (`hablaElGuion`) ([doc/OVERRIDE_97.md](doc/OVERRIDE_97.md)). (E) Con servidor
+> el golpe del bicho pasa por `defensaDelJugador` —armadura, escudo, parry—
+> (`Partida._defender`, [doc/DEFENSARED_97.md](doc/DEFENSARED_97.md)). (F)
+> Vestirse es la `q` (`UseItem`, genericitem.cpp:973-1003), quitarse «Remove» o
+> doble clic; `MENSAJE.VESTIR`; el registro de personaje sube a la **versión 2**:
+> lo de la mano ya no está en `objetos` (sv_character.cpp:94-96), con migración
+> ([doc/INVENTARIO_97.md](doc/INVENTARIO_97.md)). (G) Aturdimiento y
+> `effect_slow` frenan de verdad (`src/play/trabas.js`, `min(v·p/100, p)`), y
+> **`game.time` con «%.2f»**: ningún efecto con duración se acababa
+> ([doc/ATURDIR_97.md](doc/ATURDIR_97.md)). (H) 9 de 12 proyectiles con daño de
+> guion, ballestas instantáneas, `deleteme`, `MENSAJE.SOLTAR`, arma remota en
+> píxeles; las flechas no se dibujaban en vuelo desde antes del 39
+> ([doc/ARMAS_97.md](doc/ARMAS_97.md)).
+>
+> **Pendiente del 97:** (1) **nada aturde jugando**: la IA no embiste con el
+> jabalí ni salta con el zombi enano. (2) Con servidor: trabas sin aplicar en
+> `_simular`, frase doble del parry DEL BICHO (`case "para"` + guion), relojes de
+> las piezas, `game_damaged` del jugador. (3) `edana82` 16/18 en el `env_sound`
+> — **ya rojo en 5dc988f**, no es del 96-97. (4) 3 proyectiles sin portar
+> (`proj_pole_sl`, `proj_arrow_spiral`, `proj_ub`); 6 astas con un lanzamiento
+> que no tienen; sin sonda de que la flecha se ve volando. (5) Inventario: qué
+> funda y su capacidad, «Drop Selected». (6) `armas96` dio 32/33 dos veces (la
+> Novablade 5 % fuera de su ventana), sin atribuir. (7) `sondas/armas97` e
+> `inventario97` comparten `build/partidas/sonda97`: no correrlas a la vez.
+> (8) `guardias94` dio 20/23 una vez en la tanda larga de integración y 23/23
+> sola justo después: sin atribuir, vigilarla.
+>
+> Integrado: `npm test` 2 836/2 837 (0 rojas, 1 todo); sondas personaje96 16,
+> armadura96 16, armas96 33, inventario97 25, aturdir97 24, override97 13,
+> armas97 22, defensared97 13, golpe 26, consecuencias 55, arranque36 30,
+> muerte41 41, red 21, red95 12, costurared92 16, efectosred93 24, guardias94 23,
+> veneno91 15, salto93 15, arco 40, mordisco92 25 — todas en verde.
+
+> **EL 96: UN PERSONAJE DE PRUEBAS, LA ARMADURA Y TODAS LAS ARMAS, POR TRES AGENTES.**
+> (A) `npm run personaje` fabrica a «Veteran» (fénix y casco PUESTOS, Blood
+> Drinker, Dragon Axe, Phoenix Bow, Fire Blade, 13 requisitos citados): con
+> servidor en `build/partidas/<mapa>/personajes/`, en solitario
+> `?personaje=veteran` sólo en desarrollo ([doc/PERSONAJE_96.md](doc/PERSONAJE_96.md),
+> `sonda:personaje96`). (B) La armadura protege corriendo el `game_takedamage`
+> del guion de cada pieza (armor_base.script:191-238; `Armor_Protect` multiplica
+> por 1): campo nuevo `puesto: true` en `objetos`, `registerarmor`, `setdmg`,
+> `$neg`, `[override]`. Fallos portados: la zona no cuenta, el yelmo gris no
+> protege del daño, fuego 20 exacto ([doc/ARMADURA_96.md](doc/ARMADURA_96.md),
+> `sonda:armadura96`). (C) Se hornean las 209 armas y hechizos y 39 proyectiles,
+> cargados al empuñar o al caer; mensaje de red `EMPUNAR`; los puños no tenían
+> animación de puñetazo desde el 23 ([doc/ARMAS_96.md](doc/ARMAS_96.md),
+> `sonda:armas96`). Integrado: `npm test` 2 738/2 740 (0 rojas), sondas
+> personaje96 16, armadura96 16, armas96 33, golpe 26, arranque36 30, red95 12.
+>
+> **Pendiente del 96, en orden:** (1) **rehornear guiones con `[override]`
+> arreglado** — cambia el combate de arañas y zombis (28 eventos en Gate City,
+> 23 en Edana); experimento propio con sus sondas de combate. (2) Con servidor
+> no hay ninguna defensa (`Partida._bichoPega`). (3) El panel del inventario no
+> pone ni quita ropa. (4) El arma de partida está en la mano Y en la mochila
+> (`personaje.js:91-92`), el ciclador no llega a la tercera — Veteran lo hereda.
+> (5) Aturdimiento del jugador sin portar; `effect_slow` sin medir. (6) 12
+> proyectiles con daño de guion, ballestas como flechas, `deleteme`, soltar con
+> red, sonda de píxeles del arma del jugador remoto.
+
+> **EL 95: LOS PENDIENTES DEL 94, POR CINCO AGENTES A LA VEZ.**
+> (A) `Effects_GetFade` borra las banderas ANTES del primer pintado
+> (hudscript.cpp:253, view.cpp:1747-1750): un `fadeout` no se pinta durante su
+> duración y un `perm` no se queda — en los dos caminos, guion y `gmsgFade`.
+> `effect screenshake`/`screenshake_one` desde el guion del jugador
+> (`src/play/temblor.js`, `UTIL_ScreenShake` util.cpp:1066-1128): sólo en el
+> suelo, esfera con `<`, amplitud topada a 15,9998 por el 4.12 (todos los del
+> juego piden ≥32). `$relpos` y `$get(jugador,origin)`
+> ([doc/PANTALLA_95.md](doc/PANTALLA_95.md), `sondas/pantalla95.mjs`).
+> (B) `suceso`/`ventanaDeAviso`/`playermessage`/`infomsg` del servidor van al
+> jugador del guion; `saytext` a todos a `Length2D <= m_SayTextRange`
+> (msmonsterserver.cpp:1712-1716) y `saytextrange` portado (207 líneas). De
+> paso: **abrir el menú de un NPC dejaba al jugador en «0» para su guion**, y
+> la misión de la sidra no arrancaba si antes le hablabas con la F. Las roturas
+> del 94 (`setmovedest`/`$cansee`) se ven por fin en un navegador
+> ([doc/RED_95.md](doc/RED_95.md), `sondas/red95.mjs`).
+> (C) el primer pensamiento: 0,75 s la IA nueva, 2,8 la vieja, también al
+> revivir; `playanim hold`/`move` (move: 0 usos), `movespeed` en el paso. La
+> «rareza» del mordisco antes de `npc_post_spawn` de `salto93a` era del puerto
+> ([doc/IA_95.md](doc/IA_95.md)).
+> (D) **el aldeano no tiene IA de ataque** (`HAS_AI` sólo lo ponen las dos
+> `base_npc_attack*`): huía dos veces y el enano —que en el mod no huye— huía
+> también; `avisar` ya no sale de un civil. Y en un jugador **la huida del
+> guion no funcionaba nunca desde el 94** (`ent_laststruck` sin resolver en el
+> navegador) ([doc/ALDEANOS_95.md](doc/ALDEANOS_95.md), `sondas/guardias94.mjs`
+> 23/23). (E) el brillo de `effect glow` viaja y se pinta como cáscara aditiva
+> en el modelo del otro jugador (gl_studio.c); `hud.addimgicon`/`killimgicon`
+> con los 49 `.tga` de `gfx/vgui/` horneados ([doc/BRILLO_95.md](doc/BRILLO_95.md),
+> `sondas/brillo95.mjs`).
+> **Avisos del 95:** el control «ni un error de página» de las sondas NO ve un
+> módulo que no compila (`pageerror` no salta; lo vio E con un `SyntaxError`
+> en `otros.js` y todo verde) — sólo `brillo95` escucha además la consola.
+> Procesos `red_27` colgados de pasadas anteriores hacen que `npm test` se
+> cuelgue: mátalos antes de concluir nada.
+> **Pendiente:** 56 de 60 temblores son de bichos/trampas (entorno de NPC sin
+> gancho de pantalla) y con servidor no viaja `gmsgShake`; el arma en primera
+> persona no tiembla; `setvelocity` hacia arriba no despega del suelo (sin
+> medir en el motor); los `repeatdelay` de NPC no de combate siguen sin armar
+> (saludos de Sylphiel, «WEAPONS FOR SALE»); el giro `setmovedest X 9999` de
+> un NPC sin animación de andar sale por «sin velocidad» (manada.js); lo dicho
+> por el chat local sale duplicado (`yaDicho` sin leer); el hold del cofre no
+> corre (nadie dispara `game_playerused`); el jabalí no embiste
+> (`npc_targetsighted`); `m_Framerate_Modifier`/efectos sobre bichos; quien
+> RECIBE `avisar` y su `equals enemy`; `shellchrome.spr` no está en `../MSC`;
+> tras morir, el servidor sigue listando `DOT_poison`.
+
 > **EL 94: EL VELO ROJO COMO EN EL MOTOR, LOS GUARDIAS DEFIENDEN A LOS
 > ALDEANOS, Y LOS CINCO PENDIENTES DEL 93**, por mí y cinco agentes.
 > (Yo) el velo de la muerte son **15 s a 128 y luego 0,2 de bajada**
@@ -33,6 +197,8 @@
 > `m_Framerate_Modifier`; el aldeano huye dos veces (guion + IA) y `avisar`
 > avisa aliados al morir un civil (el motor no: `if HAS_AI`); `effect
 > screenshake`, `hud.addimgicon`, el brillo en el modelo de otros.
+> *(El 95: todo hecho salvo `m_Framerate_Modifier`, que no tiene quien lo
+> escriba sin efectos sobre bichos; el temblor, sólo desde el jugador.)*
 
 > **EL 93: LA ARAÑA SALTA Y TE ENVENENA, Y EL VENENO SE VE**, por siete
 > agentes en dos tandas. (A) el salto de `monsters/spider`: `repeatdelay`

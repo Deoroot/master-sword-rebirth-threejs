@@ -42,12 +42,12 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 
-const PORT = 5283;
+const PORT = 5620;   // el 98: era 5283, compartido con otra sonda (test/puertos98.test.mjs)
 const liberados = liberarPuerto(PORT);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);   // el 98: espera a que conteste
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch { /* ya no está */ } };
 
 // El marcador se DECLARA (el 65): un «X de Y» donde Y se calcula al final no
@@ -195,6 +195,26 @@ try {
   // tiene puesta. Con un solo punto no se podría distinguir (el 50), y se lee
   // también el DUEÑO: sin él, «la sala es la 13» no separa el reparto de un
   // valor que se quedó pegado.
+  //
+  // ── EL 98: ESTOS DOS CONTROLES ESTUVIERON ROJOS DESDE QUE NACIERON ───────
+  //
+  // Plantaban los PIES 52 unidades por encima del origen de cada `env_sound`
+  // (-60 sobre -112, 230 sobre 178), y el ojo va 64 más arriba: 116 unidades
+  // sobre el origen. Las dos salas miden 160 y 192 de suelo a techo, con el
+  // techo a +80 y +78 del origen, así que **el ojo quedaba 36 y 38 unidades
+  // DENTRO del techo**, en la planta de arriba. La traza del motor
+  // (sound.cpp:896-922) va del origen de la fuente al ojo, y chocaba con la
+  // cara de abajo del techo a 80 y 78 unidades de 116: «pared en medio» en las
+  // once, nadie gana, y el `tipo` se queda en el 13 del sitio de nacer (las dos
+  // NOTE de sound.cpp:975-980). El reparto y la traza estaban bien; el que medía
+  // tenía la cabeza en el piso de arriba. Medido fuera del navegador sobre la
+  // malla del mundo, rayo a rayo (doc/ROJOS_98.md).
+  //
+  // Ahora los pies van al SUELO de cada sala, medido igual: -192 (80 bajo el
+  // origen) y 64 (114 bajo el suyo), una unidad por encima. Y se lee además si
+  // la fuente que se espera alcanza al jugador, que es la precondición: sin
+  // ella, «no dice 11» no distingue el reparto de un jugador mal plantado.
+  //
   // Un clic de verdad para despertar el audio: un `AudioContext` nace
   // suspendido y `resume()` sólo funciona dentro del manejador de un gesto. El
   // de Playwright es un evento confiado, así que vale.
@@ -204,17 +224,23 @@ try {
     const ver = async (donde) => {
       p.poner(donde[0], donde[1], donde[2]);
       for (let i = 0; i < 3; i++) await p.dibujado();
-      return p.sala();
+      return { ...p.sala(), pies: p.donde().pies };
     };
     return { once: await ver(once), trece: await ver(trece) };
-  }, { once: aEscena([-1432, -416, -60]), trece: aEscena([-1488, 976, 230]) });
+  }, { once: aEscena([-1432, -416, -191]), trece: aEscena([-1488, 976, 65]) });
+  // La fuente 1 es la de tipo 11 en [-1432,-416,-112] y la 0 la de tipo 13 en
+  // [-1488,976,178], en el orden del manifiesto.
+  const leAlcanza = (s, clave) => {
+    const v = (s.vistos ?? []).find((x) => x.clave === clave);
+    return v ? (v.alcanza ? `la ${clave} le alcanza a ${v.distancia} u` : `la ${clave} NO: ${v.porQueNo}`) : `la ${clave} no está`;
+  };
   control("el mapa trae sus once fuentes de sala",
     salas.once.fuentes === 11, String(salas.once.fuentes));
   control("en un env_sound de tipo 11 la REGLA dice 11",
-    salas.once.tipo === 11, `${salas.once.tipo} (dueño ${salas.once.dueño})`);
+    salas.once.tipo === 11, `${salas.once.tipo} (dueño ${salas.once.dueño}; ${leAlcanza(salas.once, 1)})`);
   control("y en uno de tipo 13 dice 13, con OTRO dueño: el reparto corre",
     salas.trece.tipo === 13 && salas.trece.dueño !== salas.once.dueño,
-    `${salas.trece.tipo} (dueño ${salas.trece.dueño})`);
+    `${salas.trece.tipo} (dueño ${salas.trece.dueño}; ${leAlcanza(salas.trece, 0)})`);
   // Y la otra mitad, que es la del 60: que el número LLEGUE al audio. Una
   // regla dice *qué* y otra decide *dónde*, y la segunda no la ve ninguna
   // prueba de la primera.

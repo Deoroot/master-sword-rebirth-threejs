@@ -141,8 +141,14 @@ export class Cazador {
     this.ultimoSitio = null;
     /** Si lo veía el ciclo pasado, para no repetir el evento de «lo perdí». */
     this.loVeia = false;
-    /** Cuánto falta para el siguiente pensamiento. */
-    this.reloj = 0;
+    /**
+     * Cuánto falta para el siguiente pensamiento. AL NACER no es cero (el 95):
+     * la nueva espera `NPC_SPAWN_PRED2` (0,75 s) y la vieja su primer ciclo
+     * ocioso (2,8 s). Ver `primerPensamiento` en `iaDe` (src/bsp/script.js).
+     * Sin el campo —ficha a mano, aldeano sin base— piensa en el primer paso,
+     * como hasta el 94.
+     */
+    this.reloj = Number(ficha?.primerPensamiento) || 0;
     /** Cuánto falta para poder volver a golpear. */
     this.recarga = 0;
     /** La huida: `{ de, queda, distancia }` o `null`. Ver `npcatk_flee`. */
@@ -334,13 +340,17 @@ export class Cazador {
       // lo que hace el goblin. Con 1, no.
       const puede = this.f.tieneQueVerte === false || loVeo;
       if (puede && rango < (this.f.alcanceDeGolpe ?? 0) && this.recarga <= 0) {
-        return { accion: ACCION.GOLPEAR, objetivo: o.id, rango, destino };
+        return { accion: ACCION.GOLPEAR, objetivo: o.id, rango, destino, ve: loVeo };
       }
     }
 
+    // EL 98: `ve` es el `NPC_CANSEE_TARGET` de este ciclo. Con él `Manada.cazar`
+    // dispara `npc_targetsighted`, que las dos bases llaman en CADA ciclo en
+    // que ven a su objetivo (base_npc_attack.script:118-120,
+    // base_npc_attack_new.script:303-307). Es de donde embiste el jabalí.
     return {
       accion: loVeo ? ACCION.PERSEGUIR : ACCION.BUSCAR,
-      objetivo: o.id, destino, cerca, rango,
+      objetivo: o.id, destino, cerca, rango, ve: loVeo,
     };
   }
 

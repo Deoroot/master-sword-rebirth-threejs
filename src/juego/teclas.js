@@ -169,6 +169,21 @@ export class Teclas {
     this._almacen = almacen;
     this.mapa = porDefecto();
     this.pulsadas = new Set();
+    /**
+     * EL 98: LAS QUE SE HAN PULSADO DESDE LA ÚLTIMA `intencion()`, aunque ya
+     * se hayan soltado. Es el «impulse down» de `kbutton_t`:
+     *
+     *     b->state |= 1 + 2; // down + impulse down        input.cpp:344
+     *     if (in_jump.state & 3) bits |= IN_JUMP;           input.cpp:915
+     *     in_jump.state &= ~2;   // (bResetState)           input.cpp:1001
+     *
+     * O sea que en GoldSrc un toque más corto que un fotograma SÍ cuenta, una
+     * vez. Aquí `pulsadas` sólo decía lo que estaba abajo AL MIRAR, y con la
+     * página a 7 fotogramas por segundo (Gate City con otras cinco sesiones
+     * en la máquina) una barra de 150 ms caía entera entre dos fotogramas y
+     * no saltabas: `sondas/aturdir98` midió 0,04 m en su control positivo.
+     */
+    this.impulsos = new Set();
     this._oyentes = new Set();
     this.cargar();
   }
@@ -233,19 +248,22 @@ export class Teclas {
   }
 
   /** Si está pulsada la tecla de esta acción, por su tecla o por su alias. */
-  pulsada(accion) {
+  pulsada(accion, { conImpulso = false } = {}) {
+    const esta = (codigo) => this.pulsadas.has(codigo) || (conImpulso && this.impulsos.has(codigo));
     const c = this.mapa[accion];
-    if (c && this.pulsadas.has(c)) return true;
+    if (c && esta(c)) return true;
     for (const [codigo, clave] of Object.entries(ALIAS)) {
       // Un alias no vale si esa tecla se la ha quedado otra acción.
-      if (clave === accion && this.pulsadas.has(codigo) && !Object.values(this.mapa).includes(codigo)) return true;
+      if (clave === accion && esta(codigo) && !Object.values(this.mapa).includes(codigo)) return true;
     }
     return false;
   }
 
-  abajo(codigo) { this.pulsadas.add(codigo); }
+  // `if (b->state & 1) return; // still down` (input.cpp:342-343): la
+  // repetición del teclado no es otro impulso.
+  abajo(codigo) { if (!this.pulsadas.has(codigo)) this.impulsos.add(codigo); this.pulsadas.add(codigo); }
   arriba(codigo) { this.pulsadas.delete(codigo); }
-  soltarTodo() { this.pulsadas.clear(); }
+  soltarTodo() { this.pulsadas.clear(); this.impulsos.clear(); }
 
   /**
    * Si hay algún BOTÓN DE JUEGO pulsado. `pev->button & ~IN_SCORE`.
@@ -256,24 +274,32 @@ export class Teclas {
    */
   hayBotonDeJuego() { return BOTONES_DE_JUEGO.some((b) => this.pulsada(b)); }
 
-  /** La intención de movimiento, en [−1, 1]. */
+  /**
+   * La intención de movimiento, en [−1, 1]. Es `CL_ButtonBits(1)`: cada botón
+   * vale si está abajo O se pulsó desde la vez anterior (`state & 3`), y al
+   * acabar se borran los impulsos (input.cpp:895-1010). Una llamada por
+   * fotograma, como el `usercmd`.
+   */
   intencion() {
-    return {
-      adelante: (this.pulsada("adelante") ? 1 : 0) - (this.pulsada("atras") ? 1 : 0),
-      lado: (this.pulsada("derecha") ? 1 : 0) - (this.pulsada("izquierda") ? 1 : 0),
-      saltar: this.pulsada("saltar"),
-      agachar: this.pulsada("agachar"),
-      correr: this.pulsada("correr"),
+    const p = (a) => this.pulsada(a, { conImpulso: true });
+    const q = {
+      adelante: (p("adelante") ? 1 : 0) - (p("atras") ? 1 : 0),
+      lado: (p("derecha") ? 1 : 0) - (p("izquierda") ? 1 : 0),
+      saltar: p("saltar"),
+      agachar: p("agachar"),
+      correr: p("correr"),
       // Atacar es un BOTÓN aguantado y no un pulso, porque el arma lo lee así:
       // `+attack1` mientras esté abajo y `-attack1` al soltarlo son dos ataques
       // distintos del mismo arma. Mandar sólo el flanco perdería el cargado.
-      atacar: this.pulsada("atacar"),
+      atacar: p("atacar"),
       // Cubrirse con el escudo es el MISMO botón aguantado, pero el otro: el
       // objeto de la mano activa usa `IN_ATTACK` y el de la otra `IN_ATTACK2`
       // (`attack1` en el combo se traduce a uno o a otro, giattack.cpp:118), y un
       // escudo va siempre en la otra mano.
-      cubrir: this.pulsada("atacar2"),
+      cubrir: p("atacar2"),
     };
+    this.impulsos.clear();
+    return q;
   }
 }
 

@@ -33,6 +33,9 @@
 //            cl_parse.c:323-331)— **y los demás sí**. Este puerto no dibuja el
 //            brillo en el modelo de los otros jugadores todavía: se lee, se
 //            cuenta y se dice pendiente (doc/EFECTOS_RED_93.md).
+//            EL 95: ya se dibuja. Viaja en la foto del jugador y lo pinta
+//            `src/render/otros.js`; la regla está en `src/play/brillo.js`
+//            (doc/BRILLO_95.md).
 //
 // ── El fundido sí tiene cita entera, y contradice al 41 ─────────────────────
 //
@@ -192,6 +195,10 @@ export const ICONO = Object.freeze({ QUITA_IMG: -2, QUITA_ESTADO: -1, QUITA_TODO
 
 /** `WRITE_STRING_LIMIT(…, 85)` del icono y del nombre (scriptcmds.cpp:3730-3731). */
 const LIMITE = 85;
+/** EL 95. `WRITE_STRING_LIMIT(…, 80)` de la imagen y su nombre (scriptcmds.cpp:3778-3779). */
+const LIMITE_IMG = 80;
+/** `WRITE_SHORT` de un `int`: los 16 bits bajos, con signo al leerlos (`READ_SHORT`). */
+const corto = (n) => ((Math.trunc(n) & 0xffff) << 16) >> 16;
 
 /**
  * `hud.addstatusicon`, `hud.killstatusicon` y `hud.killicons` —
@@ -209,13 +216,43 @@ const LIMITE = 85;
  *                  `RetrieveEntity("all")` no encuentra a nadie.
  *   killicons      `<obj|all>`: tipo 0, borra iconos e imágenes.
  *
- * `hud.addimgicon` y `hud.killimgicon` no se portan: ningún efecto los usa
- * (son del guion del jugador, para el fútbol y la epilepsia) y se quedan
- * apuntados por el intérprete.
+ * LECTURA VIEJA (93): «`hud.addimgicon` y `hud.killimgicon` no se portan:
+ * ningún efecto los usa». EL 95 los porta (abajo): ningún EFECTO los usa, pero
+ * el guion del jugador sí —`ext_hud_icon`, la epilepsia y el marcador del
+ * fútbol, player/externals.script:2667-2913— y `monsters/gabe_newell`.
+ *
+ *   addimgicon     `<obj> <tga> <nombre> <x%> <y%> <ancho%> <alto%> <duración>`,
+ *                  con `Params.size() >= 8` (:3768). **Sin rama `all`**: el
+ *                  objetivo pasa por `RetrieveEntity` y, si no es un jugador,
+ *                  no se manda nada. Cadenas a 80 (no a 85), las cuatro
+ *                  medidas por `atoi` y `WRITE_SHORT` (:3776-3784).
+ *   killimgicon    `<obj> [nombre]`: tipo −2, con UN parámetro manda «all»
+ *                  (:3865-3869). Tampoco admite `all` de objetivo.
  */
 export function leerIcono(nombre, params) {
   const p = (i) => String(params?.[i] ?? "");
   const n = String(nombre);
+  if (n === "hud.addimgicon") {
+    if (!params || params.length < 8) return null;          // ERROR_MISSING_PARMS
+    return {
+      aQuien: p(0), todos: false,
+      mensaje: {
+        tipo: ICONO.PON_IMG,
+        icono: p(1).slice(0, LIMITE_IMG),
+        nombre: p(2).slice(0, LIMITE_IMG),
+        x: corto(atoi(p(3))), y: corto(atoi(p(4))),
+        ancho: corto(atoi(p(5))), alto: corto(atoi(p(6))),
+        duracion: Math.fround(atof(p(7))),                   // WRITE_FLOAT
+      },
+    };
+  }
+  if (n === "hud.killimgicon") {
+    if (!params || params.length < 1) return null;
+    return {
+      aQuien: p(0), todos: false,
+      mensaje: { tipo: ICONO.QUITA_IMG, nombre: params.length === 1 ? "all" : p(1) },
+    };
+  }
   if (n === "hud.addstatusicon") {
     if (!params || params.length < 3) return null;          // ERROR_MISSING_PARMS
     const todos = p(0) === "all";
@@ -328,6 +365,49 @@ export function pinturaDelFundido(sf, alfa) {
   return { modo: "multiplica", rgba: [k(sf.fader), k(sf.fadeg), k(sf.fadeb), 1] };
 }
 
+/**
+ * EL 95. `CHudScript::Effects_GetFade` — hudscript.cpp:250-282 — y quién la
+ * llama: `V_CalcRefdef` (view.cpp:1747-1750), **cada vez que se calcula la
+ * vista**:
+ *
+ *     screenfade_t sf;
+ *     gEngfuncs.pfnGetScreenFade(&sf);           // copia de `clgame.fade`
+ *     gHUD.m_HUDScript->Effects_GetFade(sf);     // ScreenFade.fadeFlags = 0;  (:253)
+ *     gEngfuncs.pfnSetScreenFade(&sf);           // y se escribe de vuelta
+ *
+ * O sea que Master Sword **borra las banderas del único fundido del motor**
+ * antes de mirar si algún guion de cliente quiere uno nuevo. Y no «al
+ * fotograma siguiente»: el orden de un fotograma de Xash3D es leer los
+ * mensajes (`CL_ReadPackets`, cl_main.c:3658), luego la vista
+ * (`SCR_UpdateScreen`, :3686 → `V_RenderView`, cl_view.c:389) y DESPUÉS el
+ * dibujo del fundido (`V_PostRender` → `CL_DrawHUD` → `CL_DrawScreenFade`,
+ * cl_view.c:517 y cl_game.c:958). **Un fundido no se pinta nunca con sus
+ * banderas.** Lo único que sobrevive de ellas es lo que `CL_ParseScreenFade`
+ * ya hizo con `FFADE_OUT` al convertir los tiempos (`fundidoAlLlegar`):
+ *
+ *   fadeout   la velocidad sale NEGATIVA y `fadeEnd` = llegada + duración, pero
+ *             se pinta con la fórmula de entrada: `fadeSpeed · (fadeEnd − t)`
+ *             es negativo —0— durante toda la duración, y DESPUÉS sube desde 0
+ *             con la misma pendiente hasta `fadeReset` (= fadeEnd + aguante).
+ *             Un «sube en 2 s y aguanta 0,5» es «nada 2 s y luego sube 0,5 s»;
+ *   perm      no se queda: se pinta y se va como uno normal;
+ *   noblend   no multiplica: se mezcla con su color, como uno normal.
+ *
+ * `FFADE_IN` es 0, así que la muerte, el tinte de cada golpe y el veneno no
+ * cambian. Es la MISMA línea para los dos caminos: el `gmsgFade` del servidor
+ * y lo que pinta un guion de aquí acaban en el mismo `clgame.fade`.
+ *
+ * No se porta la otra mitad, la que lee `game.cleffect.screenfade.*` de los
+ * guiones de CLIENTE (`sfx_drunk`, el único): este puerto no corre guiones de
+ * cliente todavía. Tampoco el caso en que `V_RenderView` sale antes de llamar a
+ * la vista (`!cl.video_prepped`, o el menú abierto sin `ui_renderworld`,
+ * cl_view.c:377-378): ahí el fundido SÍ se pinta con sus banderas.
+ */
+export function fundidoTrasLaVista(sf) {
+  if (sf) sf.fadeFlags = 0;
+  return sf;
+}
+
 /** `ICON_W`, `ICON_H`, `ICONIMG_W/H` y `DurColor` — ui/vgui_status.h:8-13. */
 export const ICONOS = Object.freeze({
   ancho: 64, alto: 75, anchoImagen: 64, altoImagen: 64,
@@ -347,6 +427,8 @@ export class IconosDeEstado {
   constructor() {
     /** `m_Status`, en orden: la posición en pantalla sale del índice. */
     this.lista = [];
+    /** EL 95. `m_Img`: las imágenes de `hud.addimgicon`, con su sitio propio. */
+    this.imagenes = [];
   }
 
   /** Un mensaje de `NETMSG_STATUSICONS`, tal como lo deja `leerIcono`. */
@@ -361,8 +443,33 @@ export class IconosDeEstado {
         }
         return;
       case ICONO.QUITA_TODO:
-        this.lista = [];                                   // KillAll
+        this.lista = [];                                   // KillAll = KillAllStatus
+        this.imagenes = [];                                //         + KillAllImgs (:349-353)
         return;
+      case ICONO.QUITA_IMG:
+        // EL 95. `REMOVE_IMG` (:364-372): «all» las quita todas; si no, KillImg
+        // quita la PRIMERA con ese nombre y para (`break`, :329).
+        if (m.nombre === "all") this.imagenes = [];
+        else {
+          const i = this.imagenes.findIndex((x) => x.nombre === m.nombre);
+          if (i >= 0) this.imagenes.splice(i, 1);
+        }
+        return;
+      case ICONO.PON_IMG: {
+        // EL 95. `ADD_IMG` (:404-417): un nombre «all» no se pone.
+        if (m.nombre === "all") return;
+        // AddImg (:279-307): con un nombre que ya está **NO HACE NADA** — ni
+        // reinicia el reloj, que es lo que sí hace un icono de estado desde
+        // MiB FEB2019_22. Así que la epilepsia, que vuelve a poner
+        // `bepilepsy2` cada medio segundo con su mismo nombre, sólo lo pone de
+        // verdad cuando el anterior ya caducó.
+        if (this.imagenes.some((x) => x.nombre === m.nombre)) return;
+        this.imagenes.push({
+          icono: m.icono, nombre: m.nombre, desde: ahora, duracion: m.duracion,
+          x: m.x | 0, y: m.y | 0, ancho: m.ancho | 0, alto: m.alto | 0,
+        });
+        return;
+      }
       case ICONO.PON_ESTADO: {
         // `if (strcmp(Name, "all"))`: un icono llamado «all» no se pone (:400).
         if (m.nombre === "all") return;
@@ -376,8 +483,31 @@ export class IconosDeEstado {
         return;
       }
       default:
-        return;                                           // imágenes: no portadas
+        return;                                           // FN_UP / FN_DW: no portados
     }
+  }
+
+  /**
+   * EL 95. La parte de `VGUI_Status::Update` que mira las imágenes (:230-244):
+   * quita las caducadas y devuelve las demás con su rectángulo en PÍXELES de
+   * la pantalla `ancho`×`alto`.
+   *
+   * Los cuatro números del guion son PORCENTAJES de la pantalla y se
+   * truncan a `int` (Thothie JAN2010_29, `AddImg`, :293-302). La imagen se
+   * ESTIRA al rectángulo, sin guardar la proporción: `VGUI_Image3D::
+   * paintBackground` le da al cuadro el ancho y el alto del panel
+   * (render/clrender.cpp:650-651).
+   *
+   * `IsActive` (:162-165): **sólo −1 exacto** es «para siempre»; cualquier
+   * otra duración negativa caduca en el primer `Update`.
+   */
+  pasoDeImagenes(ahora, ancho, alto) {
+    this.imagenes = this.imagenes.filter((x) => x.duracion === -1 || ahora < x.desde + x.duracion);
+    return this.imagenes.map((x) => ({
+      icono: x.icono, nombre: x.nombre,
+      x: Math.trunc(ancho * (x.x * 0.01)), y: Math.trunc(alto * (x.y * 0.01)),
+      ancho: Math.trunc(ancho * (x.ancho * 0.01)), alto: Math.trunc(alto * (x.alto * 0.01)),
+    }));
   }
 
   /**
@@ -414,4 +544,16 @@ export class IconosDeEstado {
 export function archivoDeIcono(icono) {
   const base = String(icono ?? "").replace(/\\/g, "/").split("/").pop().replace(/\.spr$/i, "");
   return base ? `hud/estado/${base}.png` : null;
+}
+
+/**
+ * EL 95. La ruta horneada de una imagen de `hud.addimgicon`: el guion da el
+ * NOMBRE y el cliente le pone delante `gfx/vgui/` y detrás `.tga`
+ * (`VGUI_Image3D::LoadImg`, render/clrender.cpp:595) — «NOTE: USES TGA FILES
+ * ONLY!! Path Starts: msc/gfx/vgui/» (scriptcmds.cpp:3763). `npm run hud` las
+ * hornea a `hud/imagen/<nombre>.png`.
+ */
+export function archivoDeImagen(icono) {
+  const base = String(icono ?? "").replace(/\\/g, "/").split("/").pop().replace(/\.tga$/i, "");
+  return base ? `hud/imagen/${base}.png` : null;
 }

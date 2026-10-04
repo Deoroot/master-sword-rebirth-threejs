@@ -149,6 +149,55 @@ export function montarSonda(S) {
       } : null),
       /** Dónde se está DIBUJANDO a cada uno de los demás, ahora mismo. */
       otros: () => (S.otros ? S.otros.estado() : []),
+      /**
+       * EL 97: el RECTÁNGULO de la pantalla donde cae el arma del jugador de
+       * otro, vértice a vértice ya deformado por SU esqueleto (el de la figura,
+       * con los huesos fundidos). Lo mismo que `vista.rectangulo`, pero sobre la
+       * malla que cuelga de la figura. `null` si no hay arma o no cae en el cuadro.
+       */
+      rectanguloArmaAjena: (id = null) => {
+        const m = S.otros?.mallaDeArma?.(id);
+        if (!m) return null;
+        m.parent?.updateMatrixWorld(true);
+        m.skeleton?.update();
+        S.camera.updateMatrixWorld(true);
+        const lienzo = S.renderer?.domElement ?? document.querySelector("canvas");
+        const r = lienzo.getBoundingClientRect();
+        const v = new THREE.Vector3();
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+        for (let i = 0; i < m.geometry.attributes.position.count; i++) {
+          m.getVertexPosition(i, v);
+          v.applyMatrix4(m.matrixWorld).applyMatrix4(S.camera.matrixWorldInverse);
+          if (v.z > -(S.camera.near ?? 0.01)) continue;
+          v.applyMatrix4(S.camera.projectionMatrix);
+          if (Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+          const x = r.left + ((v.x + 1) / 2) * r.width, y = r.top + ((1 - v.y) / 2) * r.height;
+          x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+          n++;
+        }
+        if (!n) return null;
+        return { x0, y0, x1, y1, vertices: n, ancho: r.width, alto: r.height, visible: m.visible };
+      },
+      /**
+       * EL 97: congelar (o soltar) la animación de las figuras de los demás —su
+       * `idle` mueve cabeza y brazos entre dos fotos, y eso salía como «fuera»
+       * en el contraste con/sin del arma ajena—. Sólo el mezclador: la posición
+       * sigue llegando por la red.
+       */
+      congelarOtros: (si = true) => {
+        const o = S.otros;
+        if (!o) return null;
+        if (si && !o.__pasoDeVerdad) { o.__pasoDeVerdad = o.paso; o.paso = () => {}; }
+        if (!si && o.__pasoDeVerdad) { o.paso = o.__pasoDeVerdad; delete o.__pasoDeVerdad; }
+        return Boolean(o.__pasoDeVerdad);
+      },
+      /** EL 97: esconder/enseñar SÓLO la malla del arma ajena (`visible`), para la foto sin ella. */
+      esconderArmaAjena: (si = true, id = null) => {
+        const m = S.otros?.mallaDeArma?.(id);
+        if (!m) return null;
+        m.visible = !si;
+        return m.visible;
+      },
       /** Y dónde dice la última foto que están, sin interpolar: la diferencia
        * entre esto y lo de arriba ES `ex_interp`, y es lo que hay que poder ver. */
       crudos: () => (S.red ? [...S.red.ajenos].map(([id, cola]) => {
@@ -2120,6 +2169,9 @@ export function montarSonda(S) {
        * manzana está en el suelo y el nodo sigue en el árbol, esto lo enseña.
        */
       nodosDelSuelo: () => S.censoDeNodosDelSuelo?.() ?? [],
+      /** EL 96: cuántos modelos del suelo esperan a caer, y esperar a uno. */
+      perezosasDelSuelo: () => S.perezosasDelSuelo ?? null,
+      esperarModeloDelSuelo: (guion) => S.esperarModeloDelSuelo?.(guion) ?? Promise.resolve(false),
       cuentasDelSuelo: () => S.cuentasDelSuelo ?? null,
       /** Cada aterrizaje con el sonido que pidió y su tono. */
       caidasDelSuelo: () => S.caidasDelSuelo ?? [],
@@ -2440,6 +2492,66 @@ export function montarSonda(S) {
       noSoportados: () => (S.guionJugador?.efectos?.lista ?? []).flatMap((e) =>
         [...e.guion.noSoportados, ...e.noSoportados].map((x) => `${e.ruta}: ${x.tipo} ${x.nombre}`)),
     },
+    /**
+     * EL 95: el fundido tras `Effects_GetFade` y el temblor de `effect
+     * screenshake`. `aplicar` y `llamar` entran por las puertas del juego (la
+     * de `applyeffect` y la de `callexternal`); `muestrear` LEE lo que el bucle
+     * dejó en la cámara y en el `div` del velo, fotograma a fotograma, sin
+     * recalcular nada (el 65).
+     */
+    pantalla95: {
+      aplicar: (ruta, params = []) => {
+        const ef = S.guionJugador?.efectos?.aplicar(String(ruta), params.map(String)) ?? null;
+        return { puesto: Boolean(ef), t: S.guionJugador?._ahora?.() ?? null };
+      },
+      llamar: (evento, params = []) => Boolean(S.guionJugador?.llamar(String(evento), params.map(String))),
+      /** Espera fotogramas hasta que `cond()` se cumpla, con tope en segundos de pared. */
+      esperarA: (cond, tope = 20) => new Promise((listo) => {
+        const t0 = performance.now();
+        const uno = () => (cond() ? listo(true) : performance.now() - t0 > tope * 1000 ? listo(false) : requestAnimationFrame(uno));
+        requestAnimationFrame(uno);
+      }),
+      reloj: () => S.reloj,
+      temblores: () => (S.guionJugador?.temblores ?? []).map((x) => ({ ...x })),
+      temblor: () => S.temblor ?? null,
+      noSoportados: () => [
+        ...(S.guionJugador?.guion?.noSoportados ?? []).map((x) => `player: ${x.tipo} ${x.nombre}`),
+        ...(S.guionJugador?.efectos?.lista ?? []).flatMap((e) => e.guion.noSoportados.map((x) => `${e.ruta}: ${x.tipo} ${x.nombre}`)),
+      ],
+      /**
+       * `segundos` DEL RELOJ DEL JUEGO de fotogramas: la cámara respecto al ojo,
+       * su alabeo y el alfa del velo. En el reloj del juego y no en el de la
+       * pared: el bucle topa el paso a 0,1 s, y con la máquina cargada un
+       * segundo de pared son tres décimas de juego (medido: 3 fotogramas por
+       * segundo). `t` es eso; `ms`, la pared, sólo para el informe.
+       */
+      muestrear: (segundos = 1) => new Promise((listo) => {
+        const muestras = [];
+        const velo = document.querySelector(".ms-velo");
+        const t0 = performance.now(), r0 = S.reloj;
+        const uno = () => {
+          const c = S.camera, ojo = S.player.eye;
+          const fondo = velo?.style?.background ?? "";
+          // `rgba(…, a)` y TAMBIÉN `rgb(…)`: con alfa 1 el navegador normaliza
+          // el `style` a `rgb(255, 0, 0)`, y un patrón que sólo casara `rgba`
+          // leería «alfa 0» justo cuando el velo es opaco (pasó, con la rotura).
+          const m = /rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(fondo);
+          muestras.push({
+            t: S.reloj - r0,
+            ms: performance.now() - t0,
+            d: [c.position.x - ojo[0], c.position.y - ojo[1], c.position.z - ojo[2]],
+            alabeo: (c.rotation.z * 180) / Math.PI,
+            rgb: m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null,
+            alfa: m ? Math.round(Number(m[4] ?? 1) * 255) : 0,
+            mezcla: velo?.style?.mixBlendMode || "normal",
+            enSuelo: Boolean(S.player.grounded),
+          });
+          if (S.reloj - r0 < segundos && performance.now() - t0 < 60000) requestAnimationFrame(uno);
+          else listo(muestras);
+        };
+        requestAnimationFrame(uno);
+      }),
+    },
     teclas: {
       mapa: () => ({ ...S.teclas.mapa }),
       nombre: (c) => nombreDeTecla(c),
@@ -2616,10 +2728,20 @@ export function montarSonda(S) {
           gen: i.anim?.gen ?? null, candado: i.unaVezHasta != null, conDestino: Boolean(i.destino),
           repeticiones: g?.repeticiones ? JSON.parse(JSON.stringify(g.repeticiones)) : null,
           vars: Object.fromEntries(["IS_HUNTING", "CAN_HUNT", "CAN_ATTACK", "SPIDER_LATCHING", "SPIDER_LATCHED",
-            "IS_ATTACKING", "HUNT_LASTTARGET", "SPIDER_LATCHATTACK"]
+            "IS_ATTACKING", "HUNT_LASTTARGET", "SPIDER_LATCHATTACK",
+            // EL 98: el salto del zombi enano y la embestida del jabalí.
+            "ANIM_ATTACK", "ATTACK2_CHANCE", "BOAR_IS_CHARGING", "PUSH_VEL"]
             .map((v) => [v, g?.guion?.vars?.get?.(v) ?? null])),
           rastro: (g?.guion?.rastro ?? []).reduce((a, r) => {
             if (/^(frame_jump|frame_falloffend|spider_latch_\w+)$/.test(r.evento)) a[r.evento] = (a[r.evento] ?? 0) + 1;
+            return a;
+          }, {}),
+          // EL 97: cuántas COPIAS de cada evento han corrido, para los que el
+          // `[override]` deja en una (doc/OVERRIDE_97.md). Va aparte de `rastro`
+          // a propósito: `salto93` pide `rastro` VACÍO a la cría que no salta,
+          // y meter aquí `bite1` lo puso rojo con el juego bien.
+          corridos: (g?.guion?.rastro ?? []).reduce((a, r) => {
+            if (/^(game_parry|bite1|frame_bite1|attack_1)$/.test(r.evento)) a[r.evento] = (a[r.evento] ?? 0) + 1;
             return a;
           }, {}),
         };
@@ -2758,6 +2880,15 @@ export function montarSonda(S) {
           intencion: i.intencion?.accion ?? null,
           rango: i.intencion?.rango ?? null,
           alcanceDeGolpe: i.ficha.ia?.alcanceDeGolpe ?? null,
+          // EL 95: las DOS huidas por separado. La de la IA (`npcatk_flee`,
+          // `Cazador.fuga`) y el destino que pone el GUION (`setmovedest …
+          // flee`, `i.mandado`): un aldeano sin `HAS_AI` sólo tiene la segunda.
+          id: i.id,
+          tieneIA: i.ficha.ia?.tieneIA ?? null,
+          huyendoPorIA: Boolean(i.cazador?.huyendo),
+          mandado: i.mandado ? { proximidad: i.mandado.proximidad, dueño: i.mandado.dueño ?? null } : null,
+          objetivo: i.cazador?.objetivo ?? null,
+          encogidas: i.reaccion?.encogidas ?? 0,
         };
       },
 
@@ -3159,6 +3290,123 @@ export function montarSonda(S) {
         }
         return { ...AJUSTES };
       },
+      /** EL 97: lo que hicieron los guiones de los proyectiles: saetas, lanzas, Fénix. */
+      deGuion() {
+        const d = S.deGuionDelArco;
+        return d ? JSON.parse(JSON.stringify(d)) : null;
+      },
+      // ── EL 98: ¿SE VE LA FLECHA EN VUELO? ────────────────────────────────
+      //
+      // El 97 encontró que ninguna flecha se dibujaba volando desde antes del 39
+      // (el `scene.add` de `empunar`), y que ninguna sonda lo miraba: `puestas`
+      // cuenta nodos OCUPADOS del conjunto, y un nodo ocupado fuera de la escena
+      // es el `<canvas>` de 300x150 del 38 —existe y no se dibuja—. Estas tres
+      // dejan a la sonda parar una flecha en el aire y fotografiarla.
+      /**
+       * Tensa y suelta (por `pasoDelBrazo`, como `tirar`), deja volar la flecha
+       * por `pasoDeFlechas` hasta que lleve `unidades` recorridas, y la DETIENE
+       * en el aire: gravedad 0 y una velocidad de una milésima en su rumbo, para
+       * que el bucle la siga moviendo y orientando —es él quien coloca el nodo—
+       * sin que se vaya. Sigue `volando`.
+       */
+      soltarYDetener(segundos = 1.3, unidades = 120) {
+        const DT = 1 / 60;
+        for (let t = 0; t < 4 && S.brazo && S.brazo.fase !== "quieto"; t += DT) S.pasoDelBrazo(DT, false);
+        const habia = S.ultimaFlecha;
+        for (let t = 0; t < segundos; t += DT) S.pasoDelBrazo(DT, true);
+        for (let t = 0; t < 4 && S.ultimaFlecha === habia; t += DT) S.pasoDelBrazo(DT, false);
+        const f = S.ultimaFlecha !== habia ? S.ultimaFlecha : null;
+        if (!f) return null;
+        for (let t = 0; t < 4 && f.volando && f.recorrido < unidades; t += DT) S.pasoDeFlechas(DT);
+        if (f.volando) {
+          const r = f.rapidez || 1;
+          f.gravedad = 0;
+          f.vel = f.vel.map((v) => (v / r) * 1e-3);
+        }
+        const e = S.flechasEnVuelo.find((x) => x.flecha === f) ?? null;
+        S.__flechaDetenida = e;
+        const U = S.U ?? S.level?.unitsPerMetre ?? 39.37;
+        return {
+          id: f.ficha?.id ?? null, volando: f.volando, recorrido: f.recorrido,
+          pos: f.pos.map((x) => x / U), conPieza: Boolean(e?.pieza),
+        };
+      },
+      /**
+       * El rectángulo de la pantalla de la flecha detenida, vértice a vértice
+       * (como `red.rectanguloArmaAjena`), y si su nodo cuelga de la escena que
+       * dibuja el bucle (`renderer.render(escena, camera)`). `null` si no hay.
+       */
+      rectanguloFlecha() {
+        const p = S.__flechaDetenida?.pieza;
+        if (!p) return null;
+        let m = null;
+        p.nodo.traverse((o) => { if (!m && o.isSkinnedMesh) m = o; });
+        if (!m) return null;
+        let raiz = p.nodo;
+        while (raiz.parent) raiz = raiz.parent;
+        p.nodo.updateMatrixWorld(true);
+        m.skeleton?.update();
+        S.camera.updateMatrixWorld(true);
+        const lienzo = S.renderer?.domElement ?? document.querySelector("canvas");
+        const r = lienzo.getBoundingClientRect();
+        const v = new THREE.Vector3();
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+        for (let i = 0; i < m.geometry.attributes.position.count; i++) {
+          m.getVertexPosition(i, v);
+          v.applyMatrix4(m.matrixWorld).applyMatrix4(S.camera.matrixWorldInverse);
+          if (v.z > -(S.camera.near ?? 0.01)) continue;
+          v.applyMatrix4(S.camera.projectionMatrix);
+          if (Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+          const x = r.left + ((v.x + 1) / 2) * r.width, y = r.top + ((1 - v.y) / 2) * r.height;
+          x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+          n++;
+        }
+        return {
+          x0, y0, x1, y1, vertices: n, ancho: r.width, alto: r.height,
+          visible: p.nodo.visible, enLaEscena: raiz === S.escena,
+        };
+      },
+      /** Esconder/enseñar SÓLO el nodo de la flecha detenida, para la foto sin ella. */
+      esconderFlecha(si = true) {
+        const p = S.__flechaDetenida?.pieza;
+        if (!p) return null;
+        p.nodo.visible = !si;
+        return p.nodo.visible;
+      },
+      /**
+       * EL GRAFO QUE SE DIBUJA DE VERDAD: cuántas veces llama Three a
+       * `onBeforeRender` de la malla de la flecha detenida en `cuadros`
+       * fotogramas del bucle. Three sólo lo llama para lo que mete en la lista de
+       * dibujo —colgado de la escena que se pinta y visible—, o sea que una malla
+       * fuera de la escena da 0 por bien que esté colocada. (La malla lleva
+       * `frustumCulled = false`, src/render/flechas.js:72: esto no dice si cae en
+       * el cuadro; eso lo dicen los píxeles.)
+       */
+      dibujosDeFlecha(cuadros = 3) {
+        const p = S.__flechaDetenida?.pieza;
+        if (!p) return Promise.resolve(null);
+        let m = null;
+        p.nodo.traverse((o) => { if (!m && o.isSkinnedMesh) m = o; });
+        if (!m) return Promise.resolve(null);
+        let n = 0;
+        const antes = m.onBeforeRender;
+        m.onBeforeRender = (...a) => { n++; return antes.apply(m, a); };
+        return new Promise((listo) => {
+          let k = 0;
+          const otro = () => { if (++k > cuadros) { m.onBeforeRender = antes; listo(n); } else requestAnimationFrame(otro); };
+          requestAnimationFrame(otro);
+        });
+      },
+      /**
+       * EL 97: ¿tapa el MUNDO entre dos puntos en metros de escena? La traza de
+       * `DoDamage` (`trazaLibre`, ignora a los bichos), para que la sonda no mida
+       * una pared cuando busca un bicho a tiro (el 80).
+       */
+      libre(a, b) {
+        if (!S.trazaLibre) return null;
+        const U = S.level.unitsPerMetre;
+        return S.trazaLibre([a[0] * U, a[1] * U, a[2] * U], [b[0] * U, b[1] * U, b[2] * U]);
+      },
       /** Y los deja como el motor. */
       restaurar() {
         Object.assign(AJUSTES, COMO_EL_MOTOR);
@@ -3546,6 +3794,142 @@ export function montarSonda(S) {
           visible: o.nodo.visible,
         };
       },
+      /**
+       * EL 99: ¿SE VE LA CARA DE FUERA DE LA MALLA, O LA DE DENTRO?
+       *
+       * Un modelo espejado con el sentido de giro mal puesto no desaparece: se
+       * dibuja DEL REVÉS —las caras de atrás en vez de las de delante— y sigue
+       * teniendo forma de escudo. Ni `caja()` ni contar píxeles lo ven.
+       *
+       * Se dibuja dos veces a un lienzo aparte, pintando la PROFUNDIDAD de cada
+       * píxel: una COMO LO DIBUJA EL JUEGO (el `side` de cada material, tal
+       * cual) y otra a dos caras, donde gana la superficie más cercana al ojo,
+       * que es la que se vería de un objeto macizo. En una malla cerrada bien
+       * dibujada las dos imágenes son la misma; del revés, no.
+       *
+       * La primera versión pintaba un color liso por grupo y salió VERDE CON EL
+       * FALLO PUESTO (98,2 %): la cara de fuera y la de dentro del disco son el
+       * mismo grupo, así que verlo por dentro daba el mismo color. Lo cazó
+       * pasar la sonda ANTES de arreglar nada.
+       *
+       * No recalcula la regla del espejo: usa el nodo, los materiales y la
+       * cámara del juego, y sólo les cambia el color.
+       */
+      caras(cual = "escudo", lado = 96) {
+        const o = cual === "escudo" ? S.escudoEnMano : S.armaEnMano;
+        const r = S.renderer;
+        if (!o?.malla || !r) return null;
+        o.seguir(S.camera);
+        o.nodo.updateMatrixWorld(true);
+        S.camera.updateMatrixWorld(true);
+        const reales = o.malla.material;
+        const lienzo = new THREE.WebGLRenderTarget(lado, lado);
+        const antes = { rt: r.getRenderTarget(), color: r.getClearColor(new THREE.Color()), alfa: r.getClearAlpha(), auto: r.autoClear };
+        const pintar = (dosCaras) => {
+          o.malla.material = reales.map((m) => new THREE.MeshDepthMaterial({
+            depthPacking: THREE.RGBADepthPacking, side: dosCaras ? THREE.DoubleSide : m.side, visible: m.visible,
+          }));
+          r.setRenderTarget(lienzo); r.autoClear = true; r.setClearColor(0x000000, 0);
+          r.render(o.nodo, S.camera);
+          const px = new Uint8Array(lado * lado * 4);
+          r.readRenderTargetPixels(lienzo, 0, 0, lado, lado, px);
+          for (const m of o.malla.material) m.dispose();
+          return px;
+        };
+        let juego, macizo;
+        try { juego = pintar(false); macizo = pintar(true); }
+        finally {
+          o.malla.material = reales;
+          r.setRenderTarget(antes.rt); r.setClearColor(antes.color, antes.alfa); r.autoClear = antes.auto;
+          lienzo.dispose();
+        }
+        let pixeles = 0, iguales = 0;
+        for (let i = 0; i < juego.length; i += 4) {
+          const hay = macizo[i] | macizo[i + 1] | macizo[i + 2] | macizo[i + 3];
+          if (!hay) continue;                                 // donde el objeto macizo no pinta, no hay nada que comparar
+          pixeles++;
+          // la misma superficie da el mismo fragmento, byte a byte: es el mismo triángulo
+          if (juego[i] === macizo[i] && juego[i + 1] === macizo[i + 1] && juego[i + 2] === macizo[i + 2] && juego[i + 3] === macizo[i + 3]) iguales++;
+        }
+        return { pixeles, iguales, fraccion: pixeles ? iguales / pixeles : null, espejado: Boolean(o.espejado) };
+      },
+      /**
+       * EL 96: el RECTÁNGULO DE LA PANTALLA donde cae el arma, en píxeles CSS.
+       *
+       * Es la ventana para contar píxeles alrededor del arma (la lección del 78:
+       * en pantalla entera el ruido del mundo se come la señal). Se proyecta
+       * VÉRTICE A VÉRTICE, ya deformado por el esqueleto en el fotograma de
+       * ahora (`SkinnedMesh.getVertexPosition`): la primera versión proyectaba
+       * las ocho esquinas de la caja de la postura de enlace, y con el modelo de
+       * vista pegado al ojo dos esquinas quedaban DETRÁS de la cámara y la
+       * «ventana» salía de 6 000 × 9 000 px, o sea la pantalla entera. Los
+       * vértices detrás del plano cercano se descartan.
+       */
+      rectangulo(cual = "arma") {
+        const o = cual === "muneco" ? S.muneco : cual === "escudo" ? S.escudoEnMano : S.armaEnMano;
+        if (!o) return null;
+        o.seguir(S.camera);
+        o.nodo.updateMatrixWorld(true);
+        S.camera.updateMatrixWorld(true);
+        const lienzo = S.renderer?.domElement ?? document.querySelector("canvas");
+        const r = lienzo.getBoundingClientRect();
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0, detras = 0, fuera = 0;
+        const v = new THREE.Vector3();
+        const cerca = S.camera.near ?? 0.01;
+        o.nodo.traverse((m) => {
+          if (!m.isMesh || !m.visible || !m.geometry?.attributes?.position) return;
+          if (m.isSkinnedMesh) m.skeleton?.update();
+          const cuantos = m.geometry.attributes.position.count;
+          for (let i = 0; i < cuantos; i++) {
+            if (m.isSkinnedMesh) m.getVertexPosition(i, v); else v.fromBufferAttribute(m.geometry.attributes.position, i);
+            v.applyMatrix4(m.matrixWorld).applyMatrix4(S.camera.matrixWorldInverse);
+            // Detrás del plano cercano, en espacio de CÁMARA: proyectar un punto
+            // que está detrás del ojo da coordenadas que parecen buenas y no lo son.
+            if (v.z > -cerca) { detras++; continue; }
+            v.applyMatrix4(S.camera.projectionMatrix);
+            // Y lo que cae fuera del cuadro no se ve: no ensancha la ventana.
+            if (Math.abs(v.x) > 1 || Math.abs(v.y) > 1) { fuera++; continue; }
+            const x = r.left + ((v.x + 1) / 2) * r.width, y = r.top + ((1 - v.y) / 2) * r.height;
+            x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+            n++;
+          }
+        });
+        if (!n) return null;
+        return { x0, y0, x1, y1, vertices: n, detras, fuera, ancho: r.width, alto: r.height, visible: o.nodo.visible };
+      },
+      /**
+       * EL 97: congelar (o soltar) la animación del modelo de vista, para medir
+       * su tamaño en píxeles con dos campos de visión SIN que respire entre las
+       * dos fotos (la Novablade mueve un tercio de su ventana en 0,2 s, el 96).
+       * Primero se probó medir en ÁNGULO (tangentes desde el ojo) y no sirve: el
+       * modelo tiene vértices junto al plano cercano —el brazo sale por detrás
+       * del ojo— y sus tangentes se van a infinito; el borde lo pone la pantalla.
+       */
+      congelar(cual = "arma", si = true) {
+        const o = cual === "muneco" ? S.muneco : cual === "escudo" ? S.escudoEnMano : S.armaEnMano;
+        if (!o) return null;
+        if (si && !o.__animarDeVerdad) { o.__animarDeVerdad = o.animar; o.animar = () => {}; }
+        if (!si && o.__animarDeVerdad) { o.animar = o.__animarDeVerdad; delete o.__animarDeVerdad; }
+        return Boolean(o.__animarDeVerdad);
+      },
+      /** EL 97: el campo de visión VERTICAL de la cámara, en grados; `null` lo deja. */
+      campoDeVision(grados = null) {
+        if (grados !== null) { S.camera.fov = grados; S.camera.updateProjectionMatrix(); }
+        return S.camera.fov;
+      },
+      /**
+       * EL 96: esconder y volver a enseñar el modelo de la mano, para el control
+       * NEGATIVO de los píxeles: la misma pantalla, el mismo instante, con y sin
+       * el arma. Toca sólo `visible` del nodo —lo mismo que hace `empunar` con
+       * el arma que se guarda— y devuelve cómo estaba para dejarlo igual.
+       */
+      esconder(cual = "arma", si = true) {
+        const o = cual === "muneco" ? S.muneco : cual === "escudo" ? S.escudoEnMano : S.armaEnMano;
+        if (!o) return null;
+        const antes = o.nodo.visible;
+        o.nodo.visible = !si;
+        return antes;
+      },
       /** Cambia el género del muñeco, que es otro modelo y otras pistas. */
       async genero(g = "female") { await S.ponerMuneco(g); return this.muneco; },
       get muneco() {
@@ -3587,6 +3971,9 @@ export function montarSonda(S) {
           t: S.brazo?.t ?? null, cargando: S.brazo?.cargando ?? 0,
           cargaHecha: S.brazo?.cargaHecha ?? 0, pulsadoAntes: S.brazo?.pulsadoAntes ?? null,
           golpesDados: S.golpesDados, impactos: S.impactos, muertes: S.muertes, aguante: S.aguante,
+          // EL 96: las veces que `empunar` recibió un id fuera del catálogo y
+          // cayó a los puños. Antes del 96 era CUALQUIER arma no de partida.
+          armasSinFicha: S.armasSinFicha ?? 0,
           // El 80: por dónde entró. «Impactos» no distingue la esfera de la
           // línea, y el arreglo del 80 es justo la segunda: sin estos dos, tener
           // el segundo intento o no tenerlo se lee igual desde fuera.
@@ -3841,6 +4228,10 @@ export function montarSonda(S) {
             muerteDeclarada: ia.muerteDeclarada ?? null,
             golpe: ia.golpe ?? null, hayGolpe: hay(ia.golpe),
             huir: ia.huir ?? null,
+            // EL 95: `HAS_AI`. Sin él, `huir` y `encogerseIA` son constantes que
+            // no lee nadie en el mod (ver `reaccionAlGolpe`).
+            tieneIA: ia.tieneIA ?? null,
+            corriendo: ia.corriendo ?? null,
             encogerseIA: ia.encogerse?.puede ?? false,
             struck: ia.struck?.usaEncogerse ?? false,
             animacionDeEncogerse: ia.struck?.animacion ?? ia.encogerse?.animacion ?? null,
@@ -3954,6 +4345,65 @@ export function montarSonda(S) {
      * postura, que el cono sea el de 53 grados y no el de 175, y que cubrirse
      * impida atacar.
      */
+    /**
+     * EL 96: LA ARMADURA. `vestir` entra por la MISMA función que usaría el
+     * juego (`vestirObjeto` de main.js -> `vestir` de src/play/armadura.js);
+     * `ultima` es lo que la armadura le hizo al último golpe de un bicho,
+     * leído del camino de `golpear` y no recalculado aquí (el 65).
+     */
+    armadura: {
+      vestir: (id) => S.vestirObjeto(id),
+      get ultima() { return S.ultimaArmadura; },
+      get puestos() {
+        return [...(S.objetosVivos?.values?.() ?? [])].filter((o) => o.puesto)
+          .map((o) => ({ id: o.id, armadura: o.armadura, golpeEnCurso: Boolean(o.golpeEnCurso) }));
+      },
+    },
+    /**
+     * EL 97 (G): LAS TRABAS. Lo que el bucle de `main.js` leyó de los efectos
+     * en el último fotograma (`ultimasTrabas`, src/play/trabas.js) — leído, no
+     * recalculado (el 65). `aplicar` entra por la puerta de `applyeffect` del
+     * jugador, la misma que reciben los guiones de los bichos (`aplicarEfecto`).
+     */
+    trabas: {
+      get ultimas() {
+        const t = S.ultimasTrabas;
+        return t ? { ...t, quien: t.quien.map((x) => ({ ...x })) } : null;
+      },
+      aplicar: (ruta, params = []) => {
+        const ef = S.guionJugador?.efectos?.aplicar(String(ruta), params.map(String)) ?? null;
+        return { puesto: Boolean(ef), resultado: S.guionJugador?.efectos?.historial?.at(-1)?.resultado ?? null };
+      },
+      activos: () => S.guionJugador?.efectos?.activos ?? [],
+      /** `removeeffect ent_me <id>` (scriptcmds.cpp:5068-5106): ANDAMIO para tirar el dado otra vez sin esperar. */
+      quitar: (id) => S.guionJugador?.efectos?.quitarPorId(String(id)) ?? 0,
+      nopush: () => Boolean(S.guionJugador?.nopush),
+      resistencia: (tipo) => S.guionJugador?.resistencias?.leer?.(String(tipo)) ?? null,
+    },
+    // EL 97: SÓLO LECTURA. Las órdenes del equipo las da el jugador —clics en el
+    // panel y la `q`—; aquí se lee qué hicieron y en qué orden.
+    inventario97: {
+      get ultimo() { return S.ultimoMovimiento ?? null; },
+      get manoActiva() { return S.manoActiva ?? null; },
+      get manos() { return { ...(S.sesion?.personaje?.manos ?? {}) }; },
+      get puestos() { return (S.sesion?.personaje?.objetos ?? []).filter((o) => o.puesto).map((o) => o.id); },
+    },
+    // EL 98: SÓLO LECTURA. Qué hay en cada contenedor (el campo `en` de la
+    // entrada, src/play/contenedores.js), lo que no tiene sitio y lo último que
+    // soltó «Drop Selected». No coloca nada: eso lo hace el juego al abrir el
+    // panel o al dar una orden.
+    inventario98: {
+      get enCada() {
+        const out = {};
+        for (const o of S.sesion?.personaje?.objetos ?? []) {
+          if (o.puesto || o.en === undefined) continue;
+          (out[o.en] ??= []).push(o.id);
+        }
+        return out;
+      },
+      get entradas() { return (S.sesion?.personaje?.objetos ?? []).map((o) => ({ id: o.id, n: o.n ?? 1, en: o.en ?? null, puesto: Boolean(o.puesto) })); },
+      get ultimoSoltado() { return S.ultimoSoltado98 ?? null; },
+    },
     escudo: {
       get estado() {
         return {

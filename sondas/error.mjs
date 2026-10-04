@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { esNuestro, liberarPuerto, arrancarVite } from "./mismo.mjs";
 // `kill()` en Windows mata el `cmd` y deja el `vite` vivo: el puerto se queda
 // cogido y la siguiente sonda mide contra un servidor de hace media hora.
 const matar = (p) => { try { process.platform === "win32" ? spawn("taskkill", ["/F","/T","/PID",String(p.pid)],{shell:true,stdio:"ignore"}) : p.kill(); } catch {} };
@@ -11,8 +11,7 @@ const PORT = 5199;
 // de otro. Ver `sondas/mismo.mjs`.
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
-await new Promise((r) => setTimeout(r, 6000));
+const dev = await arrancarVite(PORT);
 const b = await chromium.launch();
 const p = await b.newPage();
 p.on("console", (m) => console.log("  consola:", m.type(), m.text().slice(0, 300)));

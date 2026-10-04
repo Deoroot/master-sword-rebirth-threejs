@@ -98,16 +98,15 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 
 const PORT = 5272;
 const liberados = liberarPuerto(PORT);
 if (liberados) console.log(`  (puerto ${PORT} liberado: ${liberados})`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 7000));
 
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
@@ -152,10 +151,16 @@ control("SEGUNDO CASO: la espada y la manzana NO usan la misma cuenta",
   espada.animacion === "shortsword_floor_idle" && manzana.animacion === "apple_floor_idle",
   `espada ${espada?.animacion}, manzana ${manzana?.animacion}`);
 
+// EL 96: `tools/suelo.mjs` mete desde el 96 todo lo empuñable, y ya no es UNA
+// mano sin modelo del mundo sino 33: los 31 hechizos (todos `setworldmodel
+// none`, magic_hand_base.script:24), los puños y la plantilla
+// `base_weapon_new`. El `length === 1` era el supuesto de la lista del 75, no
+// la regla; la regla —la de relámpago está, y ninguna sin modelo trae malla—
+// se sigue exigiendo entera.
 const sinMundo = suelo.objetos.filter((o) => !o.modelo || o.modelo === "none");
 control("la mano de relámpago no trae malla, y el motor tampoco la dibuja",
-  sinMundo.length === 1 && sinMundo[0].guion === "magic_hand_lightning_weak" && !sinMundo[0].clave,
-  sinMundo.map((o) => o.guion).join(", ") || "ninguna");
+  sinMundo.some((o) => o.guion === "magic_hand_lightning_weak") && sinMundo.every((o) => !o.clave),
+  `${sinMundo.length} sin modelo del mundo, ${sinMundo.filter((o) => o.clave).length} con malla`);
 
 const tapa = (malla.interactivas?.correderas ?? []).find((c) => c.nombre === "sewer_door");
 control("Edana tiene la tapa de la cloaca, que es la `func_door` del segundo caso",

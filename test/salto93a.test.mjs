@@ -368,25 +368,32 @@ describe("el salto de la araña de Gate City, con su modelo y su guion de verdad
     });
   });
 
-  test("LA RAREZA DEL MOD: un mordisco antes de `npc_post_spawn` la deja a ritmo 0, congelada", () => {
-    // `frame_bite1` hace `setanim.framerate BASE_FRAMERATE` (spider.script:207-209)
-    // y `BASE_FRAMERATE` no existe hasta `npc_post_spawn`
-    // (base_self_adjust.script:141, `callevent 1.0`): `atof` de su nombre es
-    // 0, `m_Framerate = 0` (npcscript.cpp:1588) y `pev->framerate = 0`
-    // (msmonsterserver.cpp:2079). La animación de atacar no acaba nunca.
+  // CORRECCIÓN DEL 95. Esta prueba se llamaba «LA RAREZA DEL MOD: un mordisco
+  // antes de `npc_post_spawn` la deja a ritmo 0, congelada», y pedía «control:
+  // muerde antes del primer segundo». El mecanismo es del mod —`frame_bite1`
+  // hace `setanim.framerate BASE_FRAMERATE` (spider.script:207-209),
+  // `BASE_FRAMERATE` no existe hasta `npc_post_spawn` (base_self_adjust.
+  // script:141, `callevent 1.0`), `atof` de su nombre es 0 y `pev->framerate`
+  // queda a 0 (npcscript.cpp:1588, msmonsterserver.cpp:2079)—, pero el
+  // MORDISCO ANTES DEL PRIMER SEGUNDO era de este puerto: el cazador pensaba en
+  // el primer paso. La araña es de la IA vieja y no caza de verdad hasta los
+  // 2,8 s (`if NPC_INITIALIZED`, base_npc_attack.script:71; ver
+  // `primerPensamiento` en src/bsp/script.js y test/ia95), así que por la caza
+  // no puede morder antes de que exista `BASE_FRAMERATE`. Lo que se mide ahora
+  // es eso, con el jugador a tiro desde el primer paso.
+  test("la araña NO muerde antes de `npc_post_spawn`: su primera caza es a los 2,8 s, y su mordisco va a ritmo", () => {
     conSemilla(12, () => {
       const r = montar("monsters/spider", { aU: 30 });
       // Por lo que RECIBE el guion (la costura), no por su rastro: `frame_bite1`
       // son DOS bloques con ese nombre (spider_base.script:31 y
       // spider.script:207) y el rastro apunta los dos.
       const mordiscos = () => r.g()?.costuraCuenta?.recibidos?.frame_bite1 ?? 0;
-      r.correr(0.9, () => mordiscos() >= 1);
-      assert.equal(mordiscos(), 1, "control: muerde antes del primer segundo");
-      assert.equal(r.i.fisica.ritmoAnim, 0);
-      r.correr(10);
-      assert.equal(r.i.anim.nombre, "attack");
-      assert.equal(mordiscos(), 1, "congelada: no vuelve a morder");
-      assert.equal(r.g().guion.vars.get("BASE_FRAMERATE"), "1.0", "aunque la variable YA exista: nadie vuelve a pedir el ritmo");
+      r.correr(2.7, () => mordiscos() >= 1);
+      assert.equal(mordiscos(), 0, "a 30 u y a la vista, no muerde en 2,7 s: todavía no ha cazado");
+      // CONTROL: el mismo instrumento ve el mordisco cuando llega la caza.
+      assert.ok(r.correr(5, () => mordiscos() >= 1), "control: después sí muerde");
+      assert.equal(r.g().guion.vars.get("BASE_FRAMERATE"), "1.0", "ya existe la variable");
+      assert.notEqual(r.i.fisica.ritmoAnim, 0, "y el mordisco no la congela");
     });
   });
 });

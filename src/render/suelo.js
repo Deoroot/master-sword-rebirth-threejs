@@ -22,7 +22,8 @@
 // ── Lo que NO hace, con la cuenta ─────────────────────────────────────────
 //
 // No da sombra ni se ilumina con el luxel donde cae: material plano, como las
-// flechas y como los bichos. Afecta a los **13**.
+// flechas y como los bichos. Afecta a los **13**. (El 96: a los 218 de hoy, de
+// los que 200 sólo se cargan si caen — ver `SOLO_SI_CAE`.)
 //
 // No pone colisionador. Un objeto tirado es `SOLID_TRIGGER` en el motor
 // (genericitem.cpp:1408), o sea que **no para a nadie**: se le pasa por encima.
@@ -46,11 +47,40 @@ export async function cargarSuelo(manifiesto, { base = `${BASE_COMUN}/suelo`, U 
   const grupo = new THREE.Group();
   grupo.name = "suelo";
   const modelos = new Map();
+  // ── LAS PEREZOSAS, desde el 96 ────────────────────────────────────────
+  //
+  // `tools/suelo.mjs` mete desde el 96 TODO lo que se puede empuñar —200
+  // guiones, 167 con malla y 20 MB— con la etiqueta `empuñable`. Cargar eso al
+  // entrar sería pagar veinte megas por armas que nadie lleva. Así que las que
+  // SÓLO vienen por esa vía se cargan la primera vez que caen, y el resto —lo
+  // que un mapa planta, el botín y lo que lleva un personaje nuevo, 18 guiones—
+  // sigue cargándose al entrar por la razón de arriba (el tirón).
+  //
+  // El precio, dicho: la primera vez que se suelta un arma de ésas, el nodo
+  // aparece uno o dos fotogramas tarde (lo que tarde la carga). La regla del
+  // objeto —dónde cae, cuándo se posa— no espera a nadie: vive en
+  // `src/play/suelo.js` y corre igual.
+  const SOLO_SI_CAE = "empuñable";
+  const perezosas = new Map();   // guion -> ficha, las que aún no se han pedido
+  const cargando = new Map();    // guion -> promesa
   for (const f of fichas) {
+    const m = f.mapas ?? [];
+    if (m.length === 1 && m[0] === SOLO_SI_CAE) { perezosas.set(f.guion, f); continue; }
     const M = await cargarModelo(f.clave, { base });
     if (M) modelos.set(f.guion, { M, ficha: f });
   }
-  if (!modelos.size) return null;
+  if (!modelos.size && !perezosas.size) return null;
+  /** Pide el modelo de una perezosa, una vez. Devuelve la promesa o `null`. */
+  function pedir(guion) {
+    if (cargando.has(guion)) return cargando.get(guion);
+    const f = perezosas.get(guion);
+    if (!f) return null;
+    const p = cargarModelo(f.clave, { base })
+      .then((M) => { if (M) modelos.set(guion, { M, ficha: f }); return Boolean(M); })
+      .catch((e) => { console.warn(`el modelo del suelo de ${guion} no se ha podido cargar:`, e); return false; });
+    cargando.set(guion, p);
+    return p;
+  }
 
   const puestos = new Map();   // i del objeto -> { nodo, mezclador }
 
@@ -114,6 +144,11 @@ export async function cargarSuelo(manifiesto, { base = `${BASE_COMUN}/suelo`, U 
     modelos,
     /** Cuántos modelos distintos se han podido cargar. */
     get n() { return modelos.size; },
+    /** Cuántos esperan a caer para cargarse, y cuántos se han pedido ya (96). */
+    get perezosas() { return perezosas.size; },
+    get pedidas() { return cargando.size; },
+    /** Espera a que llegue la perezosa de un guion: para la sonda. */
+    esperar: (guion) => pedir(guion) ?? Promise.resolve(modelos.has(guion)),
     /** Cuántos nodos hay puestos ahora mismo. Se calcula. */
     get puestos() { return puestos.size; },
 
@@ -138,6 +173,9 @@ export async function cargarSuelo(manifiesto, { base = `${BASE_COMUN}/suelo`, U 
     colocar(o) {
       let p = puestos.get(o.i);
       if (!p) {
+        // Una perezosa que aún no ha llegado: se pide y se sigue. El `tic`
+        // del fotograma siguiente vuelve a llamar y entonces ya está.
+        if (!modelos.has(o.guion)) { pedir(o.guion); return null; }
         p = montar(o.guion);
         if (!p) return null;
         puestos.set(o.i, p);

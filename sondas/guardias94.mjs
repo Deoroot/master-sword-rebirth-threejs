@@ -26,15 +26,14 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
-import { liberarPuerto, esperarApariciones } from "./mismo.mjs";
+import { liberarPuerto, esperarApariciones, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 
 const PORT = 5295;
 const liberados = liberarPuerto(PORT);
 if (liberados?.length) console.log(`  (puerto ${PORT} liberado: ${liberados.length})`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 7000));
 
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 800 } });
@@ -205,6 +204,100 @@ try {
   console.log(`  3) el guardia anda ${viene.paso.toFixed(2)} m en 3 s ('${viene.anim}'), objetivo ${viene.objetivo}`);
   control("y el guardia se mueve: el objetivo lo lleva la IA, no sólo la variable", viene.paso > 0.5,
     `${viene.paso.toFixed(2)} m`);
+
+  // ── 4. EL 95: UNA SOLA HUIDA, LA DE SU GUION ────────────────────────────
+  // El aldeano no tiene IA de ataque (`HAS_AI`, base_npc_attack_new.script:81,
+  // y default_human no la incluye): huye por `setmovedest ent_laststruck 1024
+  // flee` (NPCs/default_human.script:66-72) y por nada más. Hasta el 94 la IA
+  // le hacía huir OTRA VEZ desde el segundo golpe (`FLEE_HEALTH 25` estricto
+  // contra la vida de antes del golpe). Se le pega al aldeano llevado, que ya
+  // recibió uno en el apartado 2: éste es el segundo.
+  const r4 = await pegarle(cerca.n);
+  const a4 = await pag.evaluate(({ n }) => {
+    const b = window.probe.ia.bicho("NPCs/default_human", n);
+    // Lo que su guion pidió y no se pudo hacer: un `setmovedest` sin destino
+    // dice aquí por qué (los cuatro ceros de `destinoDeSetmovedest`).
+    return { ...b, faltas: (window.probe.misiones.noSoportados(b.id) ?? []).filter((x) => x.startsWith("setmovedest")) };
+  }, { n: cerca.n });
+  console.log(`  4) segundo golpe al llevado: vida ${r4.vida.join(" -> ")}, tieneIA ${a4.tieneIA}, ` +
+    `huye por IA ${a4.huyendoPorIA}, mandado ${JSON.stringify(a4.mandado)}, faltas ${JSON.stringify(a4.faltas)}`);
+  control("el segundo golpe entra, con la vida ya por debajo de 25", r4.vida[1] < r4.vida[0] && r4.vida[0] < 25,
+    `vida ${r4.vida.join(" -> ")}`);
+  control("CONTROL POSITIVO: su guion le manda huir (`setmovedest … flee`, dueño «guion»)",
+    a4.mandado?.dueño === "guion", JSON.stringify(a4.mandado));
+  control("EL 95: Y LA IA NO LE HACE HUIR OTRA VEZ (sin `HAS_AI` no hay `npcatk_checkflee`)",
+    a4.tieneIA === false && a4.huyendoPorIA === false, `tieneIA ${a4.tieneIA}, huye por IA ${a4.huyendoPorIA}`);
+  // El efecto, no la variable: dos segundos de mundo y el aldeano se ha
+  // alejado del jugador. Hasta el 95, en un jugador, esto lo hacía SÓLO la IA:
+  // el `setmovedest ent_laststruck` de su guion no encontraba a nadie.
+  const huida4 = await pag.evaluate(({ n }) => {
+    const S = window.probe;
+    const yo = () => { const b = S.ia.bicho("NPCs/default_human", n); return b.donde; };
+    const a = yo();
+    S.reaccion.avanzar(2);
+    const b = yo();
+    return { paso: Math.hypot(b[0] - a[0], b[2] - a[2]) };
+  }, { n: cerca.n });
+  console.log(`     en 2 s el aldeano anda ${huida4.paso.toFixed(2)} m`);
+  control("Y HUYE DE VERDAD: en 2 s se ha movido más de un metro", huida4.paso > 1, `${huida4.paso.toFixed(2)} m`);
+
+  // ── 5. EL 95: AL MORIR, EL ALDEANO NO AVISA A SUS ALIADOS ────────────────
+  // `if HAS_AI` delante de `npcatk_alert_all_allies` (base_npc.script:168-172).
+  // Se lleva a un tercer aldeano a un metro del primero (los dos `race human`,
+  // aliados), se le baja la vida a 1 al primero y se le mata a espadazos: el
+  // camino de la muerte de main.js, que es el que suma `estado.avisos`. El
+  // control positivo es un goblin con su pareja de Gate City (a 101-191 u, el
+  // 92), muerto por el mismo camino: ése sí avisa.
+  const matarA = async (guion, n) => await pag.evaluate(({ guion, n }) => {
+    const S = window.probe;
+    const k = S.reaccion.censo().filter((x) => x.script === guion)[n]?.n;
+    if (k === undefined) return null;
+    const avisosAntes = S.reaccion.estado.avisos;
+    S.reaccion.vida(k, 1);
+    let tandas = 0;
+    while (tandas < 30 && !S.ia.bicho(guion, n).muerto) {
+      const d = S.ia.bicho(guion, n).donde;
+      S.mundo.poner(d[0] + 1.0, d[1] + 0.1, d[2]);
+      S.mundo.mirar(d[0], d[1] + 0.9, d[2]);
+      S.golpe.atacar(1.2);
+      tandas++;
+    }
+    return { muerto: S.ia.bicho(guion, n).muerto, tandas, avisos: S.reaccion.estado.avisos - avisosAntes };
+  }, { guion, n });
+  const tercero = humanos[2] ?? null;
+  if (!tercero) {
+    control("hay un tercer aldeano humano para el aviso", false, `${humanos.length}`);
+  } else {
+    // Donde esté AHORA el primero: ha huido por su guion desde el apartado 1.
+    const junto = await pag.evaluate(({ n, m }) => {
+      const a = window.probe.ia.bicho("NPCs/default_human", m).donde;
+      return window.probe.ia.llevar("NPCs/default_human", [a[0] + 1, a[1], a[2]], n);
+    }, { n: tercero.n, m: lejos.n });
+    const m5 = await matarA("NPCs/default_human", lejos.n);
+    const t5 = await pag.evaluate(({ n }) => window.probe.ia.bicho("NPCs/default_human", n), { n: tercero.n });
+    console.log(`  5) aldeano muerto en ${m5?.tandas} tanda(s), avisos +${m5?.avisos}; el de al lado: objetivo ${t5.objetivo}`);
+    control("el tercer aldeano se lleva a un metro del primero", Array.isArray(junto), String(junto));
+    control("el aldeano muere a espadazos", m5?.muerto === true, JSON.stringify(m5));
+    control("EL 95: AL MORIR NO AVISA A NADIE (`if HAS_AI`, base_npc.script:170)", m5?.avisos === 0,
+      `avisos +${m5?.avisos}`);
+    control("y el aldeano de al lado no te toma de objetivo", t5.objetivo === null, `objetivo ${t5.objetivo}`);
+    // El control positivo: el primer goblin que tenga otro a menos de 290 u.
+    const par = await pag.evaluate(() => {
+      const S = window.probe;
+      const g = [];
+      for (let n = 0; n < 20; n++) { const b = S.ia.bicho("monsters/goblin", n); if (!b) break; g.push({ n, ...b }); }
+      const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+      for (const a of g) {
+        if (a.muerto || a.dormido) continue;
+        if (g.some((b) => b.n !== a.n && !b.muerto && !b.dormido && d(a.unidades, b.unidades) < 290)) return a.n;
+      }
+      return null;
+    });
+    const g5 = par === null ? null : await matarA("monsters/goblin", par);
+    console.log(`     control: goblin ${par} muerto en ${g5?.tandas} tanda(s), avisos +${g5?.avisos}`);
+    control("CONTROL POSITIVO: un goblin con pareja, muerto igual, SÍ avisa", g5?.muerto === true && g5.avisos > 0,
+      JSON.stringify(g5));
+  }
 
   control("la página no ha dado ni un error", errores.length === 0, errores.slice(0, 3).join(" · "));
   mkdirSync("build/gatecity/vistas", { recursive: true });

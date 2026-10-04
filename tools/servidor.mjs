@@ -175,6 +175,16 @@ if (!efectos || !fichaDelJugador) {
   console.log(`  efectos        ${Object.keys(efectos.archivos ?? {}).length} guiones, el jugador es su anfitrión aquí`);
 }
 
+// ── LOS GUIONES DE LOS OBJETOS, que desde el 97 defienden AQUÍ ──────────────
+//
+// La armadura protege corriendo el `game_takedamage` de su guion (el 96,
+// src/play/armadura.js), y con red quien recibe el golpe es el personaje de
+// este proceso (`Partida._defender`). Sin el horneado se dice: la armadura
+// puesta no protege y `/costura` lo cuenta en `defensa.sinGuiones`.
+const objetosGuion = await leerComun("objetosguion.json");
+if (!objetosGuion) console.log("  (sin build/msr/objetosguion.json: con servidor la armadura puesta NO protege. Corre `npm run objetos:guion`)");
+else console.log(`  objetos        ${Object.keys(objetosGuion.objetos ?? {}).length} guiones, la armadura defiende aquí`);
+
 // ── LOS `params` DE UN BICHO, si el operador los pide ───────────────────────
 //
 //     npm run servidor -- --mapa sala88 --params monsters/giantrat=add_dot_poison
@@ -199,7 +209,7 @@ if (Object.keys(paramsDeBicho).length) {
 
 const partida = new Partida({
   mundo, almacen, aparicion, catalogo, fauna, guiones, menus, nombre: NOMBRE, oroInicial,
-  efectos, fichaDelJugador,
+  efectos, fichaDelJugador, objetosGuion,
   paramsDeBicho: Object.keys(paramsDeBicho).length ? paramsDeBicho : null,
 });
 

@@ -41,6 +41,8 @@
 // la que este proyecto lee el motor: las dos reglas dan probabilidades distintas
 // para el mismo número.
 
+import { valorDeHabilidad } from "../juego/stats.js";
+
 /** El tope de la estadística. «cap out parry (shhh)» — msmonsterserver.cpp:2135. */
 export const TOPE_DE_PARRY = 60;
 /** Y el de la tirada: «always allow at least 20% chance to be hit». */
@@ -176,6 +178,38 @@ export function valorDeParryDelJugador({ manos = [] } = {}) {
   // Escudo + puño desnudo: la competencia de marciales por el multiplicador.
   if (total === 0 && multi > 1.0) total = manos.find((m) => m?.marciales)?.marciales ?? 0;
   return Math.trunc(total * multi);
+}
+
+/**
+ * LAS MANOS DE `update_parry`, sacadas del personaje — el 97.
+ *
+ * Hasta el 96 esto vivía dentro de `parryDelPersonaje` en src/main.js, que es
+ * el único que lo pedía. Con servidor lo pide también `Partida._bichoPega`
+ * (la defensa del jugador en el servidor, doc/DEFENSARED_97.md), y copiarlo
+ * habría dado dos `update_parry` que pueden separarse sin un error. Así que
+ * vive aquí y lo llaman los dos.
+ *
+ * @param {object} habilidades  las del personaje (`personaje.habilidades`)
+ * @param {object} arma         la ficha del arma de la mano: `id`, `habilidad`
+ *                              (o `arma.habilidad` en el catálogo de objetos)
+ *                              y `manoNumero` (4 = a dos manos)
+ * @param {object} escudo       la ficha `escudo` del escudo embrazado, o `null`
+ */
+export function manosDelParry({ habilidades = null, arma = null, escudo = null } = {}) {
+  const compDe = (hab) => (hab && habilidades?.[hab] ? valorDeHabilidad(habilidades[hab]) : 0);
+  const manos = [];
+  if (arma) {
+    const habilidad = arma.habilidad ?? arma.arma?.habilidad ?? arma.ataques?.[0]?.habilidad ?? null;
+    manos.push({
+      habilidad,
+      competencia: compDe(habilidad),
+      punoDesnudo: arma.id === "fist_bare",
+      dosManos: arma.manoNumero === 4,
+      marciales: compDe("martialarts"),
+    });
+  }
+  if (escudo) manos.push({ escudo: true, multiplicadorDeParry: escudo.multiplicadorDeParry ?? 0 });
+  return manos;
 }
 
 /**

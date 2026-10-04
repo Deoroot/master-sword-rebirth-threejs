@@ -108,6 +108,8 @@ export class ClienteDeRed {
     this.fauna = new Map();
     /** La vida y el estado que dice el servidor, que es el que manda. */
     this.vida = null;
+    /** EL 98: las trabas que manda el servidor en la foto, o `null`. */
+    this.trabas = null;
     this.estado = null;
     /** El reloj del servidor, estimado desde las fotos. */
     this.tServidor = 0;
@@ -236,6 +238,10 @@ export class ClienteDeRed {
     this.ultimaFoto = m.seq;
     this.tServidor = m.tiempo;
     this._tLocalDeLaFoto = this._ahora();
+    // EL 98: las trabas que el servidor le pone a ESTE jugador (su
+    // `clientdata`: `iuser3` y `maxspeed`). Viajan en cada foto mientras las
+    // hay, así que una foto sin ellas es «ya no hay». Ver src/play/trabas.js.
+    this.trabas = m.trabas ?? null;
 
     for (const e of m.jugadores ?? []) {
       if (e.id === this.yo) { this._vitalesDe(e); this._reconciliar(m, e); continue; }
@@ -573,6 +579,27 @@ export class ClienteDeRed {
   elegirMenu(id, indice) { this._mandar(MENSAJE.ELIGEMENU, { id, indice }); }
 
   /** `trade buy|sell <id>`. Lo que cuesta y lo que queda lo sabe el servidor. */
+  /** EL 96: `inv transfer <id> 0`. Ver `MENSAJE.EMPUNAR`. */
+  empunar(id) { this._mandar(MENSAJE.EMPUNAR, { id: id ?? null }); }
+  /**
+   * EL 97: lo mismo a la mano IZQUIERDA, que es donde va un escudo
+   * (`manos.izquierda`). El servidor lo necesita para la defensa: sin él no
+   * sabe que llevas escudo y no bloquea nada. Ver `Partida._empunar`.
+   */
+  embrazar(id) { this._mandar(MENSAJE.EMPUNAR, { id: id ?? null, mano: "izquierda" }); }
+  /** EL 97: se puso (`true`) o se quitó (`false`) una pieza. Ver `MENSAJE.VESTIR`. */
+  vestir(id, puesto) { this._mandar(MENSAJE.VESTIR, { id: String(id ?? ""), puesto: Boolean(puesto) }); }
+  /**
+   * EL 97: la `c` con servidor. Ver `MENSAJE.SOLTAR`. Se llama `soltarArma` y no
+   * `soltar` porque `soltar()` YA EXISTE más abajo y es otra cosa —desengancharse
+   * del socket—: con el mismo nombre la segunda pisaba a la primera, y la `c` de
+   * la primera pasada de la sonda del 97 DESCONECTABA al jugador en silencio.
+   */
+  soltarArma(id, desde = null) {
+    // EL 98: `desde: "mochila"` es «Drop Selected» (`drop <id>` con el objeto en
+    // un contenedor). Sin él, lo de la mano, como en el 97.
+    this._mandar(MENSAJE.SOLTAR, desde ? { id: String(id ?? ""), desde: String(desde) } : { id: String(id ?? "") });
+  }
   trade(que, { quien, tienda, id, flags = 0, vendedor = "" } = {}) {
     this._mandar(MENSAJE.TRADE, { que, quien, tienda, id, flags, vendedor });
   }

@@ -281,6 +281,18 @@ Las cuatro envolventes, ventana a ventana, decaen monótonas: los presets 0, 10,
    **No lo he tocado**: `src/main.js` lo tiene otra sesión a medias. El tercer
    control de ese bloque —«el número llega al audio»— está **verde**, así que la
    cadena de este documento recibe bien lo que el reparto le da.
+
+   > **Corrección del 98** ([ROJOS_98.md](ROJOS_98.md) §1): la sospecha era
+   > falsa, y la traza está bien. Medido rayo a rayo sobre la malla del mundo,
+   > el rayo de la fuente al ojo **no** arranca en sólido: choca a 80 y 78
+   > unidades de 116 con la cara de abajo del TECHO de la sala. Era **la
+   > sonda** la que plantaba los pies 52 unidades sobre el origen, y con el ojo
+   > 64 más arriba la cabeza quedaba 36 y 38 unidades dentro del techo, en el
+   > piso de arriba. Y «`loQueSeVe` no encuentra nada en medio» también tiene
+   > explicación: desde ARRIBA el rayo cruza el techo por su cara de atrás, que
+   > el `Raycaster` de Three no ve con un material de una cara. La misma pared,
+   > vista por los dos lados, decía «hay algo» y «no hay nada». Con los pies en
+   > el suelo de cada sala, `edana82` da 18 de 18.
 2. **La modulación** (`room_mod`): un solo preset la usa, el 26 —contado, es 1 de
    29—. Que haya **un solo `env_sound` de tipo 26 en los 93 mapas** lo escribió
    la primera vuelta y esta vuelta **no lo ha vuelto a contar**: va aquí como

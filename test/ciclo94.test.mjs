@@ -168,8 +168,19 @@ function esperaHastaVerte(script) {
         esJugador: true, relacion: b.ficha.relacion, ancho: 0 }]
       : []),
   };
-  m.relojes(DT);
-  m.cazar(DT, arnes);                       // el primer pensamiento, sin nadie
+  // CORRECCIÓN DEL 95: «el reloj nace a cero» dejó de ser verdad: el primer
+  // pensamiento espera 0,75 s (nueva) o 2,8 s (vieja), ver test/ia95. Así que
+  // se dan pasos sin nadie a la vista HASTA que piensa por primera vez —el
+  // reloj salta hacia arriba al reprogramarse— y desde ahí se mide el ciclo.
+  // Antes era un solo paso, y con el goblin daba 0,75 en vez de 2,0.
+  let pensado = false;
+  for (let k = 0; k < 400 && !pensado; k++) {
+    const antes = i.cazador.reloj;
+    m.relojes(DT);
+    m.cazar(DT, arnes);                     // el primer pensamiento, sin nadie
+    pensado = i.cazador.reloj > antes;
+  }
+  assert.ok(pensado, "ha pensado una vez sin nadie a la vista");
   assert.equal(i.cazador.objetivo, null);
   visible = true;
   for (let k = 1; k <= 400; k++) {

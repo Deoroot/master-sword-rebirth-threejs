@@ -393,10 +393,13 @@ export class Fauna {
           undefined, undefined, undefined, mio(i));
       },
       /** Cuando un bicho acierta. Quien lo cobra es la partida. */
-      golpear: (i, id, dano) => {
+      // EL 97: con su TIPO, que lo trae el `dodamage` de un guion (`Manada._golpeDelGuion`)
+      // y decide qué para el escudo y el parry. Antes se
+      // tiraba aquí y el servidor sólo veía el de la ficha.
+      golpear: (i, id, dano, tipo) => {
         const j = this._jugadorDe(id);
         if (!j) return null;
-        return this.golpear?.(i, j, dano) ?? null;
+        return this.golpear?.(i, j, dano, tipo) ?? null;
       },
     };
   }

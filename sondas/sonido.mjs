@@ -13,20 +13,19 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { readFileSync } from "node:fs";
 
-const PORT = 5198;
+const PORT = 5603;   // el 98: era 5198, compartido con otra sonda (test/puertos98.test.mjs)
 // Se mata a quien estuviera en el puerto ANTES de arrancar el nuestro.
 // `--strictPort` hace que el nuestro falle si esta ocupado, y con
 // `stdio: "ignore"` ese fallo no se ve: la sonda acaba midiendo el programa
 // de otro. Ver `sondas/mismo.mjs`.
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 6000));
 
 // `--autoplay-policy` es lo que permite comprobar el RESTO del sistema sin un
 // gesto real. NO se usa para tapar el problema: hay un control más abajo que

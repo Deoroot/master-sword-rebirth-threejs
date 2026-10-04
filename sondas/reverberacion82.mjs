@@ -47,11 +47,11 @@
 
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, arrancarVite } from "./mismo.mjs";
 
-const PORT = 5282;
+const PORT = 5619;   // el 98: era 5282, compartido con otra sonda (test/puertos98.test.mjs)
 const liberados = liberarPuerto(PORT);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);   // el 98: espera a que conteste
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch { /* ya no está */ } };
 
 // ── EL MARCADOR SE DECLARA ANTES DE EMPEZAR ──────────────────────────────

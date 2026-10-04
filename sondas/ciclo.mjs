@@ -9,7 +9,7 @@
 // ¿pantalla de muerte, oro cobrado? → reaparecer → ¿de vuelta al templo?
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { esNuestro, liberarPuerto } from "./mismo.mjs";
+import { esNuestro, liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { mkdirSync } from "node:fs";
 
 const PORT = 5194;
@@ -19,9 +19,8 @@ const PORT = 5194;
 // de otro. Ver `sondas/mismo.mjs`.
 const liberados = liberarPuerto(PORT);
 if (liberados.length) console.log(`  (habia ${liberados.length} proceso(s) en el puerto: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = await arrancarVite(PORT);
 const matar = (p) => { try { spawn("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
-await new Promise((r) => setTimeout(r, 6000));
 const nav = await chromium.launch();
 const pag = await nav.newPage({ viewport: { width: 1200, height: 820 } });
 const errores = [];

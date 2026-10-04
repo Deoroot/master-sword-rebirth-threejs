@@ -187,7 +187,10 @@ describe("el registro del personaje", () => {
   test("se crea con lo que dice el archivo, no con lo que nos parezca", () => {
     const p = crearPersonaje({ nombre: "Prueba", arma: "swords_rsword", nuevoPersonaje: cfg });
     assert.equal(p.oro, 10);
-    assert.equal(p.objetos.length, 3); // dos gratis y el arma
+    // EL 97: dos, los gratis. El arma va SÓLO a la mano (`AddItem(pStartingItem,
+    // true, true)`, sv_character.cpp:94-96); antes del 97 esta línea pedía 3
+    // porque `crearPersonaje` la duplicaba en `objetos` (doc/INVENTARIO_97.md).
+    assert.equal(p.objetos.length, 2);
     assert.equal(p.manos.derecha, "swords_rsword");
     assert.equal(p.version, VERSION);
     assert.ok(p.id && p.creado && p.actualizado);

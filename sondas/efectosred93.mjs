@@ -32,7 +32,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chromium } from "playwright";
 import { mkdirSync, rmSync } from "node:fs";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, lanzarVite, esperarHttp } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 import { leerPng } from "../tools/png.mjs";
 
@@ -48,7 +48,7 @@ mkdirSync(VISTAS, { recursive: true });
 
 const liberados = [...liberarPuerto(PUERTO_WEB), ...liberarPuerto(PUERTO_PARTIDA)];
 if (liberados.length) console.log(`  (había ${liberados.length} proceso(s) en los puertos: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PUERTO_WEB), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = lanzarVite(PUERTO_WEB);
 let partida = null;
 const salida = [];
 const matar = (p) => { if (!p) return; try { spawnSync("taskkill", ["/F", "/T", "/PID", String(p.pid)], { shell: true, stdio: "ignore" }); } catch {} };
@@ -137,7 +137,7 @@ async function sinVentanas(pag, tope = 20000) {
   return false;
 }
 
-await esperar(8000);   // vite
+await esperarHttp(`http://localhost:${PUERTO_WEB}/`, { tope: 90_000, proceso: dev, quien: "vite" });   // el 98: en vez de dormir
 const nav = await chromium.launch();
 try {
   // ════ A. UN JUGADOR ════════════════════════════════════════════════════
@@ -209,7 +209,7 @@ try {
   ], { stdio: ["ignore", "pipe", "pipe"] });
   partida.stdout.on("data", (b) => salida.push(String(b)));
   partida.stderr.on("data", (b) => salida.push(`ERR ${b}`));
-  await esperar(5000);
+  await esperarHttp(`http://localhost:${PUERTO_PARTIDA}/partidas`, { tope: 90_000, proceso: partida, quien: "el servidor de partida" });   // el 98
   const costura = async () => (await fetch(`http://localhost:${PUERTO_PARTIDA}/costura`)).json();
   const laRata = (c) => c?.bichos?.find((b) => b.script === RATA) ?? null;
 

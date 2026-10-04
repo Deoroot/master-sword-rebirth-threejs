@@ -2,6 +2,9 @@ import { BASE_COMUN, rutaComun } from "./play/recursos.js";
 // El 64: el jugador también es una entidad con guion.
 import { GuionDelJugador, EVENTOS_DEL_JUGADOR } from "./play/guionjugador.js";
 import { GuionesDeObjeto, GuionDeObjeto, QUIEN_VISTE } from "./play/guionobjeto.js";
+import { vestir, fichasPuestas, seVisteAlCargar, correEnElServidor } from "./play/armadura.js";
+import { Equipo } from "./play/equipar.js";
+import { colocar as colocarEnContenedores, dentroDe as dentroDelContenedor } from "./play/contenedores.js";
 import { TablaDeEfectos } from "./play/efectos.js";
 import { HABILIDADES, PROPIEDADES } from "./juego/stats.js";
 // Entrada del navegador. Une las tres piezas y no hace nada mas: el cargador
@@ -28,7 +31,7 @@ import { atraparTeclado, avisoDeReservadas, tecladoAtrapado, soltarTeclado, enPa
 import {
   atributosDe, derivadas, habilidadDeArma, propiedadesDe, valorDeHabilidad,
 } from "./juego/stats.js";
-import { entrenar, resumen } from "./juego/personaje.js";
+import { entrenar, resumen, loQueLleva } from "./juego/personaje.js";
 import { carga as cargaDe } from "./juego/inventario.js";
 import { buildView } from "./render/scene.js";
 import { atlasDe } from "./render/studio.js";
@@ -55,7 +58,7 @@ import { Flecha, anguloDelTiro, danoDeFlecha, dadoDeFlecha } from "./play/proyec
 import {
   Brazal, POSTURA, defensaDelJugador, dentroDelCono2D, puedeAtacar,
 } from "./play/escudo.js";
-import { valorDeParryDelJugador } from "./play/parry.js";
+import { valorDeParryDelJugador, manosDelParry } from "./play/parry.js";
 // EL 86: las seis cadenas de la consola de sucesos, que eran NUESTRAS. El
 // usuario lo reportó («el event hud me parece todavía tiene texto inventado») y
 // lo era: ver la cabecera de ese archivo, que lleva la tabla de lo que decíamos
@@ -110,6 +113,9 @@ import { avisoDeCanal, hablar, HABLA } from "./play/chat.js";
 // el cartel que se escribe letra a letra y la lluvia de colores.
 import { montarMensajes } from "./juego/mensajes.js";
 import { camaraDeMuerte, sonidoDeMuerte, DESVANECIDO, AL_REAPARECER, efectoDelGolpe, soltarGolpe } from "./play/muerte.js";
+import { nuevoTemblor, temblorAlLlegar, pasoDelTemblor, temblorEnEscena } from "./play/temblor.js";
+// EL 97: lo que los efectos le hacen al cuerpo (aturdir, frenar).
+import { trabasDelJugador, velocidadConTrabas, trabarIntencion, juntarTrabas, trabasDelCable } from "./play/trabas.js";
 import { subida } from "./play/nivel.js";
 import { presentacion } from "./play/intro.js";
 import { montarChispas, cargarBengala } from "./render/chispas.js";
@@ -157,6 +163,7 @@ import { BOTON } from "./red/protocolo.js";
 import { cargarOtros } from "./render/otros.js";
 // La sonda: dos mil líneas que no son el juego y que hasta el 28 vivían aquí.
 import { montarSonda } from "./dev/sonda.js";
+import { importarPersonajeDePruebas } from "./dev/personajepruebas.js";
 
 const DT = 1 / 60;
 // EL RATÓN. Aquí había `const MOUSE = 0.0022` —radianes por cuenta, elegidos a
@@ -205,6 +212,10 @@ let camaraMuerte = null;
 // EL 94. El `pev->punchangle` del jugador, en GRADOS del motor (cabeceo, giro,
 // alabeo): lo empuja cada golpe y lo suelta `PM_DropPunchAngle`. `muerte.js`.
 let golpeDeVista = [0, 0, 0];
+// EL 95. El `clgame.shake` del cliente: lo llena `effect screenshake` y lo
+// mueve `pasoDelTemblor` cada fotograma. Uno solo, como en el motor.
+// `src/play/temblor.js`.
+let temblor = nuevoTemblor();
 // Experimento 52: el recorrido de la camara mientras el menu principal esta
 // abierto. `null` mientras el fondo vivo este apagado, que es hoy siempre salvo
 // para la sonda que elige miradores. Ver `src/play/miradores.js` y el bloque
@@ -271,6 +282,17 @@ const objetosVivos = new Map();
 // construye en otra, así que un `get` directo da `ReferenceError`. Es el mismo
 // tropiezo que el 65 tuvo con `fichaDelJugador`, y lo cazó la sonda.
 let sincronizarObjetos = () => 0;
+// EL 96: ponerse una pieza y lo último que hizo la armadura con un golpe. Por
+// el mismo motivo que el asa de arriba: los usa `window.probe`.
+let vestirObjeto = () => ({ puesto: false, mensaje: null, porque: "no-world" });
+let ultimaArmadura = null;
+// EL 97: la última orden del equipo (`remove`, `inv transfer`, `use`) con el
+// orden de eventos que corrió. La lee `window.probe.inventario97`.
+let ultimoMovimiento = null;
+// EL 98: lo último que soltó «Drop Selected» (src/main.js, `soltarDeUnContenedor`).
+let ultimoSoltado98 = null;
+// EL 97: las trabas de los efectos que leyó el último fotograma (src/play/trabas.js).
+let ultimasTrabas = null;
 /**
  * `usetrigger` del guion del jugador -> el bus del mapa (el 67). Misma razon
  * que el asa de arriba: el bus se construye dentro del armado del mundo y el
@@ -642,6 +664,11 @@ async function arrancarJuego() {
       ? new AlmacenRemoto(red)
       : (globalThis.indexedDB ? new AlmacenLocal() : new AlmacenMemoria());
     sesion = new Sesion({ almacen, aparicion, catalogo, preparar: () => elMapa });
+    // EL 96: `?personaje=<nombre>` mete en el almacén el personaje de pruebas
+    // de `npm run personaje`. SÓLO en desarrollo y sólo en solitario (con red
+    // el personaje es del servidor y la herramienta lo deja en su carpeta).
+    // Antes de `refrescarCenso()`, para que salga ya en la primera lista.
+    if (!red && import.meta.env?.DEV) await importarPersonajeDePruebas({ almacen, buscar: location.search });
     // EL CUERPO DEL PERSONAJE, sin esperarlo. `cargarCuerpos` se lleva un mega
     // entre malla, esqueleto y las seis animaciones; con un `await` aqui la
     // pantalla de personajes volveria al segundo y medio, que es precisamente lo
@@ -901,6 +928,15 @@ async function arrancarJuego() {
             nombre: fichaDeObjeto(o.id)?.nombre ?? o.id,
             esContenedor: true,
           })),
+          // EL 97: y DESPUÉS, lo que llevas puesto y no es un contenedor —la
+          // armadura, el yelmo—, en gris. `AddInventoryItems` mete primero los
+          // contenedores y luego los demás de `Gear` que no estén en la mano
+          // (vgui_container.cpp:430-451); el gris es `Color_GearNonContainer`.
+          ...(p?.objetos ?? []).filter((o) => o.puesto && fichaDeObjeto(o.id)?.tipo !== "contenedor").map((o) => ({
+            id: o.uid ?? o.id,
+            nombre: fichaDeObjeto(o.id)?.nombre ?? o.id,
+            esContenedor: false,
+          })),
         ];
       },
       // ── Y QUÉ HAY DENTRO DE CADA UNO ──────────────────────────────────
@@ -918,21 +954,28 @@ async function arrancarJuego() {
       dentro: (cual) => {
         const p = sesion?.personaje ?? null;
         if (!p) return [];
-        const manos = new Set(enMano(p));
-        if (cual === MANOS) return (p.objetos ?? []).filter((o) => manos.has(o.id)).map(verObjeto);
+        // EL 97: las manos se leen de `manos` —en la versión 2 del registro lo
+        // empuñado ya no está en `objetos`— y las dos, izquierda primero
+        // (`for (i < MAX_PLAYER_HANDS) player.Hand(i)`, vgui_container.cpp:421-428).
+        if (cual === MANOS) return enMano(p).map((id) => verObjeto({ id, n: 1 }));
+        // EL 98: CADA CONTENEDOR CON LO SUYO (src/play/contenedores.js). Lo que
+        // llegó sin sitio se coloca aquí con la regla de `PutInAnyPack`
+        // (playershared.cpp:706-733), y lo que no cabe en NINGUNO —que en el
+        // juego no puede existir: se habría quedado en la mano o en el suelo—
+        // se sigue viendo en el primero, como hasta el 97, para que se pueda
+        // sacar. `probe.inventario98.sinSitio` lo cuenta.
+        const fdo = (id) => fichaDeObjeto(id);
+        const sinSitio = colocarEnContenedores(p, fdo);
         const cajas = contenedoresDe(p).map((o) => o.uid ?? o.id);
-        // Sólo el primero recibe lo suelto; los demás salen vacíos.
-        if (cual !== cajas[0]) return [];
-        return (p.objetos ?? [])
-          .filter((o) => !manos.has(o.id) && fichaDeObjeto(o.id)?.tipo !== "contenedor")
-          .map(verObjeto);
+        const suyos = dentroDelContenedor(p, cual);
+        return (cual === cajas[0] ? [...suyos, ...sinSitio] : suyos).map(verObjeto);
       },
       oro: () => sesion?.personaje?.oro ?? 0,
       carga: () => {
         const p = sesion?.personaje;
         if (!p) return null;
         const r = resumen(p);
-        const c = cargaDe(p.objetos.map((o) => ({ ...o, ficha: fichaDeObjeto(o.id) })), r.derivadas.carga);
+        const c = cargaDe(loQueLleva(p).map((o) => ({ ...o, ficha: fichaDeObjeto(o.id) })), r.derivadas.carga);
         return { lleva: c.peso, puede: c.capacidad };
       },
       // El botón de acción. En el original «Remove» se quita el contenedor
@@ -940,7 +983,57 @@ async function arrancarJuego() {
       // hace falta poder llevar cosas de un contenedor a otro, que es lo que no
       // está. Dice lo que pasa en vez de no hacer nada, igual que las entradas
       // apagadas del menú principal.
-      actuar: () => "Moving items between containers is not in this port yet.",
+      // EL 98: «DROP SELECTED» — `DropAllSelected` (vgui_containerlist.cpp:177-
+      // 186): un `drop <id>` por cada objeto elegido y `HideTopMenu`. En el
+      // servidor es `DropItem(pItem, false, true)` (client.cpp:932-947), que
+      // suelta de DONDE ESTÉ —«Items could be anywhere on the player»,
+      // playershared.cpp:942— con el mismo tiro que la `c`. Este panel elige
+      // de uno en uno (el original deja elegir varios), así que es UN `drop`.
+      actuar: (idEquipo, idObjeto) => {
+        if (idEquipo === MANOS || idObjeto === null) return null;
+        soltarDeUnContenedor(idObjeto);
+        return null;
+      },
+      // ── EL 97: LAS TRES ÓRDENES DEL PANEL (src/play/equipar.js) ─────────
+      //
+      // «Remove» y el doble clic en una pieza puesta: `remove <id>`
+      // (vgui_containerlist.cpp:170-175, :329-341). Un contenedor también se
+      // puede quitar en el juego; aquí no, porque lo de dentro no se reparte.
+      quitar: (idEquipo) => {
+        const p = sesion?.personaje;
+        const pieza = (p?.objetos ?? []).find((o) => (o.uid ?? o.id) === idEquipo && o.puesto) ?? null;
+        if (!pieza) return "Removing a container is not in this port yet.";
+        moverEquipo((eq) => eq.aLaMano(idEquipo, "remove"));
+        return null;
+      },
+      // Doble clic en un objeto de un contenedor: `inv transfer <id> 0`
+      // (:199-221). Con las manos elegidas no hace nada (`if (m_Selected == 0) return`).
+      sacar: (idEquipo, idObjeto) => {
+        if (idEquipo === MANOS) return null;
+        moverEquipo((eq) => eq.aLaMano(idObjeto, "transfer"));
+        return null;
+      },
+      // Un objeto elegido y un clic en una entrada de la columna: `inv transfer
+      // <id> <contenedor>` (:288-327). A «Player Hands» es a la mano; a un
+      // contenedor, guardarlo; a una pieza puesta, nada (`GetContainer` no la
+      // encuentra y el clic la elige).
+      llevarA: (idEquipo, idObjeto, enLasManos) => {
+        const p = sesion?.personaje;
+        if (!p) return false;
+        if (idEquipo === MANOS) {
+          if (enLasManos) return true;
+          moverEquipo((eq) => eq.aLaMano(idObjeto, "transfer"));
+          return true;
+        }
+        if (!contenedoresDe(p).some((o) => (o.uid ?? o.id) === idEquipo)) return false;
+        // EL 98: de un contenedor a otro, `inv transfer <id> <c>` -> `PutInPack`
+        // con su regla de lo que cabe (src/play/equipar.js, `moverA`).
+        if (!enLasManos) { moverEquipo((eq) => eq.moverA(idObjeto, idEquipo)); return true; }
+        const mano = ["izquierda", "derecha"].find((h) => p.manos?.[h] === idObjeto) ?? null;
+        if (mano) moverEquipo((eq) => eq.guardarEn(mano, idEquipo));
+        return true;
+      },
+
     }));
 
     // ── LA TIENDA (60): el selector y sus dos listas ────────────────────
@@ -2106,7 +2199,9 @@ async function arrancarJuego() {
   let otros = null;
   if (red) {
     try {
-      otros = await cargarOtros({ U: level.unitsPerMetre });
+      // EL 96: `armaDe` lee el catálogo de armas, que se carga más abajo; por
+      // eso va como función y no como valor (se llama ya en el bucle).
+      otros = await cargarOtros({ U: level.unitsPerMetre, armaDe: (id) => catalogos.armas?.get(id) ?? null });
       if (otros) escena.add(otros.grupo);
     } catch (e) {
       console.warn("los otros jugadores no se han podido montar:", e);
@@ -2121,6 +2216,9 @@ async function arrancarJuego() {
         jump: (o.botones & BOTON.SALTAR) !== 0,
         agachar: (o.botones & BOTON.AGACHAR) !== 0,
         maxima: o.maxima ?? undefined,
+        // EL 98: el tope de las trabas (`pmove->maxspeed`), el último sabido:
+        // la orden no lo lleva, como en el motor no lo lleva el `usercmd`.
+        tope: velocidadConTrabas(0, ultimasTrabas?.porcentaje ?? 0).tope,
         agua: volumenes.nivelDeAguaEn(pies, { agachado: (o.botones & BOTON.AGACHAR) !== 0 }),
         escalera: volumenes.escaleraEn(pies),
       });
@@ -2219,6 +2317,19 @@ async function arrancarJuego() {
             const e = aEscenaDesdeUnidades(v);
             player.colocar([e[0], e[1] - 36 / level.unitsPerMetre, e[2]]);
           },
+          // EL 95: lo que piden `effect screenshake` (`FL_ONGROUND` y el
+          // radio, util.cpp:1079-1093), `$relpos` y `$get(ent_me,origin)`.
+          // El `origin` es el centro de la caja, 36 sobre los pies (agachado
+          // serían 18 y no se distingue, como en `npcguion.js`). Los ángulos,
+          // `pev->angles` de un jugador: un tercio del cabeceo con el signo
+          // cambiado (sv_pmove.c:655) — y aquí el cabeceo de Three ya va al
+          // revés que el del motor, así que queda en positivo.
+          origen: () => {
+            const k = level.unitsPerMetre, f = player.feet;
+            return [f[0] * k + 0, -f[2] * k + 0, f[1] * k + 36];
+          },
+          enSuelo: () => Boolean(player.grounded),
+          angulos: () => [(player.pitch * 180) / Math.PI / 3, (-player.yaw * 180) / Math.PI, 0],
         },
         // Oro, objetos o habilidades tocados desde el guion: se guarda, y si
         // cambió la mochila se remontan los guiones de objeto (el 66).
@@ -2242,7 +2353,10 @@ async function arrancarJuego() {
         // EL 93: `effect screenfade`, `hud.addstatusicon`… de sus efectos (el
         // veneno) y de su guion. Al mismo sitio que lo que llega del servidor
         // por `MENSAJE.PANTALLA`, con la misma forma (`src/play/efectospantalla.js`).
-        pantalla: (p) => mensajes?.pantalla(p.tipo === "brillo" ? { que: "brillo", ...p.brillo } : { que: p.tipo, ...p.mensaje }),
+        // EL 95: y el temblor, que no es del velo sino de la CÁMARA: va al
+        // `clgame.shake` (`CL_ParseScreenShake`), con el reloj de todo lo demás.
+        pantalla: (p) => (p.tipo === "temblor" ? temblorAlLlegar(temblor, p.mensaje, reloj)
+          : mensajes?.pantalla(p.tipo === "brillo" ? { que: "brillo", ...p.brillo } : { que: p.tipo, ...p.mensaje })),
         suceso: (tipo, texto) => suceso(tipo, texto),
         // `usetrigger` (67): la unica puerta del jugador hacia el `.bsp`. Va por
         // el asa de modulo, no por la variable local del armado del mundo: un
@@ -2332,7 +2446,11 @@ async function arrancarJuego() {
       if (!p) return 0;
       const vistos = new Set();
       let nuevos = 0;
-      for (const o of p.objetos ?? []) {
+      // EL 97: `loQueLleva` y no `objetos`: desde la versión 2 del registro lo
+      // de las manos no está en la lista, y en el motor también tiene guion
+      // (todo el `Gear`, playershared.cpp:1524-1544). La clave es la misma en
+      // la mano y en la mochila, así que moverlo NO lo vuelve a nacer.
+      for (const o of loQueLleva(p)) {
         const clave = String(o.uid ?? o.id);
         vistos.add(clave);
         if (objetosVivos.has(clave)) continue;
@@ -2351,6 +2469,10 @@ async function arrancarJuego() {
         ent.arrancar({
           genero: p.genero === "female" ? "female" : "male",
           quien: objetosVivos.size === 0 && !sesion?.jugando ? QUIEN_VISTE.CARGA : QUIEN_VISTE.JUGANDO,
+          // EL 96: una armadura en la mochila no se viste al cargar, y la que
+          // está puesta llega puesta (`src/play/armadura.js`).
+          viste: seVisteAlCargar(fichaDeObjeto(o.id), o),
+          puesto: Boolean(o.puesto),
         });
         objetosVivos.set(clave, ent);
         nuevos++;
@@ -2362,6 +2484,36 @@ async function arrancarJuego() {
       }
       return nuevos;
     }
+
+    /**
+     * EL 96: PONERSE UNA PIEZA. `CGenericItem::WearItem` (genericitem.cpp:
+     * 1123-1145) con `CanWearItem` delante; la regla entera está en
+     * `src/play/armadura.js`. El mensaje de «no cabe» es un `SendInfoMsg`, que
+     * va a la consola de sucesos (src/play/aviso.js).
+     *
+     * Hoy NO lo llama ningún botón: en Master Sword te la pones usándola
+     * desde la mano (`UseItem`, genericitem.cpp:972-994) y el panel del
+     * inventario de este puerto todavía no mueve objetos. Lo llama la sonda
+     * por `probe.armadura.vestir` — está dicho en doc/ARMADURA_96.md.
+     */
+    vestirObjeto = (id) => {
+      const p = sesion?.personaje;
+      if (!p) return { puesto: false, mensaje: null, porque: "no-character" };
+      const entrada = (p.objetos ?? []).find((o) => (o.uid ?? o.id) === id || o.id === id) ?? null;
+      if (!entrada) return { puesto: false, mensaje: null, porque: "not-carried" };
+      sincronizarObjetosVivos();
+      const r = vestir({
+        entrada,
+        ficha: fichaDeObjeto(entrada.id),
+        objeto: objetosVivos.get(String(entrada.uid ?? entrada.id)) ?? null,
+        puestas: fichasPuestas(p.objetos, fichaDeObjeto),
+        raza: "human",
+        genero: p.genero,
+      });
+      if (r.mensaje) suceso("normal", r.mensaje.trimEnd());
+      if (r.puesto) sesion.tocado?.();
+      return r;
+    };
 
     sesion.al("aparece", ({ donde }) => {
       // Con servidor, el sitio lo dice ÉL: puede haberte apartado del punto de
@@ -3064,7 +3216,9 @@ async function arrancarJuego() {
     // `$get(ent_me,canattack)`: la guarda de sentarse. Lo que hoy lo impide en
     // este puerto es estar ya sentado o no tener personaje; el día que haya más
     // efectos que quiten el ataque, entran por aquí.
-    puedeAtacar: () => Boolean(sesion?.personaje),
+    // EL 97: ese día es hoy. `canattack` es `PLAYER_MOVE_NOATTACK`
+    // (script.cpp:4718), y un aturdido lo lleva puesto: no se puede sentar.
+    puedeAtacar: () => Boolean(sesion?.personaje) && !ultimasTrabas?.noAtacar,
     // `SHOW_HEALTH`, que **nadie enciende al arrancar**: sólo lo mueve el comando
     // `showhealth` (player_main.script:392-396). Con él apagado los dos mensajes
     // de descansar no salen, y eso es el original — ver `MENSAJES`. Se lee del
@@ -3308,11 +3462,24 @@ async function arrancarJuego() {
       // Lo que llevabas vuelve a la mochila y lo nuevo sale de ella: el motor
       // lo dice con `inv transfer <id> 0`, donde el 0 es la mano.
       const antes = sesion.personaje.manos.derecha;
-      sesion.personaje.objetos = (sesion.personaje.objetos ?? []).filter((o) => o.id !== orden.id);
+      // EL 97: sale UNA, no todas las que se llamen igual. El `filter` de antes
+      // borraba de la lista las dos espadas si llevabas dos: `inv transfer`
+      // mueve una entidad (client.cpp:1303-1324), como `Partida._empunar`.
+      const lista = sesion.personaje.objetos ?? [];
+      const i = lista.findIndex((o) => o.id === orden.id);
+      if (i >= 0) {
+        if ((lista[i].n ?? 1) > 1) lista[i] = { ...lista[i], n: lista[i].n - 1 };
+        else lista.splice(i, 1);
+      }
+      sesion.personaje.objetos = lista;
       if (antes) sesion.personaje.objetos.push({ id: antes, n: 1 });
       sesion.personaje.manos.derecha = orden.id;
       sesion.tocado?.();
       empunar(orden.id);
+      // EL 96: y en partida, el `inv transfer` va al SERVIDOR, que es quien
+      // guarda el personaje, recorta el daño con el arma que ve en tu mano y se
+      // la enseña a los demás (`MENSAJE.EMPUNAR`).
+      red?.empunar?.(orden.id);
       suceso("normal", `You wield ${orden.nombre}`);
     } else if (orden.que === "elegirMunicion") {
       arco.elegirMunicion(orden.infinita ? null : orden.id);
@@ -3321,6 +3488,76 @@ async function arrancarJuego() {
       suceso("nopuedes", `You know no spells yet`);
     }
   }
+
+  // ── EL 97: PONERSE, QUITARSE Y GUARDAR ──────────────────────────────────
+  //
+  // Las tres órdenes del panel y de la `q` (`remove`, `inv transfer`, `use`).
+  // La regla y su orden están en src/play/equipar.js; aquí se le dan los
+  // guiones vivos, la consola y lo que hay que rehacer cuando cambia una mano.
+  //
+  // `manoActiva` es `m_CurrentHand`: la mano a la que se le hace `use`. El
+  // motor la cambia al meter algo en una mano (`SwitchHands`,
+  // msmonstershared.cpp:357-360) y al vaciarla (`SwitchToBestHand`).
+  let manoActiva = "derecha";
+  function equipoDelJugador() {
+    const p = sesion?.personaje ?? null;
+    if (!p) return null;
+    // Las entidades tienen que existir ANTES de mover nada: lo que se mueve
+    // corre sus eventos en la misma llamada.
+    sincronizarObjetos();
+    return new Equipo({
+      personaje: p,
+      fichaDe: (id) => catalogoDeObjetos?.porId?.get(id) ?? null,
+      objetoDe: (id) => objetosVivos.get(String(id)) ?? null,
+      decir: (tipo, texto) => suceso(tipo, texto),
+      activa: manoActiva,
+      atacando: () => Boolean(equipo.brazo?.atacando),
+      genero: p.genero,
+    });
+  }
+  /** Lo que cambia fuera del documento cuando se mueve algo: el arma, el escudo, la red. */
+  function trasMover(eq, antes) {
+    if (!eq) return;
+    manoActiva = eq.activa;
+    const p = sesion.personaje;
+    if (p.manos.derecha !== antes.derecha) {
+      const id = p.manos.derecha;
+      // Sólo se EMPUÑA lo que tiene ficha de arma; una armadura en la mano no
+      // tiene modelo de vista (`MODEL_VIEW none`, armor_base.script:17).
+      const arma = id && catalogos.armas?.has(id) ? id : null;
+      empunar(arma);
+      // Al servidor sólo viaja un ARMA (o la mano vacía): una armadura de paso
+      // por la mano no la sacaría de SU mochila, y `VESTIR` la encontraría
+      // fuera (`Partida._vestir`).
+      if (!id || arma) red?.empunar?.(id ?? null);
+    }
+    if (p.manos.izquierda !== antes.izquierda) {
+      const izq = p.manos.izquierda ?? null;
+      embrazar(izq);
+      // Lo mismo con la izquierda, que el servidor sólo acepta con un ESCUDO.
+      if (!izq || catalogos.escudos?.has(izq)) red?.embrazar?.(izq);
+    }
+    for (const id of antes.puestos) if (!p.objetos.some((o) => o.puesto && o.id === id)) red?.vestir?.(id, false);
+    for (const o of p.objetos) if (o.puesto && !antes.puestos.includes(o.id)) red?.vestir?.(o.id, true);
+    sincronizarObjetos();
+    sesion.tocado?.();
+  }
+  /** Corre una orden del equipo y aplica lo que haya cambiado. */
+  function moverEquipo(hacer) {
+    const eq = equipoDelJugador();
+    if (!eq) return null;
+    const p = sesion.personaje;
+    const antes = {
+      derecha: p.manos?.derecha ?? null, izquierda: p.manos?.izquierda ?? null,
+      puestos: (p.objetos ?? []).filter((o) => o.puesto).map((o) => o.id),
+    };
+    const r = hacer(eq);
+    trasMover(eq, antes);
+    ultimoMovimiento = { ...r, diario: eq.diario.slice() };
+    return r;
+  }
+  /** La `q`: `use` sin mano, o sea la activa (client.cpp:979-997). */
+  const usarLaMano = () => moverEquipo((eq) => eq.usar(eq.activa));
 
   const keys = new Set();
   // T recorre los ocho pueblos.
@@ -3590,6 +3827,15 @@ async function arrancarJuego() {
       e.preventDefault();
       return;
     }
+    // EL 97: la `q` — `bind "q" "use"` (config.cfg:25), «Sheath/store/wear
+    // weapon/item» (kb_act.lst:40). `UseItem` de la mano activa: si se puede
+    // vestir se viste, si no se guarda (src/play/equipar.js). Estaba en la tabla
+    // de teclas desde el 24 y no la leía nadie, como la `x` hasta el 71.
+    if (accion === "usarYa") {
+      if (!e.repeat) usarLaMano();
+      e.preventDefault();
+      return;
+    }
     if (accion === "correrRanuras12") { ranuras.desplazar(12); e.preventDefault(); return; }
     if (accion === "correrRanuras24") { ranuras.desplazar(24); e.preventDefault(); return; }
     const cual = RANURAS.indexOf(accion);
@@ -3654,6 +3900,9 @@ async function arrancarJuego() {
       const siguiente = i + 1 >= lista.length ? null : lista[i + 1];
       embrazar(siguiente).then(() => {
         if (sesion?.personaje) sesion.personaje.manos.izquierda = siguiente;
+        // EL 97: con servidor se le dice, que es quien defiende (doc/DEFENSARED_97.md).
+        // Si no lo llevas en la mochila del SERVIDOR lo rechaza con un FALLO.
+        red?.embrazar?.(siguiente);
         const f = equipo.brazal?.ficha;
         say(siguiente && f
           ? `${equipo.brazal.objeto.nombre}: raised it blocks ${f.bloqueoArriba} % and lets through ` +
@@ -3836,7 +4085,14 @@ async function arrancarJuego() {
     // positivo es mirar ABAJO (en Three, arriba: signo cambiado), y el giro y
     // el alabeo van como en Three. Sólo se ve, no mueve al jugador.
     const g = golpeDeVista, rad = Math.PI / 180;
-    camera.rotation.set(player.pitch - g[0] * rad, player.yaw + g[1] * rad, g[2] * rad);
+    // EL 95: y el temblor, `V_ApplyShake(vieworg, viewangles, 1.0)` (view.cpp:
+    // 579): el desplazamiento al ORIGEN de la vista y el ángulo al ALABEO
+    // (cl_game.c:2299-2306), con el mismo convenio de alabeo que el empujón.
+    const s = temblorEnEscena(temblor, uPorM, 1);
+    camera.position.x += s.desplazamiento[0];
+    camera.position.y += s.desplazamiento[1];
+    camera.position.z += s.desplazamiento[2];
+    camera.rotation.set(player.pitch - g[0] * rad, player.yaw + g[1] * rad, (g[2] + s.alabeo) * rad);
   }
 
   function vitalesDelPersonaje() {
@@ -3844,7 +4100,8 @@ async function arrancarJuego() {
     if (!p) return { agilidad: 0, fuerza: 0, peso: 0, carga: 25, aguanteMax: 3 };
     const atr = atributosDe(p.habilidades);
     const d = derivadas(atr);
-    const fichas = (p.objetos ?? []).map((o) => ({ ...o, ficha: fichaDeObjeto(o.id) }));
+    // EL 97: con las manos (`Gear.FilledVolume()`, msmonstershared.cpp:430-433).
+    const fichas = loQueLleva(p).map((o) => ({ ...o, ficha: fichaDeObjeto(o.id) }));
     return {
       agilidad: atr.agility ?? 0,
       fuerza: atr.strength ?? 0,
@@ -4022,6 +4279,7 @@ async function arrancarJuego() {
     escudoEnMano: null,   // su modelo de vista, el de la otra mano
   };
   const modelosDeArma = new Map(); // uno por carpeta, que pesan un mega
+  let turnoDeEmpunar = 0;          // el 96: el último `empunar` gana (ver allí)
   const modelosDeEscudo = new Map();
   // golpes que se comieron el cono.
   const aterrizajes = [];
@@ -4049,17 +4307,33 @@ async function arrancarJuego() {
    * no tiene.
    */
   async function empunar(id) {
-    const ficha = catalogos.armas?.get(id) ?? catalogos.armas?.get("fist_bare") ?? null;
+    // EL 96: hasta hoy el catálogo traía las ocho armas de partida y esta línea
+    // convertía CUALQUIER otra en los puños sin decir nada: una Novablade en
+    // `manos.derecha` pegaba, se veía y sonaba como `fist_bare`. Ahora el
+    // catálogo trae las 209 empuñables (`tools/armas.mjs`), y si aun así llega
+    // un id que no conoce, se cuenta y se avisa en vez de callarse.
+    const conocida = id ? catalogos.armas?.get(id) ?? null : null;
+    if (id && !conocida && catalogos.armas) {
+      cuentas.armasSinFicha = (cuentas.armasSinFicha ?? 0) + 1;
+      console.warn(`empuñar: ${id} no está en build/msr/armas.json; se empuñan los puños (npm run armas)`);
+    }
+    const ficha = conocida ?? catalogos.armas?.get("fist_bare") ?? null;
     if (!ficha) return null;
     equipo.brazo = new Brazo(ficha);
     if (equipo.armaEnMano) equipo.armaEnMano.visible = false;
     equipo.armaEnMano = null;
+    // EL TURNO, también del 96: la malla se pide la primera vez que se empuña y
+    // eso es un `await`. Con ocho armas casi nunca se cambiaba dos veces seguidas;
+    // con doscientas sí, y la carga de la PRIMERA podía acabar después de la
+    // segunda y colgar su modelo en la mano de la otra.
+    const turno = ++turnoDeEmpunar;
     const clave = ficha.enMano?.clave;
     if (!clave) return equipo.brazo;
     try {
       if (!modelosDeArma.has(clave)) {
         modelosDeArma.set(clave, await cargarArma(clave, { U: level.unitsPerMetre }));
       }
+      if (turno !== turnoDeEmpunar) return equipo.brazo;
       equipo.armaEnMano = modelosDeArma.get(clave) ?? null;
       if (equipo.armaEnMano) {
         if (equipo.armaEnMano.nodo.parent !== laVista) laVista.add(equipo.armaEnMano.nodo);
@@ -4076,7 +4350,12 @@ async function arrancarJuego() {
         const cual = catalogos.flechas?.get("proj_arrow_generic")?.clave;
         if (cual) {
           arco.flechasPuestas = await cargarFlechas(cual, { U: level.unitsPerMetre });
-          if (arco.flechasPuestas) scene.add(arco.flechasPuestas.grupo);
+          // EL 97: era `scene.add`, y `scene` no existe en este archivo (la
+          // escena del mundo es `escena`): un `ReferenceError` que el `catch`
+          // de abajo convertía en «el arma no se ha podido montar» con el
+          // conjunto ya asignado y FUERA de la escena — ninguna flecha se ha
+          // dibujado volando desde que se la llevó el refactor 720b246. Visto en la sonda del 97.
+          if (arco.flechasPuestas) escena.add(arco.flechasPuestas.grupo);
         }
       }
     } catch (e) {
@@ -4150,6 +4429,16 @@ async function arrancarJuego() {
     }
     // `melee_end`: `playviewanim ANIM_RETRACT1`, y luego vuelve al parado.
     if (s.baja) equipo.escudoEnMano?.pon(equipo.brazal.objeto?.animaciones?.bajar ?? 2, { unaVez: true });
+    // EL 97: «ya no te empujan», que estaba escrito en src/play/escudo.js y no
+    // lo ejecutaba nadie. `melee_start`/`melee_end` del escudo llaman al guion
+    // del jugador (items/shields_base.script:107-111 y :124-129, con la guarda
+    // `PLR_IN_WORLD`); su `ext_shield_up` pone la bandera `nopush`
+    // (player/externals.script:3400-3411) y `game_scriptflag_update` el
+    // `m_nopush` que hace INMUNE al aturdimiento (effects/debuff_stun.script:66).
+    if ((s.sube || s.baja) && guionJugador) {
+      const enMundo = Number.parseFloat(String(guionJugador.guion?.resolver?.("PLR_IN_WORLD") ?? "")) || 0;
+      if (enMundo) guionJugador.llamar("ext_shield_up", [s.sube ? "1" : "0"]);
+    }
     return s;
   }
 
@@ -4186,23 +4475,13 @@ async function arrancarJuego() {
   function parryDelPersonaje() {
     const p = sesion?.personaje;
     if (!p) return 0;
-    const compDe = (hab) => (hab && p.habilidades?.[hab]
-      ? valorDeHabilidad(p.habilidades[hab]) : 0);
-    const arma = equipo.brazo?.arma ?? null;
-    const manos = [];
-    if (arma) {
-      manos.push({
-        habilidad: arma.habilidad,
-        competencia: compDe(arma.habilidad),
-        punoDesnudo: arma.id === "fist_bare",
-        dosManos: arma.manoNumero === 4,
-        marciales: compDe("martialarts"),
-      });
-    }
-    if (equipo.brazal?.ficha) {
-      manos.push({ escudo: true, multiplicadorDeParry: equipo.brazal.ficha.multiplicadorDeParry ?? 0 });
-    }
-    return valorDeParryDelJugador({ manos });
+    // EL 97: las manos las arma `manosDelParry` (src/play/parry.js), que es
+    // la MISMA que usa el servidor en `Partida._bichoPega`.
+    return valorDeParryDelJugador({
+      manos: manosDelParry({
+        habilidades: p.habilidades, arma: equipo.brazo?.arma ?? null, escudo: equipo.brazal?.ficha ?? null,
+      }),
+    });
   }
 
   /** La potencia con la que pega: la propiedad `power` de la habilidad del arma. */
@@ -4354,8 +4633,19 @@ async function arrancarJuego() {
     // es el idioma con el que un guion se para en seco. Se resuelve antes que
     // nada para que no caiga en la rama del jugador.
     const q0 = r === "ent_me" ? suya : null;
+    // EL 95: Y LO QUE EL GUION DE ESE NPC SABE QUE ES EL JUGADOR —
+    // `ent_laststruck`, `ent_laststruckbyme`, `ent_lastseen`—, que es el paso 2
+    // de `RetrieveEntity` (global.cpp:382-398: lo guardado con `StoreEntity` en
+    // la `m_EntityList` de ESA entidad). El servidor ya se lo pregunta al guion
+    // (`Partida._cuerpoDeRef`, src/red/partida.js); aquí no, y por eso
+    // `setmovedest ent_laststruck 1024 flee` (NPCs/default_human.script:68) se
+    // apuntaba «no hay ninguna entidad que se llame ent_laststruck» y el
+    // aldeano no huía por su guion EN NINGUNA partida de un jugador: la única
+    // huida que se veía era la de la IA, que en el mod no tiene (doc/ALDEANOS_95.md).
+    const aliasDeSuGuion = !q0 && suya
+      && Boolean(interacciones?.guionesVivos?.get?.(suya.id)?.entorno?.esElJugador?.(r));
     const esJugador = !q0 && (r === "player" || r === "ent_lastspoke"
-      || r === (sesion?.personaje?.id ?? "player"));
+      || r === (sesion?.personaje?.id ?? "player") || aliasDeSuGuion);
     if (esJugador && player) {
       const o = player.eye, p = player.feet;
       return {
@@ -4660,6 +4950,50 @@ async function arrancarJuego() {
     p.manos.derecha = null;
     sesion.tocado?.();
     empunar(null);
+    // EL 97: y con servidor, se le dice (`MENSAJE.SOLTAR`): hasta hoy el
+    // servidor seguía creyendo que la llevabas.
+    red?.soltarArma?.(guion);
+    return o;
+  }
+
+  /**
+   * «DROP SELECTED» — el 98. `drop <id>` con el objeto DENTRO de un contenedor
+   * (client.cpp:932-947 -> `CBasePlayer::DropItem(pItem, false, true)`,
+   * playershared.cpp:943-990 -> `CGenericItem::Drop`, genericitem.cpp:
+   * 1319-1383). El mismo tiro que la `c` (`sueloDelMundo.tirar`); lo que cambia
+   * es de dónde sale: de la lista, una unidad. El «You drop …» lo pone
+   * `Suelo.tirar`, como con la `c` — y es un pendiente de los dos: en
+   * `DropItem` ese aviso está detrás de `bDropAttempted` (playershared.cpp:
+   * 960), que al llegar vale falso (lo baja `Drop` al acabar, genericitem.cpp:
+   * 1369, y lo que lo subía entre dos pulsaciones está comentado, :1512-1525).
+   * Ver doc/INVENTARIO_98.md §6.
+   */
+  function soltarDeUnContenedor(clave) {
+    const p = sesion?.personaje;
+    const entrada = (p?.objetos ?? []).find((o) => (o.uid ?? o.id) === clave && !o.puesto) ?? null;
+    if (!entrada) return null;
+    const u = level.unitsPerMetre;
+    const ojo = player.eye;
+    const mirada = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+    const v = player.body?.linvel?.() ?? { x: 0, y: 0, z: 0 };
+    const o = sueloDelMundo.tirar({
+      guion: entrada.id,
+      ojo: [ojo[0] * u, ojo[1] * u, ojo[2] * u],
+      mirando: [mirada.x, mirada.y, mirada.z],
+      velocidad: [v.x * u, v.y * u, v.z * u],
+      // `CanDrop`: `CurrentAttack` es del OBJETO, y uno guardado no ataca.
+      atacando: false,
+    });
+    aplicarSuelo(sueloDelMundo.recoger());
+    if (!o) return null;
+    // `m_pOwner->RemoveItem(this)` (genericitem.cpp:1355-1356): una unidad.
+    if ((entrada.n ?? 1) > 1) entrada.n -= 1;
+    else p.objetos.splice(p.objetos.indexOf(entrada), 1);
+    sesion.tocado?.();
+    sincronizarObjetos();
+    ultimoSoltado98 = { id: entrada.id, de: entrada.en ?? null, i: o.i ?? null };
+    // Con servidor, el mismo `SOLTAR` de la `c` diciendo de dónde (el 98).
+    red?.soltarArma?.(entrada.id, "mochila");
     return o;
   }
 
@@ -4841,7 +5175,10 @@ async function arrancarJuego() {
     // esquivar, y se lee, porque el motor te lo dice con el texto de su script.
     if (golpe.parado) {
       cuentas.parados++;
-      suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
+      // EL 97: si el guion del bicho recibió su `game_parry`, la frase ya la
+      // ha dicho él —o no la dice, si su `[override]` la quitó—; esto era el
+      // relevo de cuando no había guion (el 86) y desde el 91 la repetía.
+      if (!golpe.hablaElGuion) suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
       return { objetivo: i, dano: 0, parado: true };
     }
     const muerto = golpe.muerto;
@@ -5156,6 +5493,10 @@ async function arrancarJuego() {
     // La cuenta de muertes la comparten el mandoble y la flecha, y la lee la
     // sonda desde aquí, así que el arco la pide en vez de llevarse una copia.
     alMatar: (i) => { cuentas.muertes++; bichosSolidos?.quitar(i); },
+    // EL 97: el área de la flecha del Fénix reparte entre los vivos y la tapa
+    // sólo el mundo (la traza de `DoDamage`, que ignora monstruos).
+    candidatosVivos: () => candidatosVivos(),
+    trazaDelMundo: (a, b) => trazaLibre(a, b),
     JUGADOR,
   });
   const pasoDeFlechas = (dt) => arco.pasoDeFlechas(dt);
@@ -5373,7 +5714,15 @@ async function arrancarJuego() {
         desplegado: Boolean(equipo.brazal?.desplegado),
         deFrente,
         parry: parryDelPersonaje(),
+        // EL 96: lo que lleva, en el orden en que lo cogió (el `Gear`), y
+        // quién pega —el `PARAM1` de `game_takedamage`—. Ver armadura.js.
+        equipo: [...objetosVivos.values()],
+        atacante: i?.ficha?.nombre ?? "none",
       });
+      if (d.armadura?.piezas?.length) {
+        cuentas.armadura = (cuentas.armadura ?? 0) + 1;
+        ultimaArmadura = { antes: dano, despues: d.armadura.dano, piezas: d.armadura.piezas };
+      }
       if (d.bloqueo.bloquea) {
         if (d.bloqueo.arriba) cuentas.bloqueos++; else cuentas.desvios++;
         const s = equipo.brazal?.objeto?.sonidos?.bloqueo;
@@ -5430,7 +5779,9 @@ async function arrancarJuego() {
       // `game_damaged` — 1: atacante 2: daño. El guion se apunta que te han
       // atacado (`PL_BEEN_ATTACKED`) y de quién, que es lo que leen después el
       // hechizo de rejuvenecer y la barra de vida.
-      guionJugador?.llamar("game_damaged", [i.ficha?.nombre ?? "none", String(d.dano)]);
+      // EL 98: por `danado`, la misma que usa la rama `golpeado` con servidor,
+      // y con el tipo, que es el PARAM3 del motor (msmonsterserver.cpp:2287).
+      guionJugador?.danado({ atacante: i.ficha?.nombre ?? "none", dano: d.dano, tipo });
       // EL 85: `game_struck` del efecto de sentarse — te pegan y dejas de curar.
       // Son `STRUCK_TIME 5` y tres vueltas sin cura, no cinco: ver
       // `cicloDeDescanso`. Va aquí y no dentro del guion del jugador porque el
@@ -5494,8 +5845,23 @@ async function arrancarJuego() {
           if (i) soltarElBotin(i, s.suelta);
           break;
         case "para":
+          // EL 98: aquí sólo se cuenta. La frase es `playermessage
+          // $get(PARAM1,id)` —al que pegó y a nadie más,
+          // base_monster_shared.script:472-475— y este suceso llega a TODOS
+          // los clientes: con servidor se la decía a cada jugador conectado,
+          // y al que pegó dos veces (el relevo y el guion del bicho, que corre
+          // en el servidor). Ahora el relevo va en `tupegas`, que es sólo suyo.
           cuentas.parados++;
-          suceso("ataque", `Your attack was ${i?.ficha.ia?.mensajeDeParry ?? "parried!"}`);
+          break;
+        case "golpeado":
+          // EL 98: el servidor dice que un golpe me ha ENTRADO, ya pasado por
+          // la defensa (`Partida._defender`, MSG_ONE). `game_damaged` del guion
+          // del jugador —que corre aquí— por la misma `danado` que `golpear`,
+          // y `game_struck` del descanso. Los efectos del anfitrión de allí ya
+          // lo han recibido allí.
+          guionJugador?.danado({ atacante: s.atacante ?? "none", dano: s.dano, tipo: s.tipo ?? "" });
+          emociones.golpeado();
+          cuentas.golpeados = (cuentas.golpeados ?? 0) + 1;
           break;
         case "tupegas":
           // Se guarda tal cual para la sonda: sin esto, «el techo recorta» sólo
@@ -5506,7 +5872,14 @@ async function arrancarJuego() {
           // y no dice por qué (giattack.cpp:1965); el motivo sigue viajando y se
           // lee en `ultimoGolpe`, que es donde lo mira la sonda.
           if (s.lejos) { suceso("malo", falloAsestado(i?.ficha.nombre)); break; }
-          if (s.parado || !s.vale) break;          // el `para` ya lo ha dicho
+          // EL 98: EL RELEVO DEL PARRY, como en solitario (`golpearA`): sólo
+          // si el guion del bicho no habló (`hablaElGuion`, el 97). Si habló,
+          // su `playermessage` ya llegó por el servidor a este cliente.
+          if (s.parado) {
+            if (!s.hablaElGuion) suceso("ataque", `Your attack was ${s.mensaje ?? i?.ficha.ia?.mensajeDeParry ?? "parried!"}`);
+            break;
+          }
+          if (!s.vale) break;
           // EL INFORME, ahora con el formato del juego y TAMBIÉN en el golpe que
           // mata: el `DoDamage` del mod informa antes de morirse nadie, así que
           // el último espadazo se anuncia igual. Antes aquí se callaba a propósito
@@ -5542,12 +5915,15 @@ async function arrancarJuego() {
           // giattack.cpp:1994— y es el único aviso de que la vida que baja tiene
           // un culpable. EL 86: mismo arreglo que en la rama de un solo jugador,
           // y el tipo del bicho sale de su ficha, que el cliente ya tiene.
-          if (s.a === `j${red.yo}`) {
-            cuentas.golpesRecibidos++;
-            suceso("atacado", golpeRecibido({
-              nombre: i?.ficha.nombre, dano: s.dano, tipo: i?.ficha?.ia?.tipoDano,
-            }));
-          }
+          //
+          // EL 97: la frase YA NO SE DICE AQUÍ. `s.dano` es el daño de la IA
+          // ANTES de la defensa —armadura, escudo, parry—, que desde el 97 corre
+          // en el servidor (`Partida._bichoPega`); decirlo aquí era anunciar 7
+          // con la coraza dejando 3,15, o un golpe que el parry había parado.
+          // La frase con el daño de verdad la manda el servidor a ESTE cliente
+          // (`MENSAJE.TEXTO`), como en solitario la dice `golpear` después de
+          // la defensa. Ver doc/DEFENSARED_97.md.
+          if (s.a === `j${red.yo}`) cuentas.golpesRecibidos++;
           break;
         default: break;
       }
@@ -5621,6 +5997,22 @@ async function arrancarJuego() {
     if (!emociones.puede("saltar")) q.saltar = false;
     if (!emociones.puede("agacharse")) q.agachar = false;
     if (!emociones.puede("atacar")) { q.atacar = false; q.cubrir = false; }
+    // ── EL 97: LAS TRABAS DE LOS EFECTOS ────────────────────────────────
+    // Las mismas cinco banderas, pero puestas por un EFECTO (`debuff_stun`,
+    // `effect_slow`…) y leídas como las lee `PreThink` (player.cpp:4033-4054).
+    // Donde las obedece el motor: NOMOVE pone a cero los ejes (input.cpp:821),
+    // NOJUMP y NODUCK no dejan pasar el botón (:911-919), NOATTACK no deja
+    // EMPEZAR un ataque (giattack.cpp:253) —y levantar el escudo es uno—.
+    //
+    // EL 98: con servidor, las del anfitrión de efectos de allí llegan en la
+    // foto (`red.trabas`, su `clientdata`) y se juntan con las de aquí como si
+    // fueran una sola lista de guiones (`juntarTrabas`). Y lo que quitan lo
+    // quita `trabarIntencion`, la misma función que usa `Partida._simular`.
+    const trabas = red?.trabas
+      ? juntarTrabas(trabasDelJugador(guionJugador), trabasDelCable(red.trabas))
+      : trabasDelJugador(guionJugador);
+    ultimasTrabas = trabas;
+    trabarIntencion(q, trabas);
     // EL 89: el viaje en marcha quita el control (`EnableControl(FALSE)`,
     // msmapents.cpp:1842-1843). La vista no se toca: no se ha medido si el
     // motor la quita también, y se dice.
@@ -5700,6 +6092,11 @@ async function arrancarJuego() {
         }
         maxima = ajustarVelocidad(maxima, {});
       }
+      // EL 97: `pev->maxspeed` de los efectos, que el cliente lee como
+      // porcentaje (clplayer.cpp:306-307) y `pmove` como TOPE en unidades
+      // (pm_shared.cpp:3050-3053). Ver src/play/trabas.js.
+      const conTrabas = velocidadConTrabas(maxima, trabas.porcentaje);
+      maxima = conTrabas.maxima;
       fatiga.rapidezAnterior = player.rapidez;
       // EN QUE MEDIO ESTA, preguntado cada paso y no cada fotograma: si se
       // preguntara fuera del bucle, a 20 fotogramas por segundo se entraria al
@@ -5710,7 +6107,7 @@ async function arrancarJuego() {
       const saltando = manda && q.saltar && player.grounded && !escalera && enAgua < 2;
       const r = player.step(DT, manda ? {
         forward: q.adelante, strafe: q.lado, jump: q.saltar, agachar: q.agachar,
-        maxima, agua: enAgua, escalera,
+        maxima, tope: conTrabas.tope, agua: enAgua, escalera,
       } : { agua: enAgua, escalera });
       // ── LO QUE SE LE MANDA AL SERVIDOR ─────────────────────────────────
       //
@@ -5731,7 +6128,11 @@ async function arrancarJuego() {
             botones: (manda && q.saltar ? BOTON.SALTAR : 0)
               | (manda && q.agachar ? BOTON.AGACHAR : 0)
               | (manda && q.correr ? BOTON.CORRER : 0)
-              | (manda && equipo.brazo?.atacando ? BOTON.ATACAR : 0),
+              | (manda && equipo.brazo?.atacando ? BOTON.ATACAR : 0)
+              // EL 97: el escudo levantado (`IN_ATTACK2`, giattack.cpp:118). El
+              // servidor lleva su propio `Brazal` con este botón: es su postura
+              // la que decide el bloqueo (`Partida._pasoDelEscudo`).
+              | (manda && equipo.brazal?.atacando ? BOTON.ATACAR2 : 0),
           });
         }
       }
@@ -6091,7 +6492,15 @@ async function arrancarJuego() {
       // rejuvenecer, que es un `repeatdelay 0.5` dentro del propio objeto: nadie
       // lo llama, arranca por existir. Sin esta línea el objeto está montado y
       // quieto, que es la forma de tener el mecanismo escrito y sin correr.
-      for (const ent of objetosVivos.values()) ent.paso(dtB);
+      //
+      // EL 98: con servidor, las piezas que corren allí (`correEnElServidor`:
+      // lo puesto y las armaduras, `//#scope server`) NO mueven su reloj
+      // aquí. Las dos copias tendrían su `failed_str_req_loop` y el jugador
+      // recibiría dos lentitudes y dos avisos cada diez segundos.
+      for (const ent of objetosVivos.values()) {
+        if (red && correEnElServidor(fichaDeObjeto(ent.id), ent.puesto)) continue;
+        ent.paso(dtB);
+      }
       if (red) {
         // ── CON SERVIDOR, AQUÍ NO SE DECIDE NADA ─────────────────────────────
         //
@@ -6241,6 +6650,15 @@ async function arrancarJuego() {
    */
   function pasoDelGolpe(dt) { golpeDeVista = soltarGolpe(golpeDeVista, dt); }
 
+  /**
+   * EL 95: `V_CalcShake` (view.cpp:578 → cl_game.c:2243-2290), una vez por
+   * fotograma, con el reloj del juego. Sólo CALCULA; lo suma a la cámara
+   * `colocarCamaraDelOjo`, que es `V_ApplyShake`. Separadas como en el motor,
+   * y por el 65: la sonda llama a ESTA con el bucle parado, no a una copia.
+   * `azar` es `COM_RandomFloat(bajo, alto)`: dos números (el 59).
+   */
+  function pasoDelTemblorDeVista(dt, azar) { pasoDelTemblor(temblor, reloj, dt, azar); }
+
   function pasoDelHud(dt) {
     // Los `calleventtimed` de los guiones, con el MISMO reloj que todo lo
     // demás. Va antes del `if (!hudMs)` a propósito: una conversación no se
@@ -6252,6 +6670,7 @@ async function arrancarJuego() {
     // exactamente el fallo que ya está documentado un poco más arriba.
     mensajes?.paso(dt);
     pasoDelGolpe(dt);
+    pasoDelTemblorDeVista(dt);
     if (chispas?.corriendo) { chispas.seguir(player.eye); chispas.paso(dt); }
     // El cadáver sigue respirando, que es lo que hace el del motor: `CreateCorpse`
     // llama a `ResetSequenceInfo()` y la secuencia se queda andando.
@@ -6391,6 +6810,15 @@ async function arrancarJuego() {
     get animarLuz() { return animarLuz; },
     get aparicion() { return aparicion; },
     get armaEnMano() { return equipo.armaEnMano; },
+    // EL 96: ponerse una pieza y lo que hizo la armadura con el último golpe.
+    get vestirObjeto() { return vestirObjeto; },
+    get ultimaArmadura() { return ultimaArmadura; },
+    // EL 97: lo que leen las sondas del equipo (src/play/equipar.js).
+    get ultimoMovimiento() { return ultimoMovimiento; },
+    get ultimoSoltado98() { return ultimoSoltado98; },
+    get manoActiva() { return manoActiva; },
+    // EL 97: lo que el bucle leyó de los efectos en el último fotograma.
+    get ultimasTrabas() { return ultimasTrabas; },
     get arnesDePaseo() { return arnesDePaseo; },
     get aterrizajes() { return aterrizajes; },
     get atlas() { return atlas; },
@@ -6424,6 +6852,9 @@ async function arrancarJuego() {
     /** EL 94: el `punchangle` de los golpes, en grados del motor. */
     get golpeDeVista() { return [...golpeDeVista]; },
     get pasoDelGolpe() { return pasoDelGolpe; },
+    /** EL 95: el `clgame.shake` (copia) y su paso, para la sonda. */
+    get temblor() { return JSON.parse(JSON.stringify(temblor)); },
+    get pasoDelTemblor() { return pasoDelTemblorDeVista; },
     get cadaver() { return cadaver; },
     get celebrarSubida() { return celebrarSubida; },
     get candidatosDeGolpe() { return candidatosDeGolpe; },
@@ -6552,6 +6983,8 @@ async function arrancarJuego() {
     get tiros() { return arco.tiros; },
     get trazaLibre() { return trazaLibre; },
     get ultimaFlecha() { return arco.ultimaFlecha; },
+    /** EL 97: lo que hicieron los guiones de los proyectiles (src/juego/arco.js). */
+    get deGuionDelArco() { return arco.deGuion; },
     get ultimoGolpe() { return ultimoGolpe; },
     get velo() { return velo; },
     get velocidadParaLosPasos() { return velocidadParaLosPasos; },
@@ -6597,6 +7030,13 @@ async function arrancarJuego() {
     /** Y el de los NODOS, leído de Three. Dos fuentes a propósito: si no
      *  coinciden, alguien se mueve y el otro no — el fallo del 69. */
     censoDeNodosDelSuelo() { return objetosEnElSuelo?.censo() ?? []; },
+    /** EL 96: los modelos del suelo que se cargan sólo al caer, y esperar uno. */
+    get perezosasDelSuelo() {
+      return { perezosas: objetosEnElSuelo?.perezosas ?? 0, pedidas: objetosEnElSuelo?.pedidas ?? 0, cargados: objetosEnElSuelo?.n ?? 0 };
+    },
+    esperarModeloDelSuelo: (guion) => objetosEnElSuelo?.esperar?.(guion) ?? Promise.resolve(false),
+    /** EL 96: cuántas veces `empunar` recibió un id que el catálogo no conoce. */
+    get armasSinFicha() { return cuentas.armasSinFicha ?? 0; },
     get cuentasDelSuelo() { return { ...sueloDelMundo.cuentas }; },
     /** Cada aterrizaje con el sonido que pidió y su tono. Ver `caidasDelSuelo`. */
     get caidasDelSuelo() { return caidasDelSuelo; },
@@ -6621,6 +7061,8 @@ async function arrancarJuego() {
     /** La tecla `c`, por la misma puerta por la que entra el teclado. */
     soltar() {
       const o = soltarDelInventario();
+      // EL 97: lo que se borra al caer (`deleteme`) no tiene posición: es una marca.
+      if (o?.borrado) return { i: null, guion: o.guion, borrado: true };
       return o ? { i: o.i, guion: o.guion, donde: [...o.pos], velocidad: [...o.vel], angulos: [...o.angulos] } : null;
     },
     /** Qué lleva la mano derecha. Es lo que `drop` sin argumento suelta. */

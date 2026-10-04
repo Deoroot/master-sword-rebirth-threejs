@@ -314,8 +314,13 @@ export function acelerarEnAire(velocidad, dir, deseada, accel, dt) {
  * impide que ir en diagonal sea más rápido.
  *
  * El convenio de ángulo es el de `player.js`: con yaw 0 se mira hacia −Z.
+ *
+ * EL 97: `tope` es el `pmove->maxspeed` de `PM_CheckParamters`
+ * (pm_shared.cpp:3050-3053), que un efecto que frena baja a su porcentaje
+ * LEÍDO COMO UNIDADES — el fallo del original, en `src/play/trabas.js`. Sin
+ * efectos no muerde (`sv_maxspeed` es 600 y correr no pasa de 520).
  */
-export function deseo({ adelante = 0, lado = 0 }, yaw, maxima) {
+export function deseo({ adelante = 0, lado = 0 }, yaw, maxima, tope = Infinity) {
   const f = adelante >= 0 ? adelante * EJES.adelante : adelante * EJES.atras;
   const s = lado * EJES.lado;
   const sen = Math.sin(yaw), cos = Math.cos(yaw);
@@ -323,9 +328,10 @@ export function deseo({ adelante = 0, lado = 0 }, yaw, maxima) {
   let x = (-sen * f + cos * s) * maxima;
   let z = (-cos * f - sen * s) * maxima;
   let rapidez = Math.hypot(x, z);
-  if (rapidez > maxima) {
-    const k = maxima / rapidez;
-    x *= k; z *= k; rapidez = maxima;
+  const techo = Math.min(maxima, tope);
+  if (rapidez > techo) {
+    const k = techo / rapidez;
+    x *= k; z *= k; rapidez = techo;
   }
   if (rapidez < 1e-6) return { dir: [0, 0, 0], rapidez: 0 };
   return { dir: [x / rapidez, 0, z / rapidez], rapidez };
@@ -489,10 +495,13 @@ export const NADANDO = 2;
  */
 export function nadar(velocidad, {
   intencion = {}, yaw = 0, maxima = 160, dt = 1 / 60,
-  subir = 0, vars = MOVEVARS, friccionDeEntidad = 1,
+  subir = 0, vars = MOVEVARS, friccionDeEntidad = 1, tope = Infinity,
 } = {}) {
   let v = [...velocidad];
   const { adelante = 0, lado = 0 } = intencion;
+  // EL 97: el mismo `pmove->maxspeed` que en tierra (pm_shared.cpp:1298 topa
+  // contra él, y lo bajó `PM_CheckParamters`). Ver `deseo`.
+  const techo = Math.min(maxima, tope);
   // Las mismas componentes que en tierra, sin los factores de andar hacia atrás
   // ni de lado: `PM_WaterMove` usa `forwardmove` y `sidemove` a pelo.
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
@@ -505,10 +514,10 @@ export function nadar(velocidad, {
   if (!adelante && !lado && !subir) deseada[1] -= 60;   // se hunde solo
 
   let rapidez = Math.hypot(deseada[0], deseada[1], deseada[2]);
-  if (rapidez > maxima) {
-    const k = maxima / rapidez;
+  if (rapidez > techo) {
+    const k = techo / rapidez;
     deseada = deseada.map((x) => x * k);
-    rapidez = maxima;
+    rapidez = techo;
   }
   rapidez *= 0.8;
 
@@ -635,9 +644,10 @@ export function normalDeEscalera(caja, punto) {
 export function pasoDeVelocidad(velocidad, {
   intencion = {}, yaw = 0, maxima = 160, dt = 1 / 60,
   enSuelo = true, alBorde = false, saltar = false, vars = MOVEVARS,
+  tope = Infinity,
 } = {}) {
   let v = [...velocidad];
-  const { dir, rapidez } = deseo(intencion, yaw, maxima);
+  const { dir, rapidez } = deseo(intencion, yaw, maxima, tope);
   const media = (vars.gravedad * dt) / 2;
 
   if (enSuelo) {

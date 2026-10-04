@@ -45,7 +45,15 @@
 
 import * as THREE from "three";
 import { Flecha, anguloDelTiro, danoDeFlecha, dadoDeFlecha } from "../play/proyectil.js";
-import { habilidadDeArma, propiedadesDe } from "./stats.js";
+import { habilidadDeArma, propiedadesDe, valorDeHabilidad } from "./stats.js";
+// EL 97: el daño que pone el GUION del proyectil (lanzas, Fénix, saetas).
+import {
+  PROYECTILES_DE_GUION, danoDeLanza, explosionDelFenix, danoEnArea,
+  esInstantanea, danoDeSaeta, multiplicadorDeSaeta, RAYO_DE_SAETA,
+  // EL 98: los tres que faltaban.
+  centroDeLaRafaga, rafagaOscura, danoDeSombra, espiralDelArco, golpesDeVuelo,
+} from "../play/proyectilguion.js";
+import { relacionEnTexto } from "../play/efectos.js";
 // EL 86: el informe del golpe lo escribe el mod y no este archivo.
 import { golpeAsestado } from "../play/mensajesdecombate.js";
 
@@ -69,12 +77,27 @@ export function montarArco({
   // Lo que el arco no sabe hacer y pide prestado
   suceso = () => {}, potenciaDe = () => 0, destrezaDe = () => 0,
   repartirExperiencia = () => {}, alMatar = () => {},
+  // EL 97: lo que piden el área del Fénix y la distancia de las lanzas. Los
+  // vivos con su CENTRO en unidades (`candidatosVivos` de main.js) y la traza
+  // del `DoDamage` de área, que ignora a los monstruos (`trazaLibre`).
+  candidatosVivos = () => [], trazaDelMundo = () => true,
   JUGADOR = "jugador",
 } = {}) {
   /** El conjunto de nodos, montado al empuñar un arco. Lo pone `empunar`. */
   let flechasPuestas = null;
   const flechasEnVuelo = [];    // `{ flecha, pieza }`
-  const cuentas = { tiros: 0, flechazos: 0, perdidas: 0 };
+  const cuentas = {
+    tiros: 0, flechazos: 0, perdidas: 0,
+    // EL 97: lo que hizo el guion de cada proyectil, para medir. `golpes` son
+    // los daños de guion aplicados (con su porqué), `saetas` los rayos de las
+    // ballestas, `explosiones` las del Fénix y `sinPortar` los que tienen un
+    // daño de guion que este puerto no corre todavía (se cuentan, no se callan).
+    golpesDeGuion: [], saetas: [], explosiones: [], sinPortar: {}, sinMunicion: 0,
+    // EL 98: las áreas que corre un guion de proyectil —la ráfaga de la Shadow
+    // Lance, la esfera de Torkalath y la sombra del Unholy Blade—, una fila por
+    // `xdodamage`, y los tiros que el arco cancela en su `ranged_start`.
+    areas: [], cancelados: 0,
+  };
   /**
    * La última que se ha soltado, y no es un adorno de la sonda: es la única
    * forma de seguir UNA flecha. El primer intento la buscaba por la longitud
@@ -112,6 +135,15 @@ export function montarArco({
     const tipo = String(ataque?.proyectil ?? "arrow");
     const p = sesion()?.personaje;
     const catalogo = catalogoDeFlechas();
+    // EL 97: `reg.attack.ammodrain 0` — el ataque NO lleva munición: «Attack
+    // spawns ammo - Player doesn't carry it», y el proyectil sale del catálogo
+    // por su NOMBRE (`GetGlobalGenericItemByName(sProjectileType)`,
+    // giattack.cpp:910-911 y :1046-1052). Las lanzas de asta, la esfera élfica y
+    // la sombra del Unholy Blade. Hasta el 97 se buscaban en la mochila, no
+    // estaban, y salía volando la flecha gratis.
+    if (ataque?.gastaMunicion === 0) {
+      return { ficha: catalogo?.get(tipo) ?? null, gasta: null, porNombre: true };
+    }
     // Lo que el jugador haya ELEGIDO con el ciclador manda sobre la búsqueda,
     // que es justo para lo que sirve `selectarrow`: llevando tres clases de
     // flecha, sin esto siempre tiraría la primera que encuentre.
@@ -132,7 +164,13 @@ export function montarArco({
       return o.id.includes(tipo) && !o.id.endsWith("_generic");
     });
     if (enLaMochila) return { ficha: catalogo.get(enLaMochila.id), gasta: enLaMochila };
-    return { ficha: catalogo?.get("proj_arrow_generic") ?? null, gasta: null };
+    // Sin munición, la gratis es POR TIPO (giattack.cpp:1005-1037): `arrow` da
+    // la flecha roma y `bolt` la SAETA tosca —hasta el 97 una ballesta sin
+    // saetas tiraba la flecha de arco—. Cualquier otro tipo no tiene gratis: «You
+    // don't have any <tipo>» y no hay tiro.
+    if (tipo === "arrow") return { ficha: catalogo?.get("proj_arrow_generic") ?? null, gasta: null };
+    if (tipo === "bolt") return { ficha: catalogo?.get("proj_bolt_generic") ?? null, gasta: null };
+    return { ficha: null, gasta: null, falta: tipo };
   }
 
   /**
@@ -145,14 +183,26 @@ export function montarArco({
    * `game_projectile_hitnpc` y `game_projectile_hitwall`.
    */
   function trazaDeFlecha(desdeU, hastaU) {
+    return trazar(desdeU, hastaU, false);
+  }
+
+  /**
+   * La misma traza, pudiendo ignorar a los bichos — ninguna flecha de este
+   * juego lo hace al volar (las que «atraviesan NPC» se paran al tocarlos, ver
+   * `Flecha.miraAdelante`), pero la usa `alturaDelSuelo`.
+   */
+  function trazar(desdeU, hastaU, sinBichos) {
     const u = U();
     const o = { x: desdeU[0] / u, y: desdeU[1] / u, z: desdeU[2] / u };
     const d = { x: hastaU[0] / u - o.x, y: hastaU[1] / u - o.y, z: hastaU[2] / u - o.z };
     const L = Math.hypot(d.x, d.y, d.z);
     if (!(L > 0)) return null;
     d.x /= L; d.y /= L; d.z /= L;
+    const deBicho = sinBichos
+      ? new Set((bichosSolidos()?.puestos ?? []).map((q) => q.colisionador.handle)) : null;
     const g = world().castRay(new RAPIER.Ray(o, d), L, true,
-      undefined, undefined, undefined, player().body);
+      undefined, undefined, undefined, player().body,
+      deBicho ? (c) => !deBicho.has(c.handle) : undefined);
     if (!g) return null;
     const t = g.timeOfImpact;
     const punto = [
@@ -171,8 +221,23 @@ export function montarArco({
    * moverse** (`Think()` al final de `TossProjectile`).
    */
   function tirar(ataque, sostenido) {
-    const { ficha: flecha, gasta } = municion(ataque);
-    if (!flecha) return null;
+    const { ficha: flecha, gasta, falta } = municion(ataque);
+    if (!flecha) {
+      // `SendEventMsg(HUDEVENT_UNABLE, "You don't have any " + sProjectileType)`
+      // (giattack.cpp:1032-1033) y el botón se bloquea: no hay tiro.
+      if (falta) { cuentas.sinMunicion++; suceso("nopuedes", `You don't have any ${falta}`); }
+      return null;
+    }
+    // EL 98: la esfera de los arcos de Torkalath. El arco pone su daño y su
+    // `ranged_start` puede cancelar el tiro (ver `espiralDelArco`).
+    let espiral = null;
+    if (flecha.id === "proj_arrow_spiral") {
+      espiral = espiralDelArco(brazo()?.arma?.id ?? null, {
+        escuela: (e) => propiedad("spellcasting", e), arqueria: habilidad("archery"),
+      });
+      for (const m of espiral.mensajes) suceso("nopuedes", m);
+      if (espiral.cancela) { cuentas.cancelados++; return null; }
+    }
     const u = U();
     const elBrazo = brazo();
     const elAudio = audio();
@@ -239,7 +304,18 @@ export function montarArco({
       tipoDano: flecha.tipoDano ?? "pierce",
       expira: flecha.duraEnElSuelo ?? 10,
       ficha: flecha,
+      // EL 97: `reg.proj.ignorenpc` apaga el rayo de 36 u (giprojectile.cpp:283-284).
+      miraAdelante: !flecha.ignoraNpc,
     });
+    // EL 98: el área que se repite mientras vuela, con su daño fijado al nacer
+    // (`game_tossprojectile`, proj_arrow_spiral.script:65-93, proj_ub.script:63-85).
+    const vuelo = PROYECTILES_DE_GUION[flecha.id];
+    if (vuelo?.cuando === "enVuelo" && vuelo.portado) {
+      const a = flecha.id === "proj_ub"
+        ? danoDeSombra({ afliccion: propiedad("spellcasting", "affliction") })
+        : { dano: espiral?.dano ?? 0, tipo: espiral?.tipo ?? null, cubo: "archery", radio: vuelo.vuelo.radio, caida: vuelo.vuelo.caida };
+      f.areaDeVuelo = { ...a, proximo: vuelo.vuelo.primero };
+    }
     const pieza = flechasPuestas?.coger() ?? null;
     if (pieza) flechasPuestas.apuntar(pieza, [ojo[0], ojo[1], ojo[2]], [dir.x, dir.y, dir.z]);
     flechasEnVuelo.push({ flecha: f, pieza });
@@ -251,6 +327,14 @@ export function montarArco({
     const enMano = armaEnMano();
     if (enMano && elBrazo?.arma?.animaciones?.disparar !== null) {
       enMano.pon(elBrazo.arma.animaciones.disparar, { unaVez: true });
+    }
+
+    // EL 97: LA SAETA INSTANTÁNEA. `game_tossprojectile` corre dentro de
+    // `TossProjectile`, ANTES del `Think()` del fotograma cero
+    // (giprojectile.cpp:114-116), y es ahí donde `proj_base` tira su rayo.
+    if (esInstantanea(flecha, elBrazo?.arma?.nombre)) {
+      saeta(f, flecha, desde, [dir.x, dir.y, dir.z]);
+      return f;
     }
 
     // Y la comprobación del fotograma cero, que es la que hace que disparar
@@ -277,7 +361,23 @@ export function montarArco({
   function aterrizar(f, choque) {
     const i = choque?.contra ?? null;
     const elAudio = audio();
-    if (!i || i.muerto) {
+    const deGuion = PROYECTILES_DE_GUION[f.ficha?.id] ?? null;
+    // EL 97: lo que el motor no hace y el guion sí. Un daño de guion sin portar
+    // se CUENTA aquí, en el sitio donde habría pasado.
+    if (deGuion && !deGuion.portado) cuentas.sinPortar[f.ficha.id] = (cuentas.sinPortar[f.ficha.id] ?? 0) + 1;
+    // La flecha del Fénix explota al tocar lo que sea —mundo o bicho— porque
+    // con `ignorenpc` el motor cae siempre en la rama de la pared.
+    if (deGuion?.cuando === "alChocar" && deGuion.portado && choque?.punto) {
+      explotarFenix(f, choque.punto);
+    }
+    // EL 98: la Shadow Lance revienta al aterrizar, toque bicho o pared:
+    // `game_projectile_landed` va antes que los dos (giprojectile.cpp:189).
+    if (deGuion?.cuando === "alAterrizar" && deGuion.portado && choque?.punto) {
+      rafagaDeLaLanza(f, choque.punto);
+    }
+    // EL 98: la esfera y la sombra atraviesan NPC (`PROJ_IGNORENPC 1`): sin
+    // `DoDamage` del motor, y al tocar lo que sea `remove_me` (proj_ub.script:55-61).
+    if (!i || i.muerto || deGuion?.cuando === "alChocar" || deGuion?.cuando === "enVuelo") {
       const s = f.ficha?.sonidos?.contraPared ?? [];
       if (s.length && elAudio?.despierto) {
         elAudio.unaVez(`snd/${s[Math.floor(Math.random() * s.length)]}`);
@@ -296,21 +396,36 @@ export function montarArco({
     const h = habilidadDeArma(elBrazo?.ataques?.[0]?.habilidad ?? "archery");
     const props = h ? propiedadesDe(h.habilidad) : [];
     const prop = h?.propiedad ?? props[Math.floor(Math.random() * props.length)] ?? "power";
+    // EL 97: una lanza de asta hace DOS daños, y por este orden: el del motor
+    // (`DoDamage` en `ProjectileTouch`, con su base de 0 o 1) y el de su guion
+    // (`game_projectile_hitnpc`, giprojectile.cpp:203-206). Con base 0 el
+    // primero no existe; con 1 es una centésima. Van como dos golpes.
+    if (deGuion?.cuando === "alPegar" && deGuion.portado) {
+      const motor = dano > 0 ? herirCon(f, i, dano, { cubo: `${h?.habilidad ?? "archery"}.${prop}` }) : null;
+      const g = golpeDeLanza(f, i);
+      return g ?? motor;
+    }
+    // EL 98: un proyectil de guion con el daño de motor de relleno a 0 no
+    // apunta un «Hit X: 0» (la Shadow Lance ya hizo lo suyo al aterrizar).
+    if (deGuion && !(dano > 0)) return null;
+    return herirCon(f, i, dano, { cubo: `${h?.habilidad ?? "archery"}.${prop}` });
+  }
+
+  /**
+   * UN DAÑO QUE ENTRA, por el camino de siempre: con servidor se pide, sin él
+   * `herir` (con su parry), y el informe del motor. Lo usan la flecha, la lanza,
+   * la saeta y el área del Fénix: un solo camino, la lección del 63.
+   */
+  function herirCon(f, i, dano, { cubo = "archery", tipo = null } = {}) {
+    const tipoDano = tipo ?? f.tipoDano ?? "pierce";
     // La flecha va por el mismo camino que la espada: con servidor, se pide.
     const laRed = red();
     if (laRed) {
-      laRed.pegar({
-        id: i.id, dano, alcance: 0,
-        cubo: `${h?.habilidad ?? "archery"}.${prop}`,
-        tipo: f.tipoDano ?? "pierce",
-      });
+      laRed.pegar({ id: i.id, dano, alcance: 0, cubo, tipo: tipoDano });
       return { objetivo: i, dano, pedido: true };
     }
     const golpe = bichos().herir(i, dano, {
-      cubo: `${h?.habilidad ?? "archery"}.${prop}`,
-      tipo: f.tipoDano ?? "pierce",
-      ahora: reloj(),
-      dados: { quien: JUGADOR },
+      cubo, tipo: tipoDano, ahora: reloj(), dados: { quien: JUGADOR },
     });
     // Un escudo puede parar una flecha, y eso ya está portado en `herir`.
     if (golpe.parado) {
@@ -319,7 +434,8 @@ export function montarArco({
       // `playermessage $get(PARAM1,id) Your attack was PARRY_TYPE`
       // (`monsters/base_monster_shared.script:474`). El `PARRY_TYPE` sí es suyo
       // y es el que pone «dodged!» en las arañas (`spider_base.script:4`).
-      suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
+      // EL 97: sólo si no lo ha dicho ya su guion (ver `golpearA` en main.js).
+      if (!golpe.hablaElGuion) suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
       return null;
     }
     if (golpe.muerto) {
@@ -337,10 +453,160 @@ export function montarArco({
     // motor es `"Hit %s: %s %s"` (giattack.cpp:1954), y ni dice la vida que
     // queda ni pone « · dead!». El tipo de una flecha es `pierce` salvo que su
     // guion diga otro, igual que en el resto de este archivo.
-    suceso("ataque", golpeAsestado({
-      nombre: i.ficha.nombre, dano, tipo: f.tipoDano ?? "pierce",
-    }));
+    suceso("ataque", golpeAsestado({ nombre: i.ficha.nombre, dano, tipo: tipoDano }));
     return golpe;
+  }
+
+  /** El valor de una habilidad del tirador: `$get(ent_expowner,skill.<h>)`. */
+  function habilidad(nombre) {
+    const props = sesion()?.personaje?.habilidades?.[nombre];
+    return props ? valorDeHabilidad(props) : 0;
+  }
+
+  /** Una propiedad: `$get(ent_expowner,skill.<h>.<p>)` (scriptcmds.cpp:1651-1676). */
+  function propiedad(nombre, prop) {
+    return sesion()?.personaje?.habilidades?.[nombre]?.[prop]?.valor ?? 0;
+  }
+
+  /** El `origin` del jugador, que en GoldSrc es el CENTRO de su caja, en unidades. */
+  function origenDelTirador() {
+    const p = player(), u = U();
+    const alto = p?.perfil?.height ?? 1.83;
+    return [p.feet[0] * u, (p.feet[1] + alto / 2) * u, p.feet[2] * u];
+  }
+
+  /** `game_projectile_hitnpc` de una lanza de asta — ver `danoDeLanza`. */
+  function golpeDeLanza(f, i) {
+    const id = f.ficha.id;
+    const yo = origenDelTirador();
+    const n = i.nodo?.position;
+    const u = U();
+    // El `origin` de un monstruo son sus PIES (msmonsterserver.cpp:244).
+    const suyo = n ? [n.x * u, n.y * u, n.z * u] : null;
+    const distancia = suyo ? Math.hypot(suyo[0] - yo[0], suyo[1] - yo[1], suyo[2] - yo[2]) : Infinity;
+    const r = danoDeLanza(id, {
+      habilidad: habilidad("polearms"), cargaLanza: null, distancia,
+      relacion: relacionEnTexto(i.ficha?.relacion), vivo: !i.muerto && (i.vida ?? 0) > 0,
+    });
+    cuentas.golpesDeGuion.push({ id, contra: i.ficha?.nombre ?? null, distancia, ...r });
+    if (!(r.dano > 0)) return null;
+    // `xdodamage ... polearms <tipo>`: la propiedad, sorteada (`GetStatIndices`
+    // con una habilidad sin propiedad da -1, scriptcmds.cpp:7438-7447).
+    const props = propiedadesDe("polearms");
+    const prop = props[Math.floor(Math.random() * props.length)] ?? "power";
+    return herirCon(f, i, r.dano, { cubo: `polearms.${prop}`, tipo: r.tipo });
+  }
+
+  /** `$get_ground_height(<origen>)`: el suelo de debajo, sin bichos. */
+  function alturaDelSuelo(punto) {
+    const g = trazar([punto[0], punto[1] + 1, punto[2]], [punto[0], punto[1] - 8192, punto[2]], true);
+    return g?.punto?.[1] ?? null;
+  }
+
+  /** `game_projectile_hitwall` de la flecha del Fénix — ver `explosionDelFenix`. */
+  function explotarFenix(f, punto) {
+    const yo = origenDelTirador();
+    // `vectorset MY_ORG z $get_ground_height(MY_ORG)` (proj_arrow_phx.script:63).
+    const suelo = alturaDelSuelo(punto);
+    const centro = [punto[0], suelo ?? punto[1], punto[2]];
+    const distancia = Math.hypot(centro[0] - yo[0], centro[1] - yo[1], centro[2] - yo[2]);
+    const e = explosionDelFenix({
+      distancia, potencia: propiedad("archery", "power"), arqueria: habilidad("archery"),
+    });
+    const golpeados = repartirArea(f, centro, { dano: e.dano, radio: e.radio, caida: 0, tipo: e.tipo, cubo: "archery" });
+    cuentas.explosiones.push({ centro, distancia, ...e, golpeados });
+    return golpeados;
+  }
+
+  /**
+   * UN `xdodamage <origen> <radio> <daño> <caída>` entre los bichos vivos —
+   * el `DoDamage` de área (giattack.cpp:1546-1592): a todo lo que tenga el
+   * CENTRO a menos del radio y la línea libre de mundo, `daño · (1 − d/R)^caída`.
+   * `cubo` sin punto es una habilidad entera, y la propiedad se sortea
+   * (`GetStatIndices` da -1, scriptcmds.cpp:7438-7447).
+   */
+  function repartirArea(f, centro, { dano, radio, caida = 0, tipo = null, cubo = "archery" }) {
+    const golpeados = [];
+    if (!(dano > 0) || !(radio > 0)) return golpeados;
+    const [hab, fija] = String(cubo).split(".");
+    const props = propiedadesDe(hab);
+    for (const c of candidatosVivos()) {
+      const d = Math.hypot(c.centro[0] - centro[0], c.centro[1] - centro[1], c.centro[2] - centro[2]);
+      if (d >= radio) continue;
+      // La traza del área ignora a los monstruos (giattack.cpp:1563): sólo
+      // el mundo tapa.
+      if (!trazaDelMundo(centro, c.centro)) continue;
+      const parte = danoEnArea(dano, d, radio, caida);
+      if (!(parte > 0)) continue;
+      const prop = fija ?? props[Math.floor(Math.random() * props.length)] ?? "power";
+      const g = herirCon(f, c.id, parte, { cubo: `${hab}.${prop}`, tipo });
+      golpeados.push({ nombre: c.id?.ficha?.nombre ?? null, distancia: d, dano: parte, parado: Boolean(g?.parado) });
+    }
+    return golpeados;
+  }
+
+  /** EL 98: `game_projectile_landed` de la Shadow Lance — ver `rafagaOscura`. */
+  function rafagaDeLaLanza(f, punto) {
+    const centro = centroDeLaRafaga(punto, alturaDelSuelo(punto));
+    const r = rafagaOscura({ afliccion: propiedad("spellcasting", "affliction") });
+    const golpeados = repartirArea(f, centro, r);
+    cuentas.areas.push({ id: f.ficha.id, t: f.vida, centro, ...r, golpeados });
+    return golpeados;
+  }
+
+  /** EL 98: un `damage_area` de la esfera o la sombra, en vuelo. */
+  function areaEnVuelo(f, t) {
+    const a = f.areaDeVuelo;
+    const centro = [...f.pos];
+    const golpeados = repartirArea(f, centro, a);
+    cuentas.areas.push({ id: f.ficha.id, t, centro, dano: a.dano, radio: a.radio, caida: a.caida, tipo: a.tipo, golpeados });
+    return golpeados;
+  }
+
+  /**
+   * `hitscan_bolt` — proj_base.script:180-249. El rayo sale del ORIGEN de la
+   * saeta (el ojo más `ofs.startpos`) en su rumbo de vuelo —con el cono y el
+   * `aimang` ya puestos— y llega a 8 000 unidades.
+   *
+   * Dos cosas que se hacen distinto, dichas: (1) el rayo del guion NO se salta
+   * al tirador (`$get_traceline(..., npc)` sin `ignore_ent`, script.cpp:2690-2710)
+   * y, si se da a sí mismo, lo reintenta a los 0,01 s desde donde la saeta haya
+   * llegado (:210-214); aquí el rayo se salta al jugador de entrada, que es a lo
+   * que converge ese reintento. (2) Al acertar, el guion TELETRANSPORTA la saeta
+   * al bicho y la deja volar (:232-233; `BP_HIT_TARGET` evita el segundo daño,
+   * :253-254); aquí se queda clavada en el punto del rayo.
+   */
+  function saeta(f, flecha, desde, dir) {
+    const hasta = [0, 1, 2].map((k) => desde[k] + dir[k] * RAYO_DE_SAETA);
+    const g = trazaDeFlecha(desde, hasta);
+    const i = g?.contra ?? null;
+    // `else local reg.proj.dmg 0` (proj_base.script:56): la saeta no lleva daño
+    // de motor. El de verdad va en `danoDeGuion`.
+    f.dano = 0;
+    f._chocar(g ?? { punto: hasta, contra: null });
+    const id = brazo()?.arma?.id ?? null;
+    const arqueria = habilidad("archery");
+    const multiplicador = multiplicadorDeSaeta(id, arqueria);
+    const base = flecha.dano?.max ?? 0;
+    const dano = danoDeSaeta({ arqueria, base, multiplicador });
+    f.danoDeGuion = dano;
+    cuentas.saetas.push({
+      ballesta: id, saeta: flecha.id, arqueria, base, multiplicador, dano,
+      contra: i && !i.muerto ? (i.ficha?.nombre ?? "bicho") : (g ? "mundo" : null),
+      distancia: g?.punto ? Math.hypot(g.punto[0] - desde[0], g.punto[1] - desde[1], g.punto[2] - desde[2]) : null,
+    });
+    if (!i || i.muerto) {
+      // `xdodamage START_TRACE MY_DEST ...` a lo largo de la línea (:226-227):
+      // si lo primero es el mundo, no hiere a nadie. Suena la pared.
+      const s = flecha.sonidos?.contraPared ?? [];
+      const elAudio = audio();
+      if (s.length && elAudio?.despierto) elAudio.unaVez(`snd/${s[Math.floor(Math.random() * s.length)]}`);
+      return null;
+    }
+    cuentas.flechazos++;
+    const props = propiedadesDe("archery");
+    const prop = props[Math.floor(Math.random() * props.length)] ?? "power";
+    return herirCon(f, i, dano, { cubo: `archery.${prop}`, tipo: flecha.tipoDano ?? "pierce" });
   }
 
   /** Un paso de todas las flechas, con el mismo reloj fijo que la física. */
@@ -351,6 +617,23 @@ export function montarArco({
       const antes = f.volando;
       const choque = f.paso(dt, { traza: trazaDeFlecha });
       if (choque && antes) aterrizar(f, choque);
+      // EL 98: el área de la esfera y la sombra, sólo mientras SIGUE volando
+      // (`if IS_ACTIVE`; al chocar, `remove_me` lo apaga). Y a los 10 s, o al
+      // chocar, `deleteent ent_me`: se va en el acto, sin quedarse clavada.
+      if (f.areaDeVuelo) {
+        if (f.volando) {
+          const g = golpesDeVuelo(f.ficha.id, f.areaDeVuelo.proximo, f.vida);
+          f.areaDeVuelo.proximo = g.proximo;
+          for (const t of g.instantes) areaEnVuelo(f, t);
+        }
+        const vida = PROYECTILES_DE_GUION[f.ficha.id]?.vuelo?.vida ?? Infinity;
+        if (!f.volando || f.vida >= vida) {
+          if (f.volando) cuentas.perdidas++;
+          flechasPuestas?.soltar(pieza);
+          flechasEnVuelo.splice(n, 1);
+          continue;
+        }
+      }
       // Se la mueve y se la reorienta sólo mientras vuela: una flecha clavada
       // se queda con el ángulo con el que entró, que es lo que hace el motor
       // al pasar a `MOVETYPE_NONE`.
@@ -380,5 +663,13 @@ export function montarArco({
     get tiros() { return cuentas.tiros; },
     get flechazos() { return cuentas.flechazos; },
     get flechasPerdidas() { return cuentas.perdidas; },
+    /** EL 97: lo que hicieron los guiones de los proyectiles (ver `cuentas`). */
+    get deGuion() {
+      return {
+        golpes: cuentas.golpesDeGuion, saetas: cuentas.saetas, explosiones: cuentas.explosiones,
+        sinPortar: { ...cuentas.sinPortar }, sinMunicion: cuentas.sinMunicion,
+        areas: cuentas.areas, cancelados: cuentas.cancelados,
+      };
+    },
   };
 }

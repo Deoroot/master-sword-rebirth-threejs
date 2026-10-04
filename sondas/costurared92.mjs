@@ -33,7 +33,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chromium } from "playwright";
 import { rmSync } from "node:fs";
-import { liberarPuerto } from "./mismo.mjs";
+import { liberarPuerto, lanzarVite, esperarHttp } from "./mismo.mjs";
 import { entrarPorElMenu } from "./entrar.mjs";
 
 const PUERTO_WEB = 5293;
@@ -45,7 +45,7 @@ try { rmSync("build/partidas/sonda92", { recursive: true, force: true }); } catc
 
 const liberados = [...liberarPuerto(PUERTO_WEB), ...liberarPuerto(PUERTO_PARTIDA)];
 if (liberados.length) console.log(`  (había ${liberados.length} proceso(s) en los puertos: matados)`);
-const dev = spawn("npx", ["vite", "--port", String(PUERTO_WEB), "--strictPort"], { shell: true, stdio: "ignore" });
+const dev = lanzarVite(PUERTO_WEB);
 const partida = spawn(process.execPath, [
   "tools/servidor.mjs", "--puerto", String(PUERTO_PARTIDA), "--nombre", "La sonda 92",
   "--personajes", PERSONAJES, "--mapa", MAPA,
@@ -72,7 +72,10 @@ const control = (que, bien, detalle = "") => { controles.push({ que, bien: Boole
 const errores = [];
 const navegaciones = [];
 
-await esperar(9000);   // vite y el mapa del servidor
+// vite y el mapa del servidor: se les PREGUNTA en vez de dormir a ciegas (el 98;
+// el servidor no abre el puerto hasta haber cargado el mapa, servidor.mjs:241).
+await esperarHttp(`http://localhost:${PUERTO_WEB}/`, { tope: 90_000, proceso: dev, quien: "vite" });
+await esperarHttp(`http://localhost:${PUERTO_PARTIDA}/partidas`, { tope: 90_000, proceso: partida, quien: "el servidor de partida" });
 const nav = await chromium.launch();
 try {
   const abrir = async (quien) => {

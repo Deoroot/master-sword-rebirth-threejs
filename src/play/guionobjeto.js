@@ -78,7 +78,8 @@
 // del jugador —1 de vida cada doce segundos— es otro orden de magnitud. La
 // memoria del usuario era exacta.
 
-import { Guion, entornoVacio } from "./guion.js";
+import { Guion, entornoVacio, numDe, enteroDe } from "./guion.js";
+import { atributosDe, GETSTAT } from "../juego/stats.js";
 import { resolverGuion } from "./cargador.js";
 import { RelojDeGuiones } from "./npcguion.js";
 import { habilidadDeGuion } from "./habilidad.js";
@@ -165,6 +166,21 @@ export class GuionDeObjeto {
     this.noSoportados = [];
     /** A qué eventos del jugador le ha llamado de verdad. Lo lee la sonda. */
     this.pedidos = [];
+    // ── EL 96: LO QUE HACE FALTA PARA QUE UNA ARMADURA PROTEJA ────────────
+    /**
+     * `IsWorn()`: `m_Location == ITEMPOS_BODY`, que lo pone `WearItem`
+     * (genericitem.cpp:1139). Lo lee el guion con `$get(ent_me,is_worn)`
+     * (scriptcmds.cpp:1321) y es la PRIMERA línea del `game_takedamage` de
+     * toda armadura: sin esto, una armadura en la mochila protegería igual.
+     * Lo pone `src/play/armadura.js`, que es quien decide si cabe.
+     */
+    this.puesto = false;
+    /** `ArmorData` (giarmor.cpp:19-74), o `null` si no ha hecho `registerarmor`. */
+    this.armadura = null;
+    /** `PackData` (gipack.cpp:50-77), o `null` si no ha hecho `registercontainer`. El 98. */
+    this.contenedor = null;
+    /** `m_CurrentDamage`: el golpe que se está repartiendo, o `null`. */
+    this.golpeEnCurso = null;
 
     const r = guiones?.resolver(this.id) ?? null;
     this.hay = Boolean(r && r.eventos.length);
@@ -196,11 +212,15 @@ export class GuionDeObjeto {
    * al cargarlo: nacer, empuñar y vestir — y `game_wear` con **dos**
    * parámetros por esa ruta, porque no hay raza todavía.
    */
-  arrancar({ genero = "male", quien = QUIEN_VISTE.CARGA } = {}) {
+  arrancar({ genero = "male", quien = QUIEN_VISTE.CARGA, viste = true, puesto = false } = {}) {
     let n = 0;
     if (this.llamar(EVENTOS_DEL_OBJETO.NACE)) n++;
     if (this.llamar(EVENTOS_DEL_OBJETO.EMPUNA)) n++;
-    if (this.llamar(EVENTOS_DEL_OBJETO.VISTE, [genero, quien])) n++;
+    // EL 96: una armadura en la mochila no se viste (ver `seVisteAlCargar`,
+    // src/play/armadura.js), y una que ya venía puesta lo está DESPUÉS de su
+    // `game_wear`, como en `WearItem` (genericitem.cpp:1135 y :1139).
+    if (viste && this.llamar(EVENTOS_DEL_OBJETO.VISTE, [genero, quien])) n++;
+    this.puesto = Boolean(puesto);
     return n;
   }
 
@@ -251,11 +271,33 @@ function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
      * `$get(ent_owner, …)`. El objeto lee al jugador por aquí, y es lo que
      * hace que la curación dependa de la habilidad de quien lo lleva.
      */
-    propiedad(ref, prop) {
+    propiedad(ref, prop, resto = []) {
+      const nombre = String(prop ?? "");
+      const r = String(ref ?? "").toLowerCase();
+      // EL 96. `$get(ent_me,is_worn)` — `pItem->IsWorn()`, scriptcmds.cpp:1321.
+      if (nombre === "is_worn") return r === "ent_me" ? (yo.puesto ? "1" : "0") : "0";
+      // EL 96. `$get(<otro>,scriptvar,'<VAR>')` — `GetFirstScriptVar`
+      // (scriptcmds.cpp:1295, script.cpp:5949-5955), que devuelve EL NOMBRE si
+      // la variable no existe. Lo pregunta la armadura del ATACANTE
+      // (`NPC_IGNORES_ARMOR`, armor_base.script:232), y en los 2 884 guiones no
+      // la declara ningún NPC: sólo aparece en las dos plantillas de armadura.
+      // Así que contestar el nombre es exacto, y se apunta para que se vea.
+      if (nombre === "scriptvar") {
+        if (!esElDueño(ref) && r !== "ent_me") yo.noSoportados.push({ tipo: "scriptvar de otra entidad", nombre: String(resto[0] ?? "") });
+        return String(resto[0] ?? "");
+      }
       if (!esElDueño(ref)) return "";
       const p = jugador?.personaje;
       if (!p) return "";
-      const nombre = String(prop ?? "");
+      // EL 96. `$get(ent_owner,stat.strength)` — `GetNatStat`, que es
+      // `GetStat(i, 0)` (msmonster.h:415; scriptcmds.cpp:1606-1622). Es
+      // `atributosDe` de src/juego/stats.js, con su truncado.
+      if (nombre.startsWith("stat.")) {
+        const s = nombre.slice(5).split(".")[0];
+        if (nombre.includes(".max")) return "100";
+        const v = atributosDe(p.habilidades)[s];
+        return v === undefined ? "0" : String(v);
+      }
       switch (nombre) {
         case "name": return String(p.nombre ?? "");
         case "hp": return String(p.vida ?? 0);
@@ -304,5 +346,71 @@ function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
 
     programar: (s, que) => yo.reloj.programar(s, que),
     apuntar: (tipo, nombre) => yo.noSoportados.push({ tipo, nombre }),
+
+    // ── EL 96: LA ARMADURA ─────────────────────────────────────────────────
+    //
+    // Lo que un `game_takedamage` de armadura y su `game_wear` le preguntan al
+    // mundo. Ver `src/play/armadura.js`, que es quien llama.
+
+    /** Las propiedades que sólo tienen sentido aquí. */
+    propiedadesPropias: new Set(["is_worn", "scriptvar", ...STATS.map((s) => `stat.${s}`)]),
+
+    /** `registerarmor` — giarmor.cpp:19-74. `Protection` es `atof` de lo que valga YA. */
+    registrarArmadura({ tipo, proteccion, zonas }) {
+      yo.armadura = { tipo: String(tipo ?? ""), proteccion: numDe(proteccion), zonas: String(zonas ?? "") };
+    },
+
+    /**
+     * `registercontainer` — gipack.cpp:50-77. `MaxItems` es `atof` (0 sin
+     * número) y las dos máscaras van por `TokenizeString`, que corta en `;` y
+     * PARA en el primer trozo vacío (stackstring.cpp:143-159). El 98.
+     */
+    registrarContenedor({ maximo, acepta, rechaza }) {
+      const trozos = (s) => {
+        const out = [];
+        for (const t of String(s ?? "").split(";")) { if (t === "") break; out.push(t); }
+        return out;
+      };
+      yo.contenedor = {
+        maximo: Math.trunc(Number.parseFloat(maximo ?? "0")) || 0,
+        acepta: trozos(acepta), rechaza: trozos(rechaza),
+      };
+    },
+
+    /** `setdmg` — genericitem.cpp:2174-2191. Sin golpe en curso no hace nada. */
+    cambiarDano(que, valor) {
+      const g = yo.golpeEnCurso;
+      if (!g) return;
+      if (que === "dmg") g.dano = numDe(valor);
+      else if (que === "type") g.tipo = String(valor);
+      else if (que === "hit") g.acierto = enteroDe(valor) !== 0;
+    },
+
+    /** `$get_takedmg(ent_owner, <tipo>)`: las resistencias del dueño. */
+    recibeDano(ref, tipo) {
+      if (!esElDueño(ref)) { yo.noSoportados.push({ tipo: "$get_takedmg", nombre: String(ref) }); return null; }
+      return jugador?.resistencias?.leer?.(tipo) ?? null;
+    },
+
+    /** `$get_scriptflag(ent_owner, …)`: las banderas son de la entidad del dueño. */
+    banderas: (ref) => (esElDueño(ref) ? jugador?.banderas ?? null : null),
+
+    /** `infomsg ent_owner <título> <texto>`: la ventana de su dueño. */
+    aviso(quien, titulo, texto) {
+      if (!esElDueño(quien)) { yo.noSoportados.push({ tipo: "infomsg", nombre: String(quien) }); return; }
+      jugador?.guion?.entorno?.aviso?.("ent_me", titulo, texto);
+    },
+
+    /** `applyeffect ent_owner <efecto> …`: el anfitrión es el dueño (scriptcmds.cpp:1865-1929). */
+    aplicarEfecto(ref, ruta, params = [], opciones = {}) {
+      if (!esElDueño(ref) || !jugador?.guion?.entorno?.aplicarEfecto) {
+        yo.noSoportados.push({ tipo: "applyeffect", nombre: `${ref} ${ruta}` });
+        return null;
+      }
+      return jugador.guion.entorno.aplicarEfecto("ent_me", ruta, params, opciones);
+    },
   };
 }
+
+/** Los seis atributos de `$get(<jugador>,stat.<nombre>)`, en el orden de `GETSTAT`. */
+const STATS = Object.keys(GETSTAT);

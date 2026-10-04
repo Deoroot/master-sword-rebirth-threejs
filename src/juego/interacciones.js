@@ -257,7 +257,10 @@ export class InteraccionesNpc {
       // pasos de un aldeano) no son golpes: no se cuentan como tales. Ver
       // doc/MORDISCO_92.md — a un NPC al que no se le habla no le llegan.
       // EL 93: tampoco lo son las dos preguntas de la caza (`caza`, `puede`).
-      if (s.que === "animacion" || s.que === "ataca" || s.que === "caza" || s.que === "puede") return;
+      // EL 98: ni las cuatro de la caza que lee el guion (`visto`,
+      // `eligeAtaque`, `atacado`, `anim`).
+      if (s.que === "animacion" || s.que === "ataca" || s.que === "caza" || s.que === "puede" ||
+          s.que === "visto" || s.que === "eligeAtaque" || s.que === "atacado" || s.que === "anim") return;
       // ── EL 94: RECIBIR Y MORIR SÍ LE LLEGAN A UN ALDEANO ────────────────
       //
       // `TraceAttack`, `TakeDamage` y `Killed` son de `CMSMonster`, y un
@@ -346,6 +349,27 @@ export class InteraccionesNpc {
       case "puede":
         if (s.r) Object.assign(s.r, g.puede());
         return;
+      // ── EL 98: LO QUE LA CAZA LE PREGUNTA Y LE CUENTA AL GUION ─────────────
+      // `npc_targetsighted` con el objetivo a la vista; `npc_selectattack` y el
+      // `ANIM_ATTACK` de ahora al atacar; `npc_attack` después (la vieja); y
+      // el `ANIM_RUN` de ahora al perseguir. Ver `GuionDeNpc.visto` y
+      // compañía, y doc/ATURDIR_98.md.
+      case "visto":
+        g.visto(ref(s.objetivo));
+        return;
+      case "eligeAtaque": {
+        const a = g.eligeAtaque();
+        if (s.r && a) s.r.anim = a;
+        return;
+      }
+      case "atacado":
+        g.atacado();
+        return;
+      case "anim": {
+        const a = g.retirado ? null : g.animDe(s.variable);
+        if (s.r && a) s.r.anim = a;
+        return;
+      }
       case "animacion": {
         // EL 92: un evento 500/600 del modelo, al guion por su nombre
         // (`CallScriptEvent(pEvent->options)`, msmonsterserver.cpp:1487 y
@@ -371,6 +395,13 @@ export class InteraccionesNpc {
           // vuelta llega a `game_damaged_end` y no hay `game_struck`, porque
           // un daño cero no pasa por `TakeDamage`.
           g.costura("game_parry", [quien]);
+          // EL 97: el que habla del parry es este guion, no el juego. «Your
+          // attack was PARRY_TYPE» es su `playermessage`
+          // (base_monster_shared.script:472-475), y si un `[override]` lo quita
+          // —la araña gigante, spider.script:63-67— no lo dice nadie. Se avisa
+          // por referencia, como `puede`, para que el llamador NO lo repita
+          // (doc/OVERRIDE_97.md §3).
+          if (s.r) s.r.hablaElGuion = true;
           g.costura("game_damaged_end", [quien, comoF(0)]);
           return;
         }
@@ -585,8 +616,15 @@ export class InteraccionesNpc {
         ocupado: () => this.comercio.ocupado(instancia.id, this.hablandoCon),
         abrir: (retrollamada) => this.comercio.abrir(instancia.id, this.hablandoCon, { retrollamada }),
       },
-      suceso: this.suceso,
-      ventanaDeAviso: (t, x) => this.ventanaDeAviso?.(t, x, this.hablandoCon),
+      // EL 95: con la instancia que habla, para que quien reparte sepa DE
+      // QUIÉN es el mensaje: con servidor, el jugador de ESTE guion
+      // (`RetrieveEntity` del `playermessage`, scriptcmds.cpp:4249) y, si es un
+      // `saytext`, todos los que estén a su alcance (msmonsterserver.cpp:1712-1716).
+      // Hasta aquí iba sin ella y el servidor le preguntaba a `hablandoCon`,
+      // que es el último que abrió un menú en toda la partida. Un navegador
+      // ignora el tercer parámetro.
+      suceso: (tipo, texto, o) => this.suceso?.(tipo, texto, { ...(o ?? {}), instancia }),
+      ventanaDeAviso: (t, x, o) => this.ventanaDeAviso?.(t, x, this.hablandoCon, { ...(o ?? {}), instancia }),
       // El 60: quien de verdad abre la tienda vive en `src/main.js`, que es
       // quien tiene el registro de paneles. Aquí sólo pasa el recado, y con
       // la instancia delante para que el panel sepa de quién es la tienda.
@@ -626,6 +664,25 @@ export class InteraccionesNpc {
       cuerpo: combate ? (this.manadaEnchufada?.cuerpoDe?.(instancia) ?? null) : null,
     });
     if (combate) this.costura.nacidos++;
+    /**
+     * ── EL 98: EL `dodamage` DE UN BICHO, TAMBIÉN FUERA DE UNA ANIMACIÓN ──
+     *
+     * En el motor `dodamage` pega desde cualquier evento (npcscript.cpp:1110-
+     * 1200 no mira quién lo llama). Hasta aquí sólo tenía gancho mientras
+     * corría un evento 500/600 del modelo (caso `animacion`), y fuera «se
+     * apuntaba» como hueco declarado (el 92). El caso que lo pide: la
+     * embestida del jabalí, que pega desde su bloque de `repeatdelay 0.1`
+     * (boar_base.script:164-176) y es la ÚNICA puerta a su aturdimiento
+     * (`boar_charge_hit`, :178-184). El caso `animacion` sigue poniendo el
+     * suyo y devolviendo éste al acabar.
+     */
+    if (combate) {
+      g.alHacerDano = (p) => {
+        const m = this.manadaEnchufada;
+        if (!m) { g.danoCuenta.sinGancho++; return { porQue: "sin manada enchufada" }; }
+        return m._golpeDelGuion(instancia, p);
+      };
+    }
     caja.guion = g;
     this.guionesVivos.set(clave, g);
     return g;
@@ -723,7 +780,12 @@ export class InteraccionesNpc {
     const nombre = jugador?.personaje?.nombre ?? "You";
     // `frase()` es la del 61: `Ana says,  "hola"`, con las dos espacios del mod.
     const linea = frase(nombre, limpio, HABLA.LOCAL);
-    this.suceso?.("normal", linea.replace(/\n$/, ""));
+    // EL 95: con la sesión del que habla. Con servidor esta línea iba a
+    // `hablandoCon`, y quien escribe en el chat no abre ningún menú: lo medió
+    // la sonda del 95, con Beto leyendo en su consola el «Ana says» de Ana a
+    // 527 unidades porque Beto había sido el último en pulsar la F. (Y
+    // `yaDicho`, que llega desde el chat, no lo lee nadie: doc/RED_95.md §8.)
+    this.suceso?.("normal", linea.replace(/\n$/, ""), { sesion });
 
     const pies = this.dondeEstaElJugador?.() ?? null;
     const todos = this.losNpc?.() ?? [];

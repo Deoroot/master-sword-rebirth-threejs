@@ -145,6 +145,14 @@ bicho, su anchura, y despacha `caza` y `puede`.
   `pev->framerate` queda en 0 (msmonsterserver.cpp:2079). La araña se queda en
   el fotograma 12 de su ataque para siempre. Lo destapó la prueba del 92, que
   ponía al jugador a 30 unidades desde el primer instante.
+
+  > **Corrección del 95.** El mecanismo es del mod; el mordisco antes del
+  > primer segundo, no. Era de este puerto, cuyo cazador pensaba en el primer
+  > paso. La araña es de la IA vieja: su primer `hunting_mode_go` corre en el
+  > primer fotograma pero aborta en `if NPC_INITIALIZED`
+  > (base_npc_attack.script:71), y no vuelve a correr hasta los 2,8 s
+  > (`repeatdelay CYCLE_TIME`, :62-63), cuando `BASE_FRAMERATE` ya existe. Por
+  > la caza no puede pasar. `test/salto93a` mide ahora eso; ver doc/IA_95.md.
 - **El golpe que la suelta no cancela el `callevent 4`**: a los 4 s de pegarse
   `spider_latch_drop` vuelve a correr (`SPIDER_LATCHING` sigue a 1 hasta el
   reset) y rebobina la caída.

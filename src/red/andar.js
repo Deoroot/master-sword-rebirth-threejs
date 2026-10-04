@@ -17,6 +17,7 @@
 
 import { atributosDe, derivadas } from "../juego/stats.js";
 import { carga as cargaDe } from "../juego/inventario.js";
+import { loQueLleva } from "../juego/personaje.js";
 import {
   velocidadAndando, velocidadCorriendo, ajustarVelocidad, puedeCorrer,
   AGUANTE_CORRIENDO, regeneracionDeAguante,
@@ -32,7 +33,10 @@ export function vitalesDe(personaje, porId = null) {
   // El peso hace falta de verdad: `velocidadAndando` lo mira. Sin el catálogo
   // de objetos, el servidor creería que todo el mundo va ligero.
   if (porId) {
-    const fichas = (personaje.objetos ?? []).map((o) => ({ ...o, ficha: porId.get(o.id) ?? null }));
+    // EL 97: con lo de las manos, igual que `vitalesDelPersonaje` del navegador:
+    // desde la versión 2 del registro lo empuñado no está en `objetos`, y si los
+    // dos lados no pesan lo mismo andan a velocidades distintas.
+    const fichas = loQueLleva(personaje).map((o) => ({ ...o, ficha: porId.get(o.id) ?? null }));
     peso = cargaDe(fichas, d.carga).peso;
   }
   return { agilidad: atr.agility ?? 0, fuerza: atr.strength ?? 0, peso, carga: d.carga, aguanteMax: d.aguanteMax };

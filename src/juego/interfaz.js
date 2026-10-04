@@ -15,7 +15,7 @@
 // lo cierra.
 
 import { ATRIBUTOS, PROPIEDADES, ESCUELAS, expNecesaria, propiedadesDe, aporteDe } from "./stats.js";
-import { resumen } from "./personaje.js";
+import { resumen, loQueLleva } from "./personaje.js";
 import { exportar, importar } from "./almacen.js";
 import { carga } from "./inventario.js";
 import { ESTADO, IMPUESTO_DE_MUERTE } from "./sesion.js";
@@ -534,7 +534,7 @@ export function montarInterfaz({ sesion, catalogo = null, teclas = null, cuerpos
     for (const [k, v] of [["Health", `${p.vida ?? r.derivadas.vidaMax} / ${r.derivadas.vidaMax}`],
       ["Mana", `${p.mana ?? r.derivadas.manaMax} / ${r.derivadas.manaMax}`],
       ["Stamina", r.derivadas.aguanteMax.toFixed(1)],
-      ["Weight", `${carga(p.objetos.map((o) => ({ ...o, ficha: ficha(o.id) })), r.derivadas.carga).peso} / ${r.derivadas.carga}`],
+      ["Weight", `${carga(loQueLleva(p).map((o) => ({ ...o, ficha: ficha(o.id) })), r.derivadas.carga).peso} / ${r.derivadas.carga}`],
       ["Gold", String(p.oro)]]) {
       der.appendChild(el("span", { texto: k, title: FORMULA[k] ?? null }));
       der.appendChild(el("span", { clase: k === "Gold" ? "mx-n mx-oro" : "mx-n", texto: v, title: FORMULA[k] ?? null }));

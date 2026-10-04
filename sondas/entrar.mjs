@@ -63,7 +63,13 @@ export async function entrarPorElMenu(pag, PORT, {
   // algún día—. Van en la URL de partida y sobreviven, porque elegir el mapa
   // por omisión no recarga: sólo recarga cambiar de mapa.
   const base = origen ?? `http://localhost:${PORT}`;
-  await pag.goto(`${base}/${extra ? `?${extra}` : ""}`, { waitUntil: "load" });
+  // El plazo, el mismo `timeout` largo y no los 30 s de Playwright (el 98).
+  // La primera carga es la que paga las transformaciones de `vite`, y antes
+  // las sondas dormían 6-8 s a ciegas ANTES de llegar aquí; con `arrancarVite`
+  // llegan en cuanto contesta, y con la máquina al 90 % de CPU (otras sesiones)
+  // `muerte41` y `pantalla95` se cayeron en este `goto` a los 30 s. Un `goto`
+  // lento no es un rojo del juego; uno colgado sigue cayéndose, a los 4 min.
+  await pag.goto(`${base}/${extra ? `?${extra}` : ""}`, { waitUntil: "load", timeout });
   await esNuestro(pag, PORT);
   await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout });
 
@@ -119,9 +125,26 @@ export async function entrarPorElMenu(pag, PORT, {
   // Cambiar de mapa recarga la página; quedarse en el mismo, no. Las dos son
   // correctas, así que se espera a lo que de verdad importa —estar dentro— y
   // se informa de cuál pasó, en vez de exigir una de las dos.
-  let recargo = true;
-  try { await pag.waitForURL((u) => String(u) !== antes, { timeout: 8000 }); }
-  catch { recargo = false; }
+  //
+  // ── SIN EL RELOJ DE 8 s — el 98 ─────────────────────────────────────────
+  //
+  // Esto era `waitForURL(…, { timeout: 8000 })` y «no recargó» se deducía de
+  // que se AGOTARA. Con el mapa del fondo —Gate City, el de casi todas las
+  // sondas— eso son **8 s muertos en cada entrada**, siempre, medidos el 98:
+  // 8 002 ms de los 13,9 s de entrar. Ahora se pregunta por las dos salidas a
+  // la vez y gana la primera. No hay carrera: al cambiar de mapa «Start» pone
+  // `location.search` y retorna ANTES de esconder el menú (src/main.js:3055),
+  // así que la página vieja nunca parece «dentro».
+  let recargo = false;
+  const limite = Date.now() + timeout;
+  for (;;) {
+    if (pag.url() !== antes) { recargo = true; break; }
+    const dentro = await pag.evaluate(() => document.querySelector(".ms-menu")?.hidden === true
+      && window.probe?.vgui?.abierto?.() === "newchar").catch(() => false);
+    if (dentro && pag.url() === antes) break;
+    if (Date.now() > limite) throw new Error("«Start» no recargó ni metió en la partida");
+    await new Promise((r) => setTimeout(r, 100));
+  }
   if (recargo) await pag.waitForFunction(() => window.probe?.ready === true, null, { timeout });
 
   // SE ESPERA AL EFECTO, NO A UN RELOJ. Montar los 69 NPC tarda 5 610 ms

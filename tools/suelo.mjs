@@ -146,6 +146,26 @@ for (const mapa of MAPAS) {
   }
 }
 
+// LA CUARTA VÍA: TODO LO QUE SE PUEDE EMPUÑAR — el 96.
+//
+// Desde que `tools/armas.mjs` hornea las 209 armas y hechizos del catálogo, un
+// jugador puede llevar en la mano cualquiera de ellas, y la `c` la suelta. Si
+// aquí no estaba, `Suelo.tirar` devolvía `null` («objeto_sin_guion») y
+// `soltarDelInventario` se callaba: la Novablade **se quedaba en la mano** y no
+// pasaba nada. Sale de la misma lista que `armas.mjs` —`arma` o `hechizo` en
+// `objetos.json`—, así que crecen juntas.
+//
+// El navegador NO carga estas al entrar (`cargarSuelo` las marca perezosas por
+// esta etiqueta): son doscientas y se pide cada una la primera vez que cae.
+const EMPUNABLE = "empuñable";
+{
+  const ruta = "build/msr/objetos.json";
+  if (existsSync(ruta)) {
+    const { objetos: todos } = JSON.parse(readFileSync(ruta, "utf8"));
+    for (const o of todos ?? []) if (o.tipo === "arma" || o.tipo === "hechizo") apunta(o.id, EMPUNABLE);
+  }
+}
+
 console.log(`\nlo que puede acabar en el suelo — ${pedidos.size} guiones distintos\n`);
 
 const objetos = [];
@@ -166,6 +186,8 @@ for (const [guion, mapas] of [...pedidos].sort()) {
     peso: f.peso, valor: f.valor, tipo: f.tipo,
     modelo: rel || null, cuerpo, animacion: f.enElMundo.animacionSuelo,
     sinLeer: f.enElMundo.sueloSinLeer, clave: null, submodelo: null, bytes: 0,
+    // EL 97: su `game_fall` hace `deleteme` (`caidaDe`): se borra al soltarlo.
+    seBorraAlCaer: Boolean(f.enElMundo.seBorraAlCaer),
   };
 
   if (!rel || rel === "none" || cuerpo === null) {
@@ -233,11 +255,17 @@ const SIN_FLOOR_PORQUE_EL_MOD = {
   skin_boar: "base_miscitem: su `if` compara contra 'misc/p_misc.mdl' con comillas simples y nunca es cierto",
   skin_boar_heavy: "igual que skin_boar",
   skin_ratpelt: "igual que skin_boar",
+  // Dos del 96, con la cita entera en `SIN_FAMILIA_PORQUE_EL_MOD` de
+  // tools/armas.mjs, que es el control que las encontró. (Los guanteletes de
+  // hierro caen en `pole_floor`, que SÍ se llama `_floor`: aquí no hacen falta,
+  // y lo suyo es `BORRA_AL_CAER`, más abajo.)
+  blunt_staff_f_old: "MODEL_BODY_OFS 28 ya es un `_floor`; el +2 cae en `affliction_rhand` (blunt_staff_f_old.script:24)",
+  bows_crossbow_heavy33: "NO_WORLD_MODEL 1 resta uno (base_weapon.script:65): cae en `xbow_p_lefthand`",
 };
 for (const o of objetos) {
   if (!o.submodelo || o.submodelo.de === 1) continue;
   if (SIN_FLOOR_PORQUE_EL_MOD[o.id]) {
-    console.log(`    ··   el ${o.id} cae en el submodelo 0 Y ESO ES FIEL      ${SIN_FLOOR_PORQUE_EL_MOD[o.id]}`);
+    console.log(`    ··   el ${o.id} cae en \`${o.submodelo.nombre}\` Y ESO ES FIEL      ${SIN_FLOOR_PORQUE_EL_MOD[o.id]}`);
     continue;
   }
   control(`el ${o.id} del suelo cae en un submodelo \`_floor\``,
@@ -270,11 +298,52 @@ control(`la fórmula \`mano+2\` NO vale: falla en alguno`,
 // 3. Un objeto con animación tiene que traerla emitida: sin ella se dibuja en
 //    el fotograma 0 de la secuencia 0, que en `p_misc.mdl` es `idle` y no es la
 //    suya. No da error: da una manzana en la postura de otra cosa.
+//
+//    EL 96: con las armas entran tres casos que este control no podía ver con
+//    trece objetos. Los que NO TIENEN modelo del mundo (`fist_bare`,
+//    `base_weapon_new`) no tienen nada que animar: los cuenta el control 4 de
+//    abajo. El huérfano (`HUERFANOS`) tampoco, y lo cuenta también el 4. Y los
+//    dos guanteletes de hierro se BORRAN al caer (`BORRA_AL_CAER`): su animación
+//    `gauntlets_floor_idle` no existe en `p_weapons3.mdl` porque en el juego no
+//    llegan a posarse. Que aquí sí se posen es un PENDIENTE de `src/play/suelo.js`.
+const HUERFANOS = {
+  crossbow_heavy: "sus tres modelos (weapons/bows/v_, p_ y w_crossbow.mdl) no existen en assets/msr " +
+    "y ningún guion ni mapa nombra el objeto: es un resto del mod que el motor ni podría precachear",
+};
+const BORRA_AL_CAER = {
+  blunt_gauntlets_fe1: "`game_fall` -> `deleteme` (blunt_gauntlets_fe1.script:242-244)",
+  blunt_gauntlets_fe2: "incluye blunt_gauntlets_fe1 (blunt_gauntlets_fe2.script:81)",
+};
 for (const o of objetos) {
   if (!o.animacion) continue;
+  if (!o.modelo || o.modelo === "none" || HUERFANOS[o.id]) continue;
+  if (BORRA_AL_CAER[o.id]) {
+    console.log(`    ··   ${o.id} no se posa nunca: ${BORRA_AL_CAER[o.id]} — el 97: \`Suelo.tirar\` lo borra`);
+    continue;
+  }
   control(`${o.id} trae su animación de estar tirado`,
     (o.secuencias ?? []).includes(o.animacion),
     `${o.animacion}: ${(o.secuencias ?? []).join(", ") || "ninguna emitida"}`);
+}
+// EL 97: la lista POR NOMBRE de arriba y lo que LEE `caidaDe` (`deleteme` en el
+// `game_fall`) tienen que ser lo mismo. Si un guion nuevo se borra al caer, o
+// si el lector deja de verlo en los guanteletes, esto se pone rojo.
+//
+// La primera pasada se puso ROJA con el trabajo bien hecho: además de los dos
+// guanteletes, `caidaDe` lee `deleteme` en los 31 HECHIZOS (`magic_hand_*`,
+// todos heredan el `game_fall` de su base). Y es verdad, y además en el motor ni
+// llegan ahí: `Drop` de un hechizo lo deshace antes de `FallInit` («Dropping
+// spells fizzles them», genericitem.cpp:1371-1376). Así que la lista por
+// nombre es de los que NO son hechizos, y los hechizos se exigen todos.
+{
+  const leidos = objetos.filter((o) => o.seBorraAlCaer && o.tipo !== "hechizo").map((o) => o.id).sort();
+  const nombrados = Object.keys(BORRA_AL_CAER).sort();
+  control("los que se borran al caer (no hechizos) son los que lee `caidaDe` (deleteme)",
+    leidos.join(",") === nombrados.join(","), `leídos ${leidos.join(", ") || "ninguno"}`);
+  const hechizos = objetos.filter((o) => o.tipo === "hechizo");
+  const borran = hechizos.filter((o) => o.seBorraAlCaer).length;
+  control("y los hechizos también se borran al caer", hechizos.length > 0 && borran === hechizos.length,
+    `${borran} de ${hechizos.length}`);
 }
 
 // 4. Y que no se quede ninguno sin modelo **de los que el motor dibujaría**.
@@ -289,7 +358,13 @@ for (const o of objetos) {
 //    se convierta en «los que he conseguido extraer».
 {
   const sinMundo = objetos.filter((o) => !o.modelo || o.modelo === "none");
-  const mudos = objetos.filter((o) => !o.clave && !sinMundo.includes(o));
+  const mudos = objetos.filter((o) => !o.clave && !sinMundo.includes(o) && !HUERFANOS[o.id]);
+  for (const id of Object.keys(HUERFANOS)) {
+    const o = objetos.find((x) => x.id === id);
+    if (o) console.log(`    ··   ${id} sin malla Y ES DEL MOD — ${HUERFANOS[id]}`);
+    // La salida de la exención: si un día el modelo aparece, sobra.
+    if (o) control(`la exención de huérfano de ${id} sigue haciendo falta`, !o.clave, o.clave ?? "sin malla");
+  }
   control(`todos los que TIENEN modelo del mundo traen malla`,
     mudos.length === 0, mudos.length ? mudos.map((o) => o.id).join(", ") : "ninguno sin malla");
   control(`y los que no, el motor tampoco los dibuja (EF_NODRAW)`,
