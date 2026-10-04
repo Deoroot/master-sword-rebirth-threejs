@@ -1,5 +1,63 @@
 # Dónde se quedó esto
 
+> **EL 100: LOS PENDIENTES DEL 99, POR CUATRO AGENTES A LA VEZ.**
+> (A) `PM_CheckStuck` y los bichos dentro, también en el navegador
+> ([doc/ATASCO_100.md](doc/ATASCO_100.md)): `PasoLocal` (src/play/atasco.js,
+> como cliente: los 54 empujoncitos, pm_shared.cpp:1876-1900) y el servidor
+> llaman a las MISMAS `atascarse`/`bichosDentro`/`encender`. Dos fallos de
+> Rapier que el 99 también tenía —1 de cada 7 salidas de un bicho dejaba al
+> jugador clavado en su borde—: (a) `setEnabled(false)` no llega a las consultas
+> hasta el siguiente `world.step` (→ `updateSceneQueries`); (b) el controlador no
+> se aparta de nada dentro de su piel de 2 cm (→ NUESTRO: el cilindro apartado
+> sigue apartado hasta estar a más de dos pieles). 0 de 1 500 salidas clavadas
+> (60 de 400 en el estado del 99). El «sale andando» del 99 medía sólo con el
+> bicho centrado: verde vacío. Sonda `atasco100` 11/11.
+> (B) Maná y armas ([doc/ARMAS_100.md](doc/ARMAS_100.md)): `mpdrain` se cobra al
+> EMPEZAR el ataque (`UseAmmo` desde `StartAttack`, giattack.cpp:392, 897-908),
+> 18 ataques de 11 armas, «You don't have enough MP»; el lector hace las cuentas
+> del guion (`add`/`multiply`/`if … add`) para `reqskill` y `mpdrain`: 177
+> ataques de 116 armas piden más (lanza 35→39, cargado del Quarterstaff 0→2);
+> cada proyectil con su modelo (18 de 37 municiones), sin modelo vuela sin
+> dibujar (`sinPieza`); el Orion Bow con su bola `proj_mana2`
+> (src/play/orion.js). Sonda `armas100` 20/20.
+> (C) Los dos rojos viejos eran de la sonda ([doc/ROJOS_100.md](doc/ROJOS_100.md)):
+> `fisica` contaba `.mx-tecla`, la pantalla de reserva que desde el 33 no sale
+> porque la ventana VGUI2 está montada (19/19 leyendo la pestaña «Keyboard»);
+> `armas96` no se reprodujo en 8 pasadas, y mover la cámara 0,3 u entre fotos
+> da exactamente ese rojo — ahora hay un control de cámara quieta (35/35).
+> (D) El cuelgue del servidor ([doc/SERVIDOR_100.md](doc/SERVIDOR_100.md)): con
+> la CPU al 100 % colgaba 5 de 6; la causa era el `setEnabled` de (A), y la cola
+> crecía sin tope porque el tope del 99 es por mensaje — ahora además
+> `TOPE_MS_POR_SEGUNDO` por cliente (src/red/partida.js). Dos fallos de guardar
+> (src/red/archivos.js): dos guardados del mismo personaje compartían el `.tmp`
+> (12 de 40), y más reintentos para EPERM. Nacimiento de Gate City otra vez bajo
+> un rayo (`*37`): `bajoElRayo` en tools/aparicion.mjs busca el sitio más
+> cercano donde cabe la caja — el motor no lo hace (`IsSpawnPointValid` siempre
+> TRUE, player.cpp:2277-2311), el punto es nuestro. Sonda `nacer100` 8/8.
+>
+> **Pendiente del 100:** (1) cuentas sin aplicar: `multiply dmg` (187, choca con
+> el multiplicador de carga de `Brazo`), `energydrain` (190), `hitchance` (51),
+> `range` (6), `delay` (12). (2) Con servidor, ni `mpdrain` ni la bola de Orion.
+> (3) La bola sin sonidos, sin efecto de carga, sin daño propio ni parry;
+> `magic_hand_*` hornean 0 ataques (su `SPELL_MPDRAIN` no se cobra). (4) Paradas
+> de 1-14 s con la CPU llena: la fauna y el `avanzar` de 100 pasos; el tope es
+> por cliente (N clientes rotos, N×250 ms). (5) EPERM sin prueba roja.
+> (6) `salto99` 10/11 en 2 de 3 (de D), `armas96` suelta/recoge rojo 3 veces:
+> sin atribuir. (`arco` 39/40 SÍ: tiraba siempre a +X y desde el nacimiento
+> nuevo hay piedra a 1,3 m; ahora busca un rumbo con 8 m libres a ±12°, 40/40 ×2,
+> y forzado a +X vuelve el rojo — ver [doc/ROJOS_100.md](doc/ROJOS_100.md).)
+>
+> Integrado: `npm test` 3 071/3 073 (0 rojas); 12 sondas con `-j 1`: 11 verdes
+> y `arco`, arreglada arriba. atasco100 11, armas100 20, nacer100 8, fisica 19,
+> armas96 35, salto99 11, reaparecer99 9, red99 9, red95 12, aturdir98 18,
+> armas99 18.
+> (7) `fisica` entra todavía por `?map=`. (8) Los bichos aún ENTRAN en el
+> jugador (el motor lo impide en `SV_movestep` con `MOVE_NORMAL`; aquí sólo se
+> les ignora una vez dentro); puertas y plataformas, cinemáticas también, se
+> apartarían igual; `src/red/cliente.js` aún llama a `cuerpo.step`. (9) red95
+> 11/12 en «la F de Beto abre SU menú», sin medir sin el 100.
+> Siguen los del 98 (5)-(8).
+
 > **EL 99: LOS PENDIENTES PRINCIPALES DEL 98, Y LA FIDELIDAD DEL GUION.** El
 > usuario pidió cerrar primero los pendientes principales y, en lo demás,
 > **imitar a MSR** aunque se pierdan cosas. Cinco agentes:

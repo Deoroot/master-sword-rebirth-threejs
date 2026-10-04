@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { esNuestro, liberarPuerto, arrancarVite } from "./mismo.mjs";
 import { mkdirSync } from "node:fs";
+import { ACCIONES } from "../src/juego/teclas.js";
 
 const PORT = 5195;
 // Se mata a quien estuviera en el puerto ANTES de arrancar el nuestro.
@@ -187,12 +188,41 @@ control("una tecla sólo puede hacer una cosa",
   conflicto.robadaA.includes("adelante") && conflicto.adelanteDespues === null);
 
 await pag.screenshot({ path: "build/gatecity/vistas/fisica.png" });
-await pag.evaluate(() => window.probe.personaje.opciones());
+// ── la pantalla de las teclas ─────────────────────────────────────────────
+//
+// EXPERIMENTO 100. Este control contaba `.mx-tecla`, que es la clase de la
+// pantalla SUPLENTE de `src/juego/interfaz.js`. Desde el 33 esa pantalla sólo
+// sale si la ventana de VGUI2 no está montada (`if (panelDeOpciones?.())`,
+// interfaz.js:740), así que con el juego bien el control leía 0: medía la
+// ausencia de la ventana buena. Ver doc/ROJOS_100.md.
+//
+// Ahora se hace lo que hace el jugador: la tecla de «opciones» del mapa de
+// teclas, la pestaña «Keyboard» con el ratón, y se cuentan las filas de la
+// tabla «Master Sword Commands» comparándolas con `ACCIONES` (src/juego/teclas.js), que es de donde las pinta la ventana.
+const teclaOpciones = t.opciones;
+await pag.keyboard.press(teclaOpciones);
 await pag.waitForTimeout(400);
+const abierta = await pag.evaluate(() => window.probe.vgui2.estado()?.opciones ?? null);
+const pestanaTeclas = await pag.$$eval(".v2-pestana", (ns) => ns.findIndex((n) => n.textContent === "Keyboard"));
+if (pestanaTeclas >= 0) await pag.click(`.v2-pestana:nth-child(${pestanaTeclas + 1})`);
+await pag.waitForTimeout(200);
 await pag.screenshot({ path: "build/gatecity/vistas/ui-opciones.png" });
+const tabla = await pag.evaluate(() => {
+  const cab = [...document.querySelectorAll(".v2-ventana div")]
+    .find((d) => d.firstChild?.textContent === "Master Sword Commands" && d.children.length === 3);
+  const filas = cab?.nextElementSibling ? [...cab.nextElementSibling.children] : [];
+  return {
+    pestana: window.probe.vgui2.estado()?.opciones?.pestana ?? null,
+    nombres: filas.map((f) => f.firstChild?.textContent ?? ""),
+  };
+});
+const esperadas = ACCIONES.map((a) => a.nombre);
+console.log(`  opciones (${teclaOpciones}):     ventana ${abierta ? "abierta" : "NO"} · pestaña ${tabla.pestana} · ` +
+  `${tabla.nombres.length} filas de ${esperadas.length} acciones · primera «${tabla.nombres[0] ?? ""}»`);
 control("la pantalla de opciones se abre y lista las acciones",
-  (await pag.evaluate(() => document.querySelectorAll(".mx-tecla").length)) >= 15,
-  `${await pag.evaluate(() => document.querySelectorAll(".mx-tecla").length)} acciones`);
+  abierta !== null && tabla.pestana === "Keyboard" && tabla.nombres.length >= 15 &&
+    JSON.stringify(tabla.nombres) === JSON.stringify(esperadas),
+  `${tabla.nombres.length} de ${esperadas.length} acciones en «Keyboard»`);
 
 console.log("\n  CONTROLES");
 for (const c of controles) console.log(`  ${c.bien ? "ok  " : "MAL "} ${c.que.padEnd(50)} ${c.detalle}`);

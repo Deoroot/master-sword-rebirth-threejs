@@ -157,6 +157,21 @@ try {
       window.probe.mundo.mirar(s[0], s[1] - 1.5, s[2] - 2);
     });
     await pag.waitForTimeout(400);
+    // EL 100: QUIETO DE VERDAD, no «400 ms después». Medido: tras `poner` el
+    // jugador a veces seguía moviéndose 0,15 u durante las fotos, y en esta
+    // sala (texturas de mucho grano) 0,3 u de cámara dan un 17 % «fuera» y
+    // 1 u un 33 %. Se espera a que los pies no se muevan en cinco lecturas
+    // seguidas; si no se paran en 5 s se sigue y lo dice el control de la
+    // cámara de abajo, con su nombre.
+    await pag.evaluate(async () => {
+      let antes = null, quietas = 0;
+      for (let k = 0; k < 50 && quietas < 5; k++) {
+        await new Promise((res) => setTimeout(res, 100));
+        const f = [...window.probe.player.feet];
+        quietas = antes && Math.hypot(f[0] - antes[0], f[1] - antes[1], f[2] - antes[2]) < 1e-4 ? quietas + 1 : 0;
+        antes = f;
+      }
+    });
   }
   async function foto(nombre) {
     await pag.waitForTimeout(120);
@@ -234,6 +249,17 @@ try {
     // mientras se fotografiaba, no donde estuvo un segundo antes. `exceso` dice
     // cuántos píxeles añadieron esas lecturas, que es la medida de la hipótesis.
     const leer = () => pag.evaluate(() => window.probe.vista.rectangulo("arma"));
+    // EL 100: la cámara, leída antes de la primera foto y después de la última.
+    // «Fuera» supone que lo ÚNICO que cambia entre `con` y `sin` es el arma; si
+    // la cámara se mueve una fracción de unidad, cambia la sala entera y el
+    // rojo acusaría al arma. Ver doc/ROJOS_100.md.
+    const pose = () => pag.evaluate(() => {
+      const c = window.probe.camera;
+      c.updateMatrixWorld();
+      return { p: c.getWorldPosition(c.position.clone()).toArray(), q: c.getWorldQuaternion(c.quaternion.clone()).toArray() };
+    });
+    const U = await pag.evaluate(() => window.probe.level.unitsPerMetre);
+    const pose0 = await pose();
     const unir = (a, b) => (b ? { ...a, x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) } : a);
     let u = r;
     u = unir(u, await leer());
@@ -245,6 +271,9 @@ try {
     u = unir(u, await leer());
     const con2 = await foto(`${nombre}-con2`);
     u = unir(u, await leer());
+    const pose1 = await pose();
+    const camMovida = Math.hypot(...pose1.p.map((x, i) => x - pose0.p[i])) * U;
+    const camGirada = 2 * Math.acos(Math.min(1, Math.abs(pose1.q.reduce((a, x, i) => a + x * pose0.q[i], 0)))) * 180 / Math.PI;
     const exceso = Math.round(Math.max(0, r.x0 - u.x0) + Math.max(0, r.y0 - u.y0) + Math.max(0, u.x1 - r.x1) + Math.max(0, u.y1 - r.y1));
     const v = { x0: Math.max(0, Math.floor(u.x0)), y0: Math.max(0, Math.floor(u.y0)),
       x1: Math.min(u.ancho, Math.ceil(u.x1)), y1: Math.min(u.alto, Math.ceil(u.y1)) };
@@ -257,6 +286,7 @@ try {
     const m8x = 0.1 * (v8.x1 - v8.x0), m8y = 0.1 * (v8.y1 - v8.y0);
     const ancha8 = { x0: v8.x0 - m8x, y0: v8.y0 - m8y, x1: v8.x1 + m8x, y1: v8.y1 + m8y };
     return {
+      camMovida, camGirada,
       exceso, fuera8: cambian(con1, sin, ancha8, { fuera: true }),
       r: v, area: ((v.x1 - v.x0) * (v.y1 - v.y0)) / (r.ancho * r.alto),
       // `con/sin` dentro y fuera, y `sin/con2` dentro: que vuelva al enseñarla.
@@ -293,6 +323,12 @@ try {
       // «Fuera» es fuera de la ventana ENSANCHADA un 10 % por lado: la ventana se
       // toma un instante antes de las fotos y la Novablade respira tanto
       // (con/con 64 %) que el filo se salía de ella y daba un 1,4 % «fuera».
+      // EL 100: la condición de la de abajo, con su nombre. Con la cámara
+      // movida 0,3 u la de abajo da un 17 % «fuera» y acusaría al arma; así el
+      // rojo dice qué se movió. No es un listón más blando: las dos tienen que
+      // estar en verde.
+      control(`y la cámara no se mueve mientras se la fotografía (< 0,05 u, < 0,01°)`,
+        m.camMovida < 0.05 && m.camGirada < 0.01, `${m.camMovida.toFixed(3)} u, ${m.camGirada.toFixed(4)}°`);
       control(`y lo que cambia es ella: fuera de su ventana < 1 % y < 1/10 de dentro`,
         Number.isFinite(m.fuera) && m.fuera < 0.01 && m.fuera < m.senal / 10, pct(m.fuera));
     }

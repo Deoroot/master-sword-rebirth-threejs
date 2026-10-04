@@ -529,6 +529,35 @@ for (const a of armas?.armas ?? []) {
     if (s && s !== "none") pedidosDeCombate.add(s);
   }
 }
+// ── LO QUE SE TIRA, que no estaba — y por eso los arcos eran MUDOS ────────
+//
+// El bucle de arriba recorre `armas.armas` y lee `blandir`, que es
+// `SOUND_SWIPE`. Un arco no blande: SUELTA, y su sonido es `SOUND_SHOOT`
+// (`ranged_toss`, bows_base.script:56-58). Y la flecha es OTRO objeto, que vive
+// en `armas.flechas`, con su choque (`SOUND_HITWALL1/2`, proj_arrow_base.script:15-16)
+// y, en la del Fénix, su grito al salir (`svplaysound 0 5 SOUND_PHOENIX`,
+// proj_arrow_phx.script:54-57). Ninguna de las tres listas se recorría, así que
+// `weapons/bow/` no llegaba a `build/` ENTERA: ni la cuerda, ni la ballesta, ni
+// el flechazo contra la pared. El juego los pedía, el servidor contestaba que
+// no, y `Audio.fallos` lo apuntaba donde no miraba ninguna sonda.
+//
+// Y lo que suena al reventar un proyectil, que no es de ningún objeto sino de
+// su guion de cliente (`sound.play3d SOUND_BURST`, proj_arrow_phx_cl.script:49):
+// viene en `armas.estallidos`, de `src/play/fenix.js`.
+let deLoQueSeTira = 0;
+const pedirDeTiro = (s) => {
+  if (!s || s === "none") return;
+  if (!pedidosDeCombate.has(s)) deLoQueSeTira++;
+  pedidosDeCombate.add(s);
+};
+for (const a of armas?.armas ?? []) pedirDeTiro(a.sonidos?.disparo);
+for (const f of armas?.flechas ?? []) {
+  for (const s of [f.sonidos?.blandir, ...(f.sonidos?.contraPared ?? []), f.sonidos?.contraCarne]) pedirDeTiro(s);
+  for (const s of f.sonidos?.alSalir ?? []) pedirDeTiro(s.archivo);
+}
+for (const e of armas?.estallidos ?? []) pedirDeTiro(e.sonido);
+console.log(`  lo que se tira  ${deLoQueSeTira} sonidos más: el disparo de ${armas?.armas?.filter((a) => a.sonidos?.disparo).length ?? 0} armas, ` +
+  `${armas?.flechas?.length ?? 0} proyectiles y ${armas?.estallidos?.length ?? 0} estallidos`);
 const censo = leerSiEsta(`${SALIDA}/bichos.json`);
 for (const c of censo?.colocados ?? []) {
   for (const s of Object.values(c.ia?.sonidos ?? {}).flat()) if (s && s !== "none") pedidosDeCombate.add(s);

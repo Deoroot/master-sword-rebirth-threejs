@@ -441,6 +441,78 @@ function seVeDesde(a, b, ojo = 54, paso = 8) {
   return true;
 }
 
+// ── EL 100: APARTAR EL PUNTO DE LA PARED, SIN SALIR DE DEBAJO DEL RAYO ──────
+//
+// El 99 descubrió que de los 31 rayos de Gate City 28 no caben: son haces de
+// ventana que caen pegados a la pared, y su CENTRO deja la caja del jugador
+// (32×32×72, `VEC_HULL_MIN/MAX`, util.h:464-465) metida en ella. Los descartó,
+// y el nacimiento salió del rayo.
+//
+// Qué haría el motor con un punto así: NADA antes de ponerte. `IsSpawnPointValid`
+// devuelve `TRUE` siempre (player.cpp:2277-2311, con la comprobación de la caja
+// comentada) y `MoveToSpawnSpot` copia el origen tal cual más una unidad
+// (:2928-2945). El único que aparta es `PM_CheckStuck` (pm_shared.cpp:3183-3189,
+// con la tabla de `PM_CreateStuckTable`, :3406-3510), y sus empujones son de
+// 0,125, 1, 2 y 6 unidades: no saca a nadie de una pared en la que está 9 o 20
+// metido. O sea que en MSR ese sitio te deja congelado. **Lo que el motor da por
+// hecho es que el mapeador puso el punto donde cabe**; y como aquí el punto lo
+// elige esta herramienta y no el mapeador, la parte del mapeador es nuestra:
+// buscar, a partir del centro del rayo, el sitio más cercano donde la CAJA cabe
+// (`cabeDePie`, la misma pregunta que `PM_TestPlayerPosition` con el casco 1)
+// sin que el rayo deje de caer sobre ella.
+//
+// «Debajo del rayo» se mide con la caja y no con el centro: la huella del haz
+// (sus `mins`/`maxs` en x e y) tiene que METERSE en la planta de la caja, o
+// sea quedar a MENOS de media caja (16) en cada eje: a 16 justos la toca por el
+// canto y el haz cae al lado del jugador, no encima (la primera pasada eligió
+// así el `*48`, con la caja pegada al haz y 0 unidades de él dentro). Un haz de 8 unidades de ancho
+// pegado a la pared no deja que el CENTRO del jugador quede dentro y quepa a la
+// vez; exigirlo sería volver a descartarlos todos. Se busca en anillos de una
+// unidad (el cuadrado de Chebyshev) y gana el de menor distancia al centro.
+// Ninguno de estos números es nuevo: 16 es media caja y 18 un escalón
+// (`sv_stepsize`), el mismo tope con que `cabeDePie` busca el suelo.
+const MEDIA_CAJA = 16;
+const ESCALON = 18;
+/**
+ * El sitio más cercano al centro del rayo donde cabe el jugador con el haz
+ * cayéndole encima, o `null`. Devuelve también cuánto se ha apartado.
+ */
+function bajoElRayo(r) {
+  const [cx, cy, cz] = r.unidades;
+  const { mins, maxs } = r.huella;
+  // El haz cae dentro de la planta si en cada eje la distancia del centro a la
+  // huella es MENOS de media caja.
+  // Y no más lejos que el primer anillo de `apartar` (64 u, arriba): un haz
+  // ancho cuyo centro no cabe en 1,6 m a la redonda no es un charco de luz
+  // contra una pared, es un haz sobre otra cosa. Sin este tope, un rayo de
+  // Edana de cientos de unidades se recorría entero, unidad a unidad.
+  const tope = Math.min(64, Math.ceil(Math.max(maxs[0] - cx, maxs[1] - cy) + MEDIA_CAJA));
+  const tocaElHaz = (x, y) =>
+    Math.max(mins[0] - x, 0, x - maxs[0]) < MEDIA_CAJA &&
+    Math.max(mins[1] - y, 0, y - maxs[1]) < MEDIA_CAJA;
+  let mejor = null;
+  for (let k = 0; k <= tope; k++) {
+    // Un anillo de Chebyshev k contiene puntos a distancia euclídea de k a k√2:
+    // en cuanto lo hallado está más cerca que el borde interior del anillo, no
+    // puede haber nada mejor fuera.
+    if (mejor && mejor.apartado <= k) break;
+    for (let dx = -k; dx <= k; dx++) {
+      for (let dy = -k; dy <= k; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== k) continue;
+        const x = cx + dx, y = cy + dy;
+        if (!tocaElHaz(x, y)) continue;
+        const z = sueloBajo(bsp, [x, y, cz + ESCALON + 8]);
+        if (z === null || Math.abs(z - cz) > ESCALON) continue;
+        if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) continue;
+        if (!cabeDePie(bsp, [x, y, z])) continue;
+        const apartado = Math.hypot(dx, dy);
+        if (!mejor || apartado < mejor.apartado) mejor = { unidades: [x, y, z], apartado };
+      }
+    }
+  }
+  return mejor;
+}
+
 /** Los 31 rayos del mapa, con el suelo que tienen debajo. */
 function rayosDeLuz() {
   const salida = [];
@@ -454,6 +526,8 @@ function rayosDeLuz() {
     if (z === null) continue;
     const vistos = sacerdotes.filter((s) => seVeDesde([x, y, z], s.pies));
     salida.push({
+      modelo: e.model,
+      huella: { mins: [m.mins[0], m.mins[1]], maxs: [m.maxs[0], m.maxs[1]] },
       unidades: [x, y, z],
       alSuelo: m.mins[2] - z,
       alSacerdote: Math.min(...sacerdotes.map((s) => dist([x, y, z], s.pies))),
@@ -486,19 +560,24 @@ const rayosFuera = [];   // los descartados por no ser del templo: el control de
 const descartes = new Map();
 const descartar = (motivo) => descartes.set(motivo, (descartes.get(motivo) ?? 0) + 1);
 
+// EL 100: cuántos rayos se han salvado apartándolos, para los controles.
+const apartados = [];
 for (const r of rayos) {
-  const [x, y, z] = r.unidades;
-  if (!sePuedeEstar(bsp, [x, y, z + 8]) || !sePuedeEstar(bsp, [x, y, z + 68])) {
-    descartar("no se puede estar de pie debajo"); continue;
-  }
-  if (!cabeDePie(bsp, r.unidades)) { descartar("no cabe la caja del jugador debajo (casco 1)"); continue; }
   if (r.alSuelo > RAYO_AL_SUELO) { descartar(`se corta a más de ${RAYO_AL_SUELO} unidades del suelo`); continue; }
+  // EL 100: antes eran dos descartes —«no se puede estar de pie» y «no cabe la
+  // caja»— mirados en el CENTRO del rayo. Ahora se busca el sitio, y sólo se
+  // descarta el rayo si no hay ninguno debajo de él (`bajoElRayo`, arriba).
+  const sitio = bajoElRayo(r);
+  if (!sitio) { descartar("no cabe la caja del jugador en ningún sitio debajo (casco 1)"); continue; }
+  if (sitio.apartado > 0) apartados.push({ modelo: r.modelo, centro: r.unidades, ...sitio });
   const visible = Number.isFinite(r.alSacerdoteVisible);
   const m = medir(
-    r.unidades,
-    `rayo a ${r.alSacerdote.toFixed(1)} m del sacerdote${visible ? "" : " (no se le ve)"}`,
+    sitio.unidades,
+    `rayo a ${r.alSacerdote.toFixed(1)} m del sacerdote${visible ? "" : " (no se le ve)"}` +
+      (sitio.apartado > 0 ? ` (apartado ${sitio.apartado.toFixed(1)} u)` : ""),
     "rayo",
   );
+  m.rayo = { modelo: r.modelo, centro: r.unidades, huella: r.huella, apartadoUnidades: Number(sitio.apartado.toFixed(2)) };
   // Las mismas reglas duras que se le piden al punto del mapa, y por el mismo
   // motivo: aquí estaba escrito `!m.enPueblo` a secas, que en un mapa sin
   // `msarea_town` descarta TODOS los rayos sin haber mirado ninguno.
@@ -708,6 +787,31 @@ if (!seCambio) {
       ? `${aLaVista.length} a la vista, el más cercano a ${aLaVista[0].toFixed(1)} m`
       : "ninguno a la vista");
 }
+// EL 100: si el elegido es un rayo, el haz le cae ENCIMA: su huella toca la
+// planta de la caja (media caja en cada eje). Se recalcula desde la huella del
+// modelo y no se lee de `bajoElRayo`, que es lo que se comprueba.
+if (elegido.familia !== "rayo") {
+  noAplica("el rayo cae sobre la caja del jugador", "no se ha elegido un rayo");
+} else {
+  const { mins, maxs } = elegido.rayo.huella;
+  const [x, y] = elegido.unidades;
+  const fuera = [Math.max(mins[0] - x, 0, x - maxs[0]), Math.max(mins[1] - y, 0, y - maxs[1])];
+  control("el rayo cae sobre la caja del jugador", fuera[0] < MEDIA_CAJA && fuera[1] < MEDIA_CAJA,
+    `${elegido.rayo.modelo}: huella x ${mins[0]}..${maxs[0]}, y ${mins[1]}..${maxs[1]}; ` +
+    `el centro del jugador a ${fuera[0]} y ${fuera[1]} u de ella (menos de ${MEDIA_CAJA}) · ` +
+    `apartado ${elegido.rayo.apartadoUnidades} u del centro del haz`);
+}
+// Y el control de que apartar hace algo: sin él, «el rayo cabe» podría ser que
+// el centro ya cabía y `bajoElRayo` no se ha usado nunca.
+// Sólo donde los rayos han decidido algo: en un mapa cuyo punto se respeta (el
+// bosque tiene un rayo, que no cabe ni apartándolo) no hay nada que salvar.
+const noCabenEnSuCentro = rayos.filter((r) => !cabeDePie(bsp, r.unidades)).length;
+if (!seCambio) noAplica("apartar salva rayos que en su centro no caben", "se ha respetado el punto del mapa");
+else if (!noCabenEnSuCentro) noAplica("apartar salva rayos que en su centro no caben", "todos caben en su centro");
+else control("apartar salva rayos que en su centro no caben", apartados.length > 0,
+  `${apartados.length} de ${noCabenEnSuCentro} rayos que no caben en su centro, apartados de la pared` +
+  (apartados.length ? ` (de ${Math.min(...apartados.map((a) => a.apartado)).toFixed(1)} a ` +
+    `${Math.max(...apartados.map((a) => a.apartado)).toFixed(1)} u)` : ""));
 // El control positivo del anterior, y hay que leerlo con cuidado porque dice
 // menos de lo que parece: **en Gate City la línea de visión no descarta ni un
 // rayo.** Los seis que están a menos de RAYO_TEMPLO del sacerdote lo ven todos,

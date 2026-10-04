@@ -51,7 +51,7 @@ import { leerMdl, texturasDe, mallaDe, matrizDeAngulos, porMatriz, direccionPorM
 import { leerSecuencias, leerHuesos, clavesDeSecuencia, matricesEnFotograma, recorridoDeModelo, SE_MUEVE } from "../src/bsp/mdlanim.js";
 import { extraerBicho } from "./bicho.mjs";
 import { escribirPng } from "./png.mjs";
-import { mapaDeArgv, bspDe, salidaDe, creditoDe } from "./mapa.mjs";
+import { mapaDeArgv, bspDe, salidaDe, creditoDe, raizDeAssets } from "./mapa.mjs";
 
 // La ruta es el primer argumento que acabe en `.bsp`, no `argv[2]`: con
 // `--gamma 3.4` delante, `argv[2]` es «--gamma» y el lector intentaba abrirlo.
@@ -2089,7 +2089,7 @@ const alPueblo = pueblos.length
 // y `rock_07` a 17, un factor de diez— y lo que faltaba era la LLAMA: `Fire1.spr`
 // puesto 55 veces. El charco de luz en la roca lo teníamos; la fuente era
 // invisible.
-const RAIZ_ASSETS = RUTA.replace(/maps[\\/][^\\/]+$/, "");
+const RAIZ_ASSETS = raizDeAssets(RUTA);
 const carteles = [];
 const spritesLeidos = new Map();
 const spritesQueFaltan = new Set();
@@ -2276,7 +2276,7 @@ for (const e of entidades) {
   if (e.classname === "env_sprite" && e.model) adornos.sprites.push(e.model);
 }
 
-const RAIZ_MODELOS = RUTA.replace(/maps[\\/][^\\/]+$/, "");
+const RAIZ_MODELOS = raizDeAssets(RUTA);
 const mdlLeidos = new Map();
 const mdlQueFaltan = new Set();
 /**
@@ -2724,7 +2724,7 @@ const DETALLE = new Map();
       const ex = Number(sx), ey = Number(sy);
       if (!(ex > 0) || !(ey > 0)) continue;
       if (!porNombre.has(nombre.toLowerCase())) { sinTextura.push(nombre); continue; }
-      const tga = resolve(dirname(RUTA), "..", "gfx", `${rel}.tga`);
+      const tga = resolve(raizDeAssets(RUTA), "gfx", `${rel}.tga`);
       if (!existsSync(tga)) { sinFichero.add(rel); continue; }
       const archivo = `detail/${nombreArchivo(rel.replace(/^.*[\\/]/, ""))}.png`;
       if (!yaEscrito.has(archivo)) {
@@ -2754,7 +2754,7 @@ const DETALLE = new Map();
 // El CIELO: seis `.tga` de `gfx/env/`, en el orden que nombra GoldSrc.
 let cieloCaras = null;
 if (mundoSpawn.skyname) {
-  const dir = resolve(dirname(RUTA), "..", "gfx", "env");
+  const dir = resolve(raizDeAssets(RUTA), "gfx", "env");
   const caras = {};
   let faltan = [];
   for (const c of CARAS_DE_CIELO) {

@@ -139,10 +139,32 @@ control("y mientras tensa tiene puesta la secuencia de tensar",
 // arco van en el GUIÑO, y girar el guiño de un tiro casi vertical no cambia la
 // dirección. Medido hacia arriba, el desvío salía 4° —sólo el del cono— y parecía
 // que el `(0,9,0)` no llegaba. Llega; lo que no llegaba era la medición.
-const alHorizonte = async () => pag.evaluate(() => {
+//
+// EL 100: «al horizonte» era SIEMPRE +X, y eso medía dónde está la pared. Con el
+// nacimiento de Gate City otra vez bajo un rayo (`bajoElRayo`, tools/aparicion.mjs)
+// hay piedra a metro y medio en +X: la flecha volaba 50 u en 0,05 s y el control
+// de «vuela de verdad» salía rojo con el arco bien. Ahora se busca el primer rumbo
+// horizontal con 8 m libres en el centro y a ±12° —el desvío lateral del arco son
+// nueve grados más el cono—, y si no hay ninguno la sonda lo dice en vez de medir
+// una pared.
+const RUMBO = await pag.evaluate(() => {
   const d = window.probe.mundo.donde();
-  window.probe.mundo.mirar(d.ojo[0] + 4000, d.ojo[1], d.ojo[2]);
+  const L = 8;
+  const libreA = (a) => window.probe.arco.libre(d.ojo,
+    [d.ojo[0] + L * Math.cos(a), d.ojo[1], d.ojo[2] + L * Math.sin(a)]);
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * 2 * Math.PI;
+    const g = 12 * Math.PI / 180;
+    if (libreA(a) && libreA(a - g) && libreA(a + g)) return { a, grados: i * 360 / 32 };
+  }
+  return null;
 });
+if (!RUMBO) throw new Error("ningún rumbo horizontal con 8 m libres: la sonda mediría una pared");
+console.log(`  rumbo del tiro: ${RUMBO.grados.toFixed(1)}° (8 m libres a ±12°)`);
+const alHorizonte = async () => pag.evaluate((a) => {
+  const d = window.probe.mundo.donde();
+  window.probe.mundo.mirar(d.ojo[0] + 4000 * Math.cos(a), d.ojo[1], d.ojo[2] + 4000 * Math.sin(a));
+}, RUMBO.a);
 await alHorizonte();
 const tiro = await pag.evaluate(() => window.probe.arco.tirar(1.5, { espera: 1.2 }));
 console.log(`
@@ -241,14 +263,14 @@ control("y hay una flecha dibujada en el mundo, no sólo una cuenta",
 await pag.screenshot({ path: "build/gatecity/vistas/arco_clavada.png" });
 
 // Y el mismo tiro con el desvío arreglado: los nueve grados al cabeceo.
-const arregladoUno = await pag.evaluate(() => {
+const arregladoUno = await pag.evaluate((a) => {
   const d = window.probe.mundo.donde();
-  window.probe.mundo.mirar(d.ojo[0] + 4000, d.ojo[1], d.ojo[2]);
+  window.probe.mundo.mirar(d.ojo[0] + 4000 * Math.cos(a), d.ojo[1], d.ojo[2] + 4000 * Math.sin(a));
   window.probe.arco.ajustar({ desvioEnElGuino: false, veerDeMedioCirculo: false });
   const r = window.probe.arco.tirar(1.5, { espera: 1.2 });
   window.probe.arco.restaurar();
   return r;
-});
+}, RUMBO.a);
 console.log(`  arreglado: ${arregladoUno.desvioLateral?.toFixed(1)}° de lado, ` +
   `${arregladoUno.desvioVertical?.toFixed(1)}° de alto`);
 // El arreglo NO quita el desvío: lo pone donde hace falta. Nueve grados arriba

@@ -238,6 +238,46 @@ export function tipoEnElCable(tipo, esJugador = true) {
 }
 
 /**
+ * **A QUÉ CONSOLA VA UN RECADO DE UN GUION** — experimento 100.
+ *
+ * El HUD del mod tiene DOS `VGUI_EventConsole` y un `enum` para no confundirlas
+ * (`CON_EVENT`, `CON_SAYTEXT`, vgui_hud.cpp:86-90):
+ *
+ *     PrintEvent    -> m_Consoles[CON_EVENT]     abajo a la derecha   :304-307
+ *     PrintSayText  -> m_Consoles[CON_SAYTEXT]   a la izquierda       :310-313
+ *
+ * A la segunda sólo se llega por `HUD_SayTextEvent` (:586-591), que sólo llama
+ * el mensaje `HUDInfoMsg` de tipo 4 (:469-485), y ese mensaje **sólo lo escribe
+ * `CMSMonster::Speak`** (msmonsterserver.cpp:1700-1706 y :1721-1727; los otros
+ * `WRITE_BYTE(4)` del servidor son de `NETMSG_CLDLLFUNC` y `NETMSG_LOCALPANEL`,
+ * otros mensajes). O sea: **todo lo que se DICE va a la del chat y nada más va
+ * a ella** — el `saytext` de un NPC (npcscript.cpp:708-719), lo que escribe un
+ * jugador y la opción `say` de un menú (`pPlayer->Speak(MenuOption.Data,
+ * SPEECH_LOCAL)`). Un `playermessage`, un «You receive…» o el aviso de cambiar
+ * de canal (`SendEventMsg`, hudmisc.cpp:178) siguen en la de sucesos.
+ *
+ * Hasta aquí el `saytext` de los NPC salía en la de sucesos: el 60 escrito en
+ * CLAUDE.md —«una regla devuelve QUÉ y otra cosa decide DÓNDE»— en la pieza de
+ * al lado. La regla del qué estaba probada desde el 33; la del dónde no existía.
+ *
+ * Quien emite marca el recado y quien lo recibe (`src/main.js` en la partida de
+ * uno, `src/red/partida.js` con servidor) pregunta aquí:
+ *
+ *   `o.habla`   lo dice un NPC: `{ rango }`, y el tipo es `SAYTEXT_NPC` salvo
+ *               que traiga otro (`IsPlayer() ? SAYTEXT_LOCAL : SAYTEXT_NPC`,
+ *               msmonsterserver.cpp:1636).
+ *   `o.canal`   lo dice un jugador sin pasar por el cajetín (la opción `say`):
+ *               el número de `HABLA`.
+ *
+ * @returns {{panel: "chat", tipo: number} | {panel: "sucesos"}}
+ */
+export function panelDeRecado(o = null) {
+  if (o?.habla) return { panel: "chat", tipo: puedeMandar(o.habla.tipo) ? o.habla.tipo : HABLA.NPC };
+  if (puedeMandar(o?.canal)) return { panel: "chat", tipo: o.canal };
+  return { panel: "sucesos" };
+}
+
+/**
  * ¿Este oyente recibe esta frase? El bucle de `Speak`, en su orden.
  *
  *     if (pEnt->edict() == edict()) { ...enviar...; continue; }   // 1

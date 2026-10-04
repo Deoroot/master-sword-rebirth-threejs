@@ -251,10 +251,17 @@ console.log(`\n  controles`);
 //    este puerto lo reproduce. Pedirle un `_floor` sería pedirle que se vea
 //    mejor que el original. Se exime y se dice por qué, en vez de bajar el
 //    listón para todos: para un arma el control sigue mordiendo igual.
+//
+//    ── CORRECCIÓN (2026-10-04): LO DE ARRIBA ERA FALSO ──────────────────────
+//
+//    `GetConst` es de la CARGA del guion. Al ejecutar, cada parámetro pasa por
+//    `GetVar` (script.cpp:5745), que a un literal entre comillas simples le
+//    QUITA las comillas y no lo resuelve (script.cpp:4405-4409). La condición es
+//    cierta y los tres pellejos caen en su `_floor`, en el juego y —desde hoy—
+//    aquí. Lo vio el usuario: la rata del anexo soltaba una manzana que al
+//    cogerla era un pellejo. La exención se quita y el control vuelve a morder
+//    para ellos. La regla está en `caidaDe` (src/bsp/script.js).
 const SIN_FLOOR_PORQUE_EL_MOD = {
-  skin_boar: "base_miscitem: su `if` compara contra 'misc/p_misc.mdl' con comillas simples y nunca es cierto",
-  skin_boar_heavy: "igual que skin_boar",
-  skin_ratpelt: "igual que skin_boar",
   // Dos del 96, con la cita entera en `SIN_FAMILIA_PORQUE_EL_MOD` de
   // tools/armas.mjs, que es el control que las encontró. (Los guanteletes de
   // hierro caen en `pole_floor`, que SÍ se llama `_floor`: aquí no hacen falta,

@@ -24,7 +24,7 @@
 // Regla del 02, igual que siempre: se escribe el lector, lo extraído va a
 // `build/`, y ni un byte pasa a `public/`.
 
-import { writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { writeFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 
 import {
   leerBsp, leerModelos, leerTexinfo, leerEntidades, leerCaras, origen, aEscena,
@@ -38,11 +38,12 @@ import { tablasDeGamma, AJUSTES } from "../src/bsp/gamma.js";
 import { leerMdl, TAM } from "../src/bsp/mdl.js";
 import { extraerBicho, nombreArchivo, animacionesDelGuion } from "./bicho.mjs";
 import { ACT, animacionDeParado } from "../src/play/actividad.js";
+import { creablesDe } from "./creables.mjs";
 
-import { mapaDeArgv, bspDe, salidaDe } from "./mapa.mjs";
+import { mapaDeArgv, bspDe, salidaDe, scriptsDe } from "./mapa.mjs";
 const MAPA = mapaDeArgv();
 const RUTA = bspDe(MAPA);
-const SCRIPTS = "../MSC/MSCScripts/scripts";
+const SCRIPTS = scriptsDe(MAPA);
 const MODELOS = "../MSC/assets/msr/models";
 const SALIDA = salidaDe(MAPA);
 const TABLA = tablasDeGamma(AJUSTES).luz;
@@ -132,6 +133,63 @@ for (const e of puestos) {
 console.log(`  scripts         ${fichas.size} resueltos de ${new Set(puestos.map(guionDeEntidad).filter(Boolean)).size}`);
 if (sinScript.size) console.log(`    sin fichero   ${[...sinScript].map(([k, n]) => `${n}× ${k}`).join(", ")}`);
 if (sinModelo.size) console.log(`    sin setmodel  ${[...sinModelo].map(([k, n]) => `${n}× ${k}`).join(", ")}`);
+
+// --- 1b. LO QUE UN GUION PUEDE CREAR CON `createnpc` -----------------------
+//
+// «Any media used by createnpc <script_name> must be precached beforehand»
+// (scriptcmds.cpp:2765). Aquí «precargado» es HORNEADO: la ficha, el modelo y
+// el guion de lo creado tienen que estar en `build/<mapa>/` o el comando no
+// tiene con qué hacerlo (`MundoDeCreados.crear` lo cuenta en `sinFicha`).
+//
+// Se parte de los guiones de las criaturas colocadas en ESTE mapa y de los de
+// las armas del catálogo (`build/msr/armas.json`), que no son de ningún mapa:
+// la Blood Drinker lanza su invocación se empuñe donde se empuñe. Y se sigue en
+// cadena. Ver `tools/creables.mjs`, que dice también lo que no resuelve.
+//
+// Entran en `fichas` como una más, así que las vueltas de abajo —animaciones
+// del guion, extracción del modelo— las tratan igual que a un bicho del mapa.
+// Lo que no tiene modelo de verdad (`none`, `null.mdl`, un `PARAM1`) se cuenta
+// y se deja fuera: son efectos sin cuerpo, y crearlos pide otra pieza.
+const ARMAS_JSON = "build/msr/armas.json";
+const idsDeArmas = existsSync(ARMAS_JSON)
+  ? (JSON.parse(readFileSync(ARMAS_JSON, "utf8")).armas ?? []).map((a) => a.id) : [];
+const censoCreables = creablesDe([
+  ...[...fichas.keys()].map((ruta) => ({ ruta, de: "mapa" })),
+  ...idsDeArmas.map((id) => ({ ruta: `items/${id}`, de: "arma" })),
+], SCRIPTS);
+// Y cuáles de ésos salen de un guion DEL MAPA (y no sólo de un arma): sus
+// modelos se cargan al entrar, como los de los colocados. Los que sólo crea un
+// arma se cargan cuando esa arma se empuña (`aPeticion`, abajo), que es el
+// `precache` del motor: nueve megas de invocaciones no se le cobran a quien
+// entra al mapa con una espada corta.
+const creablesDelMapa = new Set(creablesDe(
+  [...fichas.keys()].map((ruta) => ({ ruta, de: "mapa" })), SCRIPTS).creables.keys());
+const creables = new Map();          // script -> { por }
+const creablesSinModelo = [];
+for (const [s, info] of censoCreables.creables) {
+  let m = fichas.get(s) ?? null;
+  if (!m) {
+    let f = null;
+    try { f = leerFichaNpc(SCRIPTS, s, { mapa: MAPA }); } catch { f = null; }
+    m = f ? modeloYAnimaciones(f) : null;
+    const ruta = m?.modelo ? `${MODELOS}/${m.modelo}` : null;
+    if (!m || !ruta || !/\.mdl$/i.test(m.modelo) || /(^|\/)null\.mdl$/i.test(m.modelo) || !existsSync(ruta)) {
+      creablesSinModelo.push(`${s} (${m?.modelo ?? "sin setmodel"})`);
+      continue;
+    }
+    fichas.set(s, m);
+  }
+  creables.set(s, { por: [...new Set(info.por)] });
+}
+console.log(`\n  createnpc       ${creables.size} guiones creables con modelo ` +
+  `(${[...creables.keys()].filter((s) => puestos.some((e) => guionDeEntidad(e) === s)).length} ya colocados en el mapa); ` +
+  `${creablesSinModelo.length} sin modelo que hornear; raíces: ${new Set(puestos.map(guionDeEntidad).filter(Boolean)).size} guiones del mapa y ${idsDeArmas.length} armas`);
+if (creablesSinModelo.length) console.log(`    sin modelo    ${creablesSinModelo.slice(0, 8).join(", ")}${creablesSinModelo.length > 8 ? `, y ${creablesSinModelo.length - 8} más` : ""}`);
+if (censoCreables.sinResolver.size) {
+  const nombres = new Map();
+  for (const lista of censoCreables.sinResolver.values()) for (const n of lista) nombres.set(n, (nombres.get(n) ?? 0) + 1);
+  console.log(`    sin resolver  ${[...nombres].map(([n, k]) => `${n} x${k}`).join(", ")} (el nombre del guion no es un literal ni una constante con ruta)`);
+}
 
 // --- 2. el `body` compuesto, que es lo que elige el hacha del enano ---------
 //
@@ -695,6 +753,47 @@ console.log(`\n  parado          ` +
   `${deDonde["por actividad ACT_IDLE"]} por ACT_IDLE, ` +
   `${deDonde["no hay ACT_IDLE: la secuencia 0"]} caen a la secuencia 0`);
 
+// --- LO CREABLE, con la forma de un colocado -------------------------------
+const fichasCreables = {};
+const aPeticion = new Set();
+{
+  let kb = 0;
+  const soloCreables = new Set();
+  for (const [s, info] of creables) {
+    const m = fichas.get(s);
+    const r = m?.clave ? emitidos.get(m.clave) : null;
+    if (!r) continue;
+    const relacion = relacionDeRazas(razas, m.ia?.raza, RAZA_DEL_JUGADOR);
+    const ia = m.ia ? { ...m.ia } : m.ia;
+    if (ia) ia.muerte = muerteQueExiste(ia.muerte, r.secuencias);
+    fichasCreables[s] = {
+      clase: "ms_npc",                 // `CREATE_NAMED_ENTITY("ms_npc")`, scriptcmds.cpp:2778
+      script: s, clave: m.clave, nombre: m.nombre, hp: m.hp,
+      ancho: m.ancho, alto: m.alto, parado: m.parado, andando: m.andando,
+      piel: m.piel ? m.piel.min : 0,
+      ia, relacion, hostil: esEnemigo(relacion),
+      // Los cuatro de `game_postspawn` con sus valores de reposo del motor
+      // (msmonsterserver.cpp:273-280): lo creado no tiene claves de mapa.
+      postspawn: { titulo: "default", dmgmulti: "1.00", hpmulti: "1.00", params: "none" },
+      paradoPorque: animacionDeParado({ nombrado: m.parado, secuencias: r.detalleSecuencias ?? [] }).porque,
+      por: info.por,
+      // ¿Lo crea algún guion del mapa, o sólo un arma? Ver `creablesDelMapa`.
+      delMapa: creablesDelMapa.has(s),
+    };
+    if (!colocados.some((c) => c.clave === m.clave)) soloCreables.add(m.clave);
+  }
+  for (const k of soloCreables) kb += (emitidos.get(k)?.bytes ?? 0) / 1024;
+  // A PETICIÓN: los modelos que no usa ningún colocado ni ningún creable del mapa.
+  const alEntrar = new Set([
+    ...colocados.map((c) => c.clave),
+    ...Object.values(fichasCreables).filter((f) => f.delMapa).map((f) => f.clave),
+  ]);
+  let kbPeticion = 0;
+  for (const k of soloCreables) if (!alEntrar.has(k)) { aPeticion.add(k); kbPeticion += (emitidos.get(k)?.bytes ?? 0) / 1024; }
+  console.log(`\n  creables        ${Object.keys(fichasCreables).length} fichas; ${soloCreables.size} modelos horneados SÓLO por ellas, ${kb.toFixed(0)} KB; ` +
+    `de ellos ${aPeticion.size} se cargan A PETICIÓN al empuñar su arma (${kbPeticion.toFixed(0)} KB) y ${soloCreables.size - aPeticion.size} al entrar (${(kb - kbPeticion).toFixed(0)} KB)`);
+}
+
 mkdirSync(SALIDA, { recursive: true });
 writeFileSync(`${SALIDA}/bichos.json`, JSON.stringify({
   mapa: bsp.nombre,
@@ -706,8 +805,11 @@ writeFileSync(`${SALIDA}/bichos.json`, JSON.stringify({
   // tabla, no el nombre del script. Sin ella, «aliado» tendría que ser «del
   // mismo script», y entonces un goblin no avisaría a un hobgoblin.
   razas: [...razas].map(([clave, r]) => [clave, r]),
-  modelos: [...emitidos].map(([clave, r]) => ({ clave, ...r })),
+  modelos: [...emitidos].map(([clave, r]) => ({ clave, ...r, ...(aPeticion.has(clave) ? { aPeticion: true } : {}) })),
   colocados,
+  // LO QUE SE PUEDE CREAR CON `createnpc` (ver 1b): la ficha de cada guion, con
+  // la forma de un colocado y sin sitio. El sitio lo pone el comando.
+  creables: fichasCreables,
   // LAS 16 ÁREAS DE APARICIÓN: `CAreaMonsterSpawn`, msmapents.cpp:1320-1321, que
   // es la misma clase para las dos clases de entidad (9 de volumen con brushes y
   // 7 de punto). Se emiten aunque el sitio no se sortee, porque el área es quien

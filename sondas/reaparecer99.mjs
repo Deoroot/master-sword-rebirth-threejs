@@ -89,7 +89,8 @@ const REEMPLAZOS = {
   R1: ["    if (!probar) return false;\n    c.atasco ??=", "    if (true) return false;\n    c.atasco ??="],
   R2: ["    const probar = yo ? this._probador(yo) : null;\n", "    const probar = null;\n"],
   R3: ["    c.sesion.al(\"aparece\", ({ donde, entrada }) => this._reaparecer(c, donde, entrada));", "    // R3"],
-  R4: ["    for (const col of fuera) col.setEnabled(false);\n", "    fuera.length = 0;\n"],
+  // EL 100: la línea es ahora `encender(...)` (src/play/atasco.js); la rotura es la misma.
+  R4: ["    encender(c.cuerpo, fuera, false);\n", "    fuera.length = 0;\n"],
 };
 let importar = [];
 if (ROTURAS.length) {

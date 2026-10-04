@@ -29,11 +29,11 @@ import { join } from "node:path";
 import { leerBsp, leerEntidades } from "../src/bsp/lector.js";
 import { resolverMapa, presentacion } from "../src/play/intro.js";
 
-import { mapaDeArgv, posicionalesDe, salidaDe, enSalida, bspDe, MAPA_POR_DEFECTO } from "./mapa.mjs";
+import { mapaDeArgv, posicionalesDe, salidaDe, enSalida, bspDe, MAPA_POR_DEFECTO, scriptsDe } from "./mapa.mjs";
 // Conserva `mapainfo edana`, además de la opción común `--mapa edana`.
 const MAPA = mapaDeArgv(process.argv.slice(2), posicionalesDe()[0] ?? MAPA_POR_DEFECTO);
 const ASSETS = process.env.MSR_ASSETS ?? "../MSC/assets/msr";
-const SCRIPTS = process.env.MSR_SCRIPTS ?? "../MSC/MSCScripts/scripts";
+const SCRIPTS = process.env.MSR_SCRIPTS ?? scriptsDe(MAPA);
 
 // Desde el 88, sin `MSR_ASSETS` el `.bsp` lo busca `bspDe`, que también conoce
 // los mapas nuestros de `build/contenido/maps`. Antes la ruta del juego estaba

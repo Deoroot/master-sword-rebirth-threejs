@@ -934,6 +934,17 @@ export const COMANDOS = new Set([
   "hud.killicons",                                // scriptcmds.cpp:62
   // EL 95: las imágenes, la otra mitad de `ScriptCmd_HudIcon` (doc/BRILLO_95.md).
   "hud.addimgicon", "hud.killimgicon",            // scriptcmds.cpp:61, :64 / :3765-3875
+  // ── `createnpc`: UNA ENTIDAD CON GUION, CREADA POR OTRO GUION ─────────────
+  // 357 usos en 181 guiones del mod. El intérprete parte el comando y guarda
+  // `ent_lastcreated`; quién sabe crear es el gancho `crearNpc` (el mundo de
+  // `src/play/creados.js`), y sin gancho se APUNTA. Los otros cuatro son lo que
+  // pide una invocación para moverse sola: van a ganchos del cuerpo y sin ellos
+  // se apuntan igual. Ver sus `case`.
+  "createnpc",                                    // scriptcmds.cpp:131 / :2766-2816
+  "setcallback",                                  // scriptcmds.cpp:5862-5885
+  "fly",                                          // npcscript.cpp:39  / :491-503
+  "setanim.movespeed",                            // npcscript.cpp:40  / :506-512
+  "race",                                         // npcscript.cpp:30  / :225-232
 ]);
 
 /** Los `$getters` portados. `m_GlobalGetterHash`, script.cpp:41-170. */
@@ -980,6 +991,12 @@ export const GETTERS = new Set([
   "$relvel",          // script.cpp:90  / :3597-3628
   // EL 95: el centro de casi todo `effect screenshake` es `$relpos(0,0,0)`.
   "$relpos",          // script.cpp:91  / :3557-3595
+  // Los cuatro que pide `monsters/summon/blood_drinker` para volar sola. Dos
+  // son de cadenas y dos del mundo (gancho, y sin gancho se apuntan).
+  "$vec",             // script.cpp:103 / :4202-4213 — sólo `$vec(x,y,z)`, no `$vec.x`
+  "$dir",             // script.cpp:133 / :782-795
+  "$get_tsphere",     // script.cpp:95  / :2794-2928
+  "$get_traceline",   // script.cpp:152 / :2680-2790
 ]);
 
 /** Las propiedades de `$get(<ent>,<prop>)` que este puerto sabe contestar. */
@@ -1060,6 +1077,8 @@ export class Guion {
     this.repeticiones = [];
     /** `m.m_Iteration`: la vuelta de `calleventloop`, que empieza en 0. script.h:73. */
     this.iteracion = 0;
+    /** `ENT_LASTCREATED`: el asa de lo último que creó este guion con `createnpc` (scriptcmds.cpp:2797-2798). */
+    this.ultimoCreado = null;
     /** Las listas de ESTA entidad: `pEnt->scriptedArrays`. Ver `listas.js`. */
     this.listas = new Listas();
     /** `GlobalScriptArrays`, el mapa estático. Compartido, como `GLOBALES`. */
@@ -1151,6 +1170,11 @@ export class Guion {
     // error, en todas las partidas de este puerto.
     if (t === "game.serverside") return "1";
     if (t === "game.clientside") return "0";
+    // EL 101: `game.item.hand_index` es `GetProp(yo, "hand_index")`
+    // (script.cpp:4698-4700) = `RETURN_INT(pItem->m_Hand)` (scriptcmds.cpp:
+    // 1327). Sólo lo contesta quien es un objeto; sin gancho sigue devolviendo
+    // su nombre, que vale 0 en una suma — lo que hacía antes.
+    if (t === "game.item.hand_index" && this.entorno?.indiceDeMano) return String(this.entorno.indiceDeMano());
     // EL 97: y con «%.2f», que es `RETURN_FLOAT(gpGlobals->time)`
     // (script.cpp:4500-4503; iscript.h:224-228). A pelo, `base_effect`
     // comparaba un fin redondeado (`$math(add,…)`, :67) contra un reloj sin
@@ -1445,8 +1469,70 @@ export class Guion {
       // vez. Se porta ignorándolo, que es lo que hace el juego.
       case "$get_by_name": return e.porNombre(String(a[0])) || "0";
 
+      // `$vec(<x>,<y>,<z>)` — script.cpp:4207-4213: pega los tres TEXTOS entre
+      // paréntesis, sin tocarlos (no pasa por `StringToVec`); con menos de
+      // tres, «0». Las formas `$vec.x`/`$vec.yaw` son otro nombre y no están.
+      case "$vec": return a.length >= 3 ? `(${a[0]},${a[1]},${a[2]})` : "0";
+
+      // `$dir(<a>,<b>)` — script.cpp:782-795. El comentario dice «dir from
+      // point1 to point2» y el código lo hace con los nombres cruzados:
+      // `Start = Params[1]`, `End = Params[0]`, `(Start - End).Normalize()`.
+      // O sea (b − a) normalizado, que sí es de `a` hacia `b`. Con menos de dos, «0».
+      // Un vector nulo se normaliza a (0,0,1) (`Vector::Normalize`, hl/vector.h:109-116).
+      case "$dir": {
+        if (a.length < 2) return "0";
+        const p = vectorDeTexto(String(a[0])), q = vectorDeTexto(String(a[1]));
+        const d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        const L = Math.hypot(d[0], d[1], d[2]);
+        return textoDeVector(L === 0 ? [0, 0, 1] : [d[0] / L, d[1] / L, d[2] / L]);
+      }
+
+      // `$get_tsphere(<any|player|monster|enemy|ally>,<radio>,[origen])` —
+      // script.cpp:2794-2928. Los vivos que no sean uno mismo, como asas
+      // separadas por `;` y con `;` al final, o «none» si no hay ninguno
+      // (:2927-2928). Sin tercer parámetro, el centro es el origen del que
+      // pregunta (:2830). Quién está dónde lo sabe el gancho `enEsfera`.
+      case "$get_tsphere": {
+        if (!e.enEsfera) { this.anotarNoSoportado("getter", `${nombre} (sin gancho)`); return texto; }
+        const asas = e.enEsfera(String(a[0] ?? ""), numDe(a[1]), a.length >= 3 ? vectorDeTexto(String(a[2])) : null) ?? [];
+        return asas.length ? asas.map((x) => `${x};`).join("") : "none";
+      }
+
+      // `$get_traceline(<desde>,<hasta>,[worldonly|ent|contents],[ignorar])` —
+      // script.cpp:2680-2790. Con `worldonly` devuelve el punto donde acaba la
+      // traza contra el mundo (`ignore_monsters`): el `<hasta>` si no choca.
+      // Sólo esa forma: las otras dos devuelven una entidad o un contenido y
+      // se apuntan. La traza es del gancho `trazar`, en unidades del motor.
+      case "$get_traceline": {
+        const modo = String(a[2] ?? "");
+        if (!e.trazar || !modo.includes("worldonly")) {
+          this.anotarNoSoportado("getter", `${nombre} (${e.trazar ? `modo «${modo}»` : "sin gancho"})`);
+          return texto;
+        }
+        const hasta = vectorDeTexto(String(a[1] ?? ""));
+        const fin = e.trazar(vectorDeTexto(String(a[0] ?? "")), hasta);
+        // Sin choque se devuelve EL TEXTO que entró: el guion compara con
+        // `equals` (`if ( TRACE_LINE equals TRACE_END )`,
+        // monsters/summon/blood_drinker.script:239), y en el motor los dos
+        // salen del mismo `VecToString`. Volver a formatear aquí un vector que
+        // no ha cambiado podría separar dos cadenas que allí son iguales.
+        return fin ? textoDeVector(fin) : String(a[1] ?? "");
+      }
+
       case "$get": {
         const prop = String(a[1]);
+        // `ent_lastcreated` — `StoreEntity(pEntity, ENT_LASTCREATED)` en el
+        // guion que hizo el `createnpc` (scriptcmds.cpp:2797-2798), y
+        // `RetrieveEntity` lo resuelve por ese nombre (global.cpp:319,
+        // :382-398). El asa la guarda el intérprete (`ultimoCreado`): su `id`
+        // es el asa misma (`EntToString`, scriptcmds.cpp:936) y, sin nada
+        // creado, «0» (script.cpp:1196-1199). Las demás propiedades se le
+        // preguntan al entorno ya con el asa.
+        if (String(a[0]) === "ent_lastcreated") {
+          if (!this.ultimoCreado) return "0";
+          if (prop === "id") return this.ultimoCreado;
+          a = [this.ultimoCreado, ...a.slice(1)];
+        }
         // El motor contesta «0» a éstas, así que contestarlo es portarlas.
         if (PROPIEDADES_VACIAS.has(prop)) return "0";
         // `skill.<escuela>.<sub>` no es un nombre fijo: es una FAMILIA, y el
@@ -2793,6 +2879,8 @@ export class Guion {
           tipo: this.resolver("ARMOR_TYPE"),
           proteccion: this.resolver("ARMOR_PROTECTION"),
           zonas: this.resolver("ARMOR_PROTECTION_AREA"),
+          // EL 101: `m_WearModelPositions` sale de OTRA variable (giarmor.cpp:43-51).
+          reemplaza: this.resolver("ARMOR_REPLACE_BODYPARTS"),
         });
         return true;
       }
@@ -2907,6 +2995,120 @@ export class Guion {
       }
 
       case "dbg": return true;                       // sólo en el build de Thothie
+
+      // ── `createnpc <guion> <origen> [params…]` — scriptcmds.cpp:2766-2816 ──
+      //
+      //     if (Params.size() >= 2) {
+      //       Vector Position = StringToVec(Params[1]);
+      //       CMSMonster *NewMonster = ...CREATE_NAMED_ENTITY("ms_npc");
+      //       NewMonster->pev->origin = Position;
+      //       NewMonster->Spawn(Params[0]);                     <- spawn y game_spawn
+      //       pEntity->StoreEntity(m.pScriptedEnt, ENT_CREATIONOWNER);
+      //       m.pScriptedEnt->StoreEntity(pEntity, ENT_LASTCREATED);
+      //       for (i = 0; i < Params.size() - 2; i++) Params2.add(Params[i+2]);
+      //       pScript->CallScriptEvent("game_dynamically_created", &Params2);
+      //     } else ERROR_MISSING_PARMS;
+      //
+      // Lo que el intérprete hace de eso es partirlo y guardar el asa de vuelta;
+      // crear la entidad, correr su `game_spawn` y llamar a
+      // `game_dynamically_created` es del gancho, que es quien tiene el mundo
+      // (`MundoDeCreados.crear`, src/play/creados.js). Tres cosas del motor:
+      //
+      //   - el origen es `StringToVec`, o sea UNIDADES y ejes del motor; pasarlo
+      //     a la escena es del gancho, como en `setorigin`;
+      //   - los parámetros del 3 en adelante llegan ya RESUELTOS: un
+      //     `$get(ent_owner,id)` viaja como asa, no como texto;
+      //   - `ent_lastcreated` sólo se pisa si la entidad se creó (`if (pEntity)`).
+      //
+      // La guarda del `$` es la misma de `setorigin`, y es nuestra: un getter
+      // sin portar vuelve como su propio texto y `StringToVec` de eso es
+      // (0,0,0), el origen del mapa. Se apunta en vez de crear nada allí.
+      // `createitem` es la misma función con otra rama (:2786-2792) y no está.
+      case "createnpc": {
+        if (params.length < 2) return true;          // `ERROR_MISSING_PARMS`
+        if (!e.crearNpc) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        const donde = String(params[1]);
+        if (donde.startsWith("$")) {
+          this.anotarNoSoportado("vector sin getter", `${c.nombre} ${donde}`);
+          return true;
+        }
+        const asa = e.crearNpc(String(params[0]), vectorDeTexto(donde), params.slice(2).map(String), { desde: this });
+        if (asa) this.ultimoCreado = String(asa);
+        return true;
+      }
+
+      // `setcallback <touch|think|blocked|render> <enable|disable>` —
+      // scriptcmds.cpp:5862-5885. Sólo `enable` enciende (`Setting ==
+      // "enable"`), y el tipo se mira con `contains`. Aquí sólo `touch` tiene
+      // quien lo dispare (`game_touch`, msmonsterserver.cpp:880-890).
+      case "setcallback": {
+        if (params.length < 2) return true;
+        if (!e.retrollamada) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.retrollamada(String(params[0]), String(params[1]) === "enable");
+        return true;
+      }
+
+      // `fly <0|1>` — npcscript.cpp:491-503: `FL_FLY` y, con él,
+      // `MOVETYPE_FLY` (sin gravedad, y el destino se mide y se encara en 3D:
+      // `IsFlying()`, msmonsterserver.cpp:1018 y :1175-1181).
+      case "fly": {
+        if (!params.length) return true;             // `ERROR_MISSING_PARMS`
+        if (!e.volar) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.volar(enteroDe(params[0]) !== 0);
+        return true;
+      }
+
+      // `setanim.movespeed <u/s>` — npcscript.cpp:506-512: `m_flGroundSpeed`,
+      // lo que `Move` avanza por segundo hacia donde mira
+      // (msmonsterserver.cpp:1190-1201). Lo usa `monsters/base_propelled` para
+      // los modelos cuya animación no trae movimiento.
+      case "setanim.movespeed": {
+        if (!params.length) return true;             // `ERROR_MISSING_PARMS`
+        if (!e.velocidadDeSuelo) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.velocidadDeSuelo(numDe(params[0]));
+        return true;
+      }
+
+      // `race <raza>` — npcscript.cpp:225-232: `strncpy(m_Race, …)`. Una
+      // invocación se pone la de su dueño (`race $get(MY_OWNER,race)`,
+      // blood_drinker.script:49) para que la tabla de razas la trate como a él.
+      case "race": {
+        if (!params.length) return true;             // `ERROR_MISSING_PARMS`
+        if (!e.ponerRaza) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        e.ponerRaza(String(params[0]));
+        return true;
+      }
+
+      // ── EL 101: EL MODELO DE UN OBJETO QUE SE LLEVA ──────────────────
+      // `setmodel <ruta|none>` y `setmodelbody <grupo> <valor>`, en la mitad
+      // del CLIENTE de `CGenericItem::Script_ExecuteCmd` (genericitem.cpp:
+      // 2199-2225): es la que escribe `m_ClEntity[ITEMENT_NORMAL]`, o sea lo
+      // que `RenderGearItem` le cuelga al muñeco (clrenderent.cpp:321-365,
+      // 458-486). Son del OBJETO; sin gancho se apuntan como antes de este
+      // `case` (lo hacía el `default`), y por eso NO están en `COMANDOS`: para
+      // un NPC siguen sin portar. Ver src/play/equipovisto.js.
+      case "setmodel": {
+        if (!e.ponerModelo) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        if (params.length >= 1) e.ponerModelo(String(params[0]));
+        return true;
+      }
+      // `setviewmodel <ruta|none>` — genericitem.cpp:1934-1955: en el cliente,
+      // `m_ViewModel` es la ruta o, con `none`, vacío: el arma deja de verse en
+      // la mano. Es como desaparece la Blood Drinker al lanzarla y como vuelve
+      // (swords_blood_drinker.script:149 y :216). Es del OBJETO; sin gancho se
+      // apunta como antes de este `case` (lo hacía el `default`), y por eso no
+      // está en `COMANDOS`.
+      case "setviewmodel": {
+        if (!e.ponerModeloDeVista) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        if (params.length >= 1) e.ponerModeloDeVista(String(params[0]));
+        return true;
+      }
+      case "setmodelbody": {
+        if (!e.ponerCuerpo) { this.anotarNoSoportado("comando", c.nombre); return true; }
+        // `atoi` de los dos (genericitem.cpp:2220-2221): un nombre sin resolver vale 0.
+        if (params.length >= 2) e.ponerCuerpo(enteroDe(params[0]), enteroDe(params[1]));
+        return true;
+      }
 
       default:
         this.anotarNoSoportado("comando", c.nombre);

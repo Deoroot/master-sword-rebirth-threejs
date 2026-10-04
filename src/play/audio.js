@@ -66,6 +66,12 @@ export class Audio {
     this.catalogo = null;
     this.sonando = new Map();   // música por canal
     this.arrancadas = 0;        // para la sonda: cuántas fuentes se han lanzado
+    // EL 101: y CUÁLES. `arrancadas` es un contador y lo mueven los pasos, el
+    // ambiente y el arma a la vez: «subió» no dice quién (el 66). Aquí van las
+    // últimas fuentes que han llegado a `start()`, con su archivo, su volumen y
+    // su sitio. Es lo que ha sonado, no lo que se ha pedido: un archivo que no
+    // está no entra aquí, entra en `fallos`.
+    this.ultimas = [];
     this.fallos = [];
     // LOS DOS VOLÚMENES del motor, y son dos canales distintos: `volume` para
     // los efectos y `MP3Volume` para la música. Se guardan aquí porque el
@@ -593,6 +599,8 @@ export class Audio {
     }
     src.start();
     this.arrancadas++;
+    this.ultimas.push({ archivo, volumen, donde: donde ? [...donde] : null, cuando: this.ctx.currentTime });
+    if (this.ultimas.length > 64) this.ultimas.shift();
     return src;
   }
 

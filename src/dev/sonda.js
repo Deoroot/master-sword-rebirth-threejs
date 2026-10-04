@@ -30,6 +30,7 @@ import * as THREE from "three";
 // que es de todos. El módulo es el mismo —ESM da una sola instancia— y para
 // cuando la sonda existe, `initPhysics()` ya ha corrido.
 import RAPIER from "@dimforge/rapier3d-compat";
+import { bichosDentro } from "../play/atasco.js";
 import { AJUSTES, COMO_EL_MOTOR } from "../play/proyectil.js";
 import { FASE, elegirObjetivo } from "../play/golpe.js";
 import { GLOW } from "../render/bsp_escena.js";
@@ -46,6 +47,8 @@ import { choques, enPantallaCompleta, hayAtrapaTeclado, tecladoAtrapado }
   from "../juego/navegador.js";
 import { relacionDeRazas } from "../bsp/razas.js";
 import { aplicadorDeBicho } from "../play/efectos.js";
+// `createnpc`: para correr un guion de prueba NUESTRO desde su texto (`probe.creados`).
+import { Guion, partirGuion, entornoVacio } from "../play/guion.js";
 
 /**
  * Arma `window.probe`.
@@ -708,6 +711,8 @@ export function montarSonda(S) {
           arrancadas: S.audio.arrancadas,
           sinArchivo: S.audio.sinArchivo ?? 0,
           fallos: S.audio.fallos.slice(),
+          // EL 101: las últimas fuentes que han llegado a sonar, con su archivo.
+          ultimas: (S.audio.ultimas ?? []).map((u) => ({ ...u })),
           pedidosDePuerta: S.pedidosDePuerta,
           ambienteSinArchivo: S.ambienteSinArchivo,
           catalogo: S.catalogoSonido ? {
@@ -1176,6 +1181,34 @@ export function montarSonda(S) {
       etapa: () => S.vgui?.abierto?.etapa ?? null,
       /** Cuántos retratos 3D siguen animándose. Cero fuera de esa pantalla. */
       retratosVivos: () => (S.retratosDelPanel?.cuantos ?? 0) + (S.interfaz?.retratos ?? 0),
+      /**
+       * EL 101: qué enseña cada ranura de la pantalla de elección — de quién
+       * es, con qué género se ha montado, en qué postura y qué lleva colgado.
+       * Leído del retrato vivo (`Ranura` de src/render/cuerpo.js).
+       */
+      /**
+       * EL 101: esconder (o enseñar) el equipo de UNA ranura y repintarla sin
+       * avanzar el reloj, para contar los píxeles que pone la armadura. Devuelve
+       * cuántas mallas ha tocado.
+       */
+      esconderEquipoDeRetrato(i, si = true) {
+        const mallas = S.vgui?.buscar?.("newchar")?.ranuras?.[i]?.retrato?.mallasDeEquipo ?? [];
+        for (const m of mallas) m.visible = !si;
+        S.retratosDelPanel?.animar(0);
+        return mallas.length;
+      },
+      retratos: () => (S.vgui?.buscar?.("newchar")?.ranuras ?? []).map((r) => ({
+        quien: r.quien?.nombre ?? null,
+        montado: Boolean(r.retrato),
+        genero: r.retrato?.genero ?? null,
+        postura: r.retrato?.puesta ?? null,
+        // La postura de REPOSO, no la que suena ahora: el `stretch` la pisa a ratos.
+        reposo: r.retrato?.base ?? null,
+        // EL 101b: ¿la malla ENTERA del cuerpo, o una con partes escondidas?
+        cuerpoEntero: r.retrato?.cuerpoEntero ?? null,
+        equipo: r.retrato?.equipo ?? [],
+        equipoEnEscena: r.retrato?.equipoEnEscena ?? [],
+      })),
       /** Lo que se le ha dicho al jugador al elegir una opción. */
       ultimoSuceso: () => S.hudMs?.estado().consola?.at?.(-1) ?? null,
     },
@@ -1300,15 +1333,42 @@ export function montarSonda(S) {
        * sea que para cuando termina **lo primero que dijo ya no se ve**, y una
        * sonda que mirara ahí diría que no lo dijo. Esto lee el anillo entero.
        */
-      dicho() {
-        const c = S.hudMs?.consola;
-        if (!c) return [];
+      /*
+       * EL 100: Y SON DOS ANILLOS. Lo que DICE un NPC ya no está en la consola
+       * de sucesos: está en la del chat, que es donde lo pone el mod
+       * (`PrintSayText`, vgui_hud.cpp:310-313). Quien lea sólo la primera mide
+       * un panel vacío con el juego bien, así que esto lee las dos y las
+       * ordena por llegada (`n`, que cada línea se lleva al imprimirse:
+       * `src/play/hud.js`). Se LEEN los dos anillos, no se lleva un diario
+       * aparte: una copia en el instrumento es el 65.
+       *
+       * El prefijo sigue siendo el tipo de la línea: una de las seis claves de
+       * suceso, o `global`/`local`/`party`/`npc` si viene del chat. Para leer
+       * una consola sola, `soloDe`: "sucesos" o "chat".
+       */
+      dicho(soloDe = null) {
         const out = [];
-        for (let i = 0; i < c.total; i++) {
-          const l = c.enLinea?.(i);
-          if (l) out.push(`${l.tipo}: ${l.texto}`);
-        }
-        return out;
+        const leer = (c) => {
+          if (!c) return;
+          for (let i = 0; i < c.total; i++) {
+            const l = c.enLinea?.(i);
+            if (l) out.push(l);
+          }
+        };
+        if (soloDe !== "chat") leer(S.hudMs?.consola);
+        if (soloDe !== "sucesos") leer(S.chatMs?.consola);
+        out.sort((a, b) => (a.n ?? 0) - (b.n ?? 0));
+        return out.map((l) => `${l.tipo}: ${l.texto}`);
+      },
+      /**
+       * Lo que se VE ahora en las dos consolas, en orden de llegada. Es lo que
+       * leían las sondas que miraban `hud.estado().consola.lineas` para oír a
+       * un NPC, antes de que el habla se mudara a la caja del chat.
+       */
+      visto() {
+        const out = [...(S.hudMs?.consola?.vistas ?? []), ...(S.chatMs?.consola?.vistas ?? [])];
+        out.sort((a, b) => (a.n ?? 0) - (b.n ?? 0));
+        return out.map((l) => ({ tipo: l.tipo, texto: l.texto, n: l.n ?? 0 }));
       },
       /** ¿Hay guiones horneados? Sin esto la sonda mediría el respaldo del 29. */
       hay: () => Boolean(S.fichaDeGuiones),
@@ -1566,6 +1626,50 @@ export function montarSonda(S) {
         S.player.vel[1] = -unidadesPorSegundo;
         S.player.caida = unidadesPorSegundo;
         return S.player.vel[1];
+      },
+      /**
+       * EL 100: lo que ha hecho el paso del jugador (`PasoLocal`, src/play/atasco.js)
+       * —pasos, parados por `PM_CheckStuck`, bichos apartados, sacados por la
+       * tabla— y si la cápsula cabe AHORA, con la misma pregunta que hace el paso.
+       */
+      atasco: () => {
+        const p = S.pasoLocal;
+        if (!p) return null;
+        return {
+          ...p.cuenta, sacado: p.atasco.sacado, veces: p.atasco.veces, cabe: !p.probar(S.player.feet),
+          // Los cinemáticos que cortan la cápsula AHORA, con la misma pregunta del paso.
+          dentro: bichosDentro(S.player).length,
+          vel: [...S.player.vel],
+        };
+      },
+      /**
+       * EL 100: CLAVA EL CILINDRO DE UN BICHO DE VERDAD en `donde` (pies, en
+       * metros) y lo deja ahí aunque el bicho ande: después de cada `seguir()`
+       * del bucle se vuelve a poner. Es el cilindro el que choca con el jugador,
+       * así que es lo que se mueve; el bicho dibujado se queda donde esté. Elige
+       * el más alto de los puestos, que es el que no se puede pisar. `null`
+       * suelta el que hubiera. Devuelve `{ alto, radio }` del elegido.
+       */
+      clavarCilindro(donde) {
+        const bs = S.bichosSolidos;
+        if (!bs) return null;
+        if (!bs.__seguirReal) {
+          bs.__seguirReal = bs.seguir;
+          bs.seguir = (...a) => {
+            const r = bs.__seguirReal(...a);
+            const c = bs.__clavado;
+            if (c) c.p.cuerpo.setNextKinematicTranslation({ x: c.d[0], y: c.d[1] + c.p.alto / 2, z: c.d[2] });
+            return r;
+          };
+        }
+        if (!donde) { bs.__clavado = null; return null; }
+        const p = [...bs.puestos].sort((a, b) => b.alto - a.alto)[0];
+        if (!p) return null;
+        bs.__clavado = { p, d: [...donde] };
+        p.cuerpo.setTranslation({ x: donde[0], y: donde[1] + p.alto / 2, z: donde[2] }, true);
+        p.cuerpo.setNextKinematicTranslation({ x: donde[0], y: donde[1] + p.alto / 2, z: donde[2] });
+        S.world.world.updateSceneQueries();
+        return { alto: p.alto, radio: p.radio };
       },
       /** Que choca ademas del mapa, y que NO — que es la mitad del dato. */
       solidos: () => ({
@@ -2438,6 +2542,106 @@ export function montarSonda(S) {
      * guion del jugador, con si lo contestó: leerlo aparte del efecto es lo que
      * separa «el objeto no llama» de «el jugador no sabe contestar».
      */
+    /**
+     * LO CREADO CON `createnpc` (`src/play/creados.js`). Todo se LEE del mundo
+     * del juego (`S.creados`), que es el mismo que usa el arma: aquí no se
+     * recalcula nada (el 65).
+     */
+    creados: {
+      /** Lo que hay creado ahora, las cuentas y cuántas instancias tiene la manada. */
+      estado: () => ({
+        lista: S.creados?.estado() ?? [],
+        cuenta: { ...(S.creados?.cuenta ?? {}) },
+        faltan: [...(S.creados?.faltan ?? [])],
+        instancias: S.bichos?.manada?.instancias?.length ?? 0,
+        censo: S.bichos?.manada?.censo?.colocados?.length ?? 0,
+        /** Las claves de los modelos de bicho CARGADOS: los de a peticion no estan hasta que se piden. */
+        modelos: S.bichos?.modelos ? [...S.bichos.modelos.keys()] : [],
+      }),
+      /** Una instancia de la manada por su id, con lo que se puede medir de ella. */
+      instancia(id) {
+        const i = S.bichos?.manada?.instancias?.[id] ?? null;
+        if (!i) return null;
+        const g = S.interacciones?.guionesVivos?.get(i.id) ?? null;
+        return {
+          id: i.id, script: i.ficha?.script ?? null, nombre: i.ficha?.nombre ?? null,
+          donde: [...i.donde], vida: i.vida ?? null, muerto: Boolean(i.muerto), dormido: Boolean(i.dormido),
+          conCilindro: Boolean(i.conCilindro), conNodo: Boolean(i.nodo), visible: i.nodo ? i.nodo.visible : null,
+          sinModelo: Boolean(i.sinModelo), animacion: i.nombreActual ?? i.anim?.nombre ?? null,
+          cazador: Boolean(i.cazador), creado: Boolean(i.creado), recibio: i.creado?.recibio ?? null,
+          params: i.creado?.params ?? null,
+          guion: Boolean(g), retirado: g ? Boolean(g.retirado) : null,
+          creadoPorEvento: g ? g.guion.rastro.filter((r) => r.evento === "game_dynamically_created").map((r) => r.params) : [],
+        };
+      },
+      /**
+       * El arma de la mano tal como la ve `pasoDelBrazo`: si ataca por su guion
+       * vivo, qué ha dejado puesto ese guion con `setviewmodel` y si el modelo
+       * de la mano se ve. `vista`: «sin tocar», `null` (mano vacía) o la ruta.
+       */
+      arma() {
+        const g = S.guionVivoDelArma?.() ?? null;
+        return {
+          id: S.brazo?.arma?.id ?? null,
+          enLaMano: S.sesion?.personaje?.manos?.derecha ?? null,
+          porGuion: Boolean(g),
+          vista: !g ? null : g.vista === undefined ? "sin tocar" : g.vista,
+          visible: S.armaEnMano ? S.armaEnMano.visible : null,
+          modo: g ? String(g.guion.vars.get("FIST_MODE") ?? "") : null,
+          creada: g ? String(g.guion.vars.get("SWORD_ID") ?? "") : null,
+          fase: S.brazo?.fase ?? null,
+        };
+      },
+      /**
+       * Pone un arma en la mano POR DONDE LA PONE EL JUEGO: a la mochila y la
+       * orden de empuñar del ciclador (`cumplir`), que es `inv transfer`. Con
+       * eso el arma está en el personaje y su guion nace (`sincronizarObjetos`);
+       * `probe.arco.empunar` sólo monta el brazo.
+       */
+      async llevar(id) {
+        const p = S.sesion?.personaje;
+        if (!p) return null;
+        p.objetos = [...(p.objetos ?? []), { id, n: 1 }];
+        S.cumplir({ que: "empunar", id });
+        S.sincronizarObjetosVivos?.();
+        await S.empunar(id);
+        await S.precargarInvocaciones?.(id);
+        return this.arma();
+      },
+      /**
+       * EL SEGUNDO CASO: corre un guion de prueba NUESTRO desde su TEXTO
+       * (`contenido/scripts/pruebas/oleada.script`, que lee la sonda del disco).
+       * Lo parte el analizador del juego y el `createnpc` va al mundo del juego;
+       * lo único que es de aquí es quién llama al evento.
+       */
+      correrGuion(texto, evento, params = []) {
+        if (!S.creados) return null;
+        const partido = partirGuion(String(texto));
+        const guion = new Guion({
+          eventos: partido.eventos, preload: partido.preload, nombre: "prueba de createnpc",
+          entorno: {
+            ...entornoVacio(),
+            crearNpc: (script, origen, ps) => S.creados.crear(script, origen, ps, { creador: null }),
+          },
+        });
+        guion.llamar("", []);
+        const hubo = guion.llamar(String(evento), params.map(String));
+        return {
+          hubo, ultimo: guion.ultimoCreado,
+          vars: Object.fromEntries(guion.vars),
+          noSoportados: guion.noSoportados.map((x) => `${x.tipo} ${x.nombre}`),
+        };
+      },
+      /** El centro del jugador y un punto `adelante` unidades delante de sus pies, en unidades del motor. */
+      puntos(adelante = 96) {
+        const pies = S.player.feet;
+        const m = new THREE.Vector3(0, 0, -1).applyEuler(S.camera.rotation);
+        const L = Math.hypot(m.x, m.z) || 1;
+        const aMotor = (v) => [v[0] * S.U, -v[2] * S.U, v[1] * S.U];
+        const delante = [pies[0] + (m.x / L) * (adelante / S.U), pies[1], pies[2] + (m.z / L) * (adelante / S.U)];
+        return { pies: aMotor(pies), delante: aMotor(delante), delanteEscena: delante };
+      },
+    },
     objetos: {
       /** Si la tabla horneada está cargada. Sin esto, todo lo demás son ceros. */
       hay: () => Boolean(S.guionesDeObjeto),
@@ -3299,6 +3503,78 @@ export function montarSonda(S) {
         const d = S.deGuionDelArco;
         return d ? JSON.parse(JSON.stringify(d)) : null;
       },
+      /**
+       * EL 101: lo que está REVENTANDO en la escena, por proyectil — leído de
+       * los nodos de Three y no de la cuenta del arco (`estado()` de
+       * `src/render/estallido.js`): dónde está, a qué escala, cuánto se ve y su
+       * luz. `{}` si no hay ninguno montado, que también es una respuesta.
+       */
+      estallidos() {
+        const out = {};
+        for (const [id, c] of S.estallidosDelArco ?? []) out[id] = c.estado();
+        return out;
+      },
+      /** Para el reloj del estallido de `id` (o lo suelta), para poder fotografiarlo. */
+      congelarEstallido(id, si = true) {
+        return S.estallidosDelArco?.get(id)?.congelar(si) ?? null;
+      },
+      /** Esconde/enseña SÓLO el nodo de la llamarada viva, para la foto sin ella. */
+      esconderEstallido(id, si = true) {
+        const v = S.estallidosDelArco?.get(id)?.mallaViva;
+        if (!v) return null;
+        v.nodo.visible = !si;
+        return v.nodo.visible;
+      },
+      /** Apaga/enciende SÓLO la luz del estallido vivo, para medir lo que alumbra. */
+      luzDeEstallido(id, si = true) {
+        const v = S.estallidosDelArco?.get(id)?.mallaViva;
+        if (!v?.luz) return null;
+        v.luz.visible = Boolean(si);
+        return v.luz.visible;
+      },
+      /**
+       * El rectángulo de pantalla de la llamarada viva, vértice a vértice (como
+       * `rectanguloFlecha`), y si cuelga de la escena que pinta el bucle.
+       */
+      rectanguloEstallido(id) {
+        const v = S.estallidosDelArco?.get(id)?.mallaViva;
+        if (!v) return null;
+        const m = v.malla;
+        let raiz = v.nodo;
+        while (raiz.parent) raiz = raiz.parent;
+        v.nodo.updateMatrixWorld(true);
+        m.skeleton?.update();
+        S.camera.updateMatrixWorld(true);
+        const lienzo = S.renderer?.domElement ?? document.querySelector("canvas");
+        const r = lienzo.getBoundingClientRect();
+        const p = new THREE.Vector3();
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+        const total = m.geometry.attributes.position.count;
+        for (let i = 0; i < total; i++) {
+          m.getVertexPosition(i, p);
+          p.applyMatrix4(m.matrixWorld).applyMatrix4(S.camera.matrixWorldInverse);
+          if (p.z > -(S.camera.near ?? 0.01)) continue;
+          p.applyMatrix4(S.camera.projectionMatrix);
+          if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1) continue;
+          const x = r.left + ((p.x + 1) / 2) * r.width, y = r.top + ((1 - p.y) / 2) * r.height;
+          x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+          n++;
+        }
+        return { x0, y0, x1, y1, vertices: n, total, ancho: r.width, alto: r.height, enLaEscena: raiz === S.escena };
+      },
+      /** Cuántas veces DIBUJA Three la llamarada viva en `cuadros` fotogramas (ver `dibujosDeFlecha`). */
+      dibujosDeEstallido(id, cuadros = 3) {
+        const m = S.estallidosDelArco?.get(id)?.mallaViva?.malla;
+        if (!m) return Promise.resolve(null);
+        let n = 0;
+        const antes = m.onBeforeRender;
+        m.onBeforeRender = (...a) => { n++; return antes.apply(m, a); };
+        return new Promise((listo) => {
+          let k = 0;
+          const otro = () => { if (++k > cuadros) { m.onBeforeRender = antes; listo(n); } else requestAnimationFrame(otro); };
+          requestAnimationFrame(otro);
+        });
+      },
       // ── EL 98: ¿SE VE LA FLECHA EN VUELO? ────────────────────────────────
       //
       // El 97 encontró que ninguna flecha se dibujaba volando desde antes del 39
@@ -3335,12 +3611,34 @@ export function montarSonda(S) {
           f.gravedad = 0;
           f.vel = f.vel.map((v) => (v / r) * 1e-3);
         }
+        // EL 100: la bola de maná sigue haciendo su área cada 0,3 s y se gasta
+        // un tamaño por bicho tocado; detenida para la foto, también se le para
+        // el área (`golpesAlDetener` dice cuántos llevaba).
+        // Y su reloj de 10 s (`remove_projectile`, y el `vuelo.vida` de la sombra
+        // y la esfera) se para: corre en tiempo real mientras se fotografía, y
+        // con la máquina cargada las tres capturas tardaron 10,8 s (la sombra) y
+        // 14,3 s (la bola) — se iban entre la segunda y la tercera y el control
+        // de píxeles leía 0 %. Con el reloj muy por debajo de cero ni caducan ni
+        // corren su área en vuelo (`golpesDeVuelo` no da instantes).
+        const golpesAlDetener = f.bolaDeMana?.golpes?.length ?? null;
+        if (f.volando && (f.bolaDeMana || f.areaDeVuelo)) {
+          if (f.bolaDeMana) f.bolaDeMana.proximo = Infinity;
+          f.vida = -1e6;
+        }
         const e = S.flechasEnVuelo.find((x) => x.flecha === f) ?? null;
         S.__flechaDetenida = e;
         const U = S.U ?? S.level?.unitsPerMetre ?? 39.37;
         return {
           id: f.ficha?.id ?? null, volando: f.volando, recorrido: f.recorrido,
           pos: f.pos.map((x) => x / U), conPieza: Boolean(e?.pieza),
+          // EL 100: CON QUÉ MODELO se dibuja. `grupo` es el nombre del conjunto
+          // del que cuelga el nodo (`flechas:<clave>`, lo pone src/render/
+          // flechas.js con la carpeta que CARGÓ), y `vertices` los de su malla:
+          // dos testigos que no salen de la ficha. `escala`, la del nodo (la bola).
+          grupo: e?.pieza?.nodo?.parent?.name ?? null,
+          vertices: (() => { let n = null; e?.pieza?.nodo?.traverse((o) => { if (n === null && o.isSkinnedMesh) n = o.geometry.attributes.position.count; }); return n; })(),
+          escala: e?.pieza?.nodo?.scale?.x ?? null,
+          bola: f.bolaDeMana ? { tamano: f.bolaDeMana.tamano, dano: f.bolaDeMana.dano, golpesAlDetener } : null,
         };
       },
       /**
@@ -3942,6 +4240,18 @@ export function montarSonda(S) {
         o.nodo.visible = !si;
         return antes;
       },
+      /**
+       * EL 101: esconder (o enseñar) SÓLO el equipo colgado del muñeco, para
+       * el control de píxeles: la misma pantalla y el mismo instante, con la
+       * armadura y sin ella. Toca `visible` de las mallas y nada más. Devuelve
+       * cuántas mallas ha tocado: con cero, el control no ha medido nada.
+       */
+      esconderEquipo(si = true, id = null) {
+        // Con `id`, sólo las de ESE objeto (la malla se llama `equipo:<id>`).
+        const mallas = (S.muneco?.mallasDeEquipo ?? []).filter((m) => id === null || m.name.startsWith(`equipo:${id}:`));
+        for (const m of mallas) m.visible = !si;
+        return mallas.length;
+      },
       /** Cambia el género del muñeco, que es otro modelo y otras pistas. */
       async genero(g = "female") { await S.ponerMuneco(g); return this.muneco; },
       get muneco() {
@@ -3953,6 +4263,15 @@ export function montarSonda(S) {
           // A qué distancia del ojo lo pone, en unidades: el motor dice 4,7
           // delante y 3,1 abajo, o sea 5,63 de separación.
           delOjo: S.muneco.nodo.position.distanceTo(S.camera.position) * S.U,
+          // EL 101: lo que lleva COLGADO, leído de la escena del muñeco y no
+          // de la regla (el 65): cada pieza con su modelo, su `body`, sus
+          // triángulos y si su malla está de verdad bajo los ejes del cuerpo.
+          equipo: S.muneco.equipo,
+          // Y esto sí es EL GRAFO: los nombres de las mallas que cuelgan ahora.
+          equipoEnEscena: S.muneco.equipoEnEscena,
+          // Lo que lleva a la vista y NO se dibuja porque su guion no está horneado.
+          sinGuion: S.equipoSinGuion ?? [],
+          faltaDeEquipo: S.muneco.faltaDeEquipo,
         };
       },
     },
@@ -4098,6 +4417,53 @@ export function montarSonda(S) {
       soltar(s = 1.5) {
         for (let t = 0; t < s; t += S.DT) { S.pasoDelBrazo(S.DT, false); S.pasoDelHud(S.DT); }
         return { fase: S.brazo?.fase ?? null, carga: S.brazo?.carga ?? 0 };
+      },
+      /**
+       * QUÉ SECUENCIA SE VE EN EL MODELO DE VISTA al dar un ataque: el normal
+       * (`cargar` 0) o el cargado (`cargar` segundos aguantando el segundo clic).
+       *
+       * Aprieta por `pasoDelBrazo`, que es lo que llama el bucle, y lo que
+       * devuelve se LEE del modelo (`armaEnMano.actual`, lo que `pon` dejó
+       * puesto de verdad, y su `visible`), no de lo que el brazo dice que eligió:
+       * una secuencia elegida que el modelo no trae horneada no se pone, y eso
+       * sólo se ve aquí.
+       */
+      vistaDelAtaque({ cargar = 0, despues = 3 } = {}) {
+        if (!S.brazo) return null;
+        const leer = () => ({
+          indice: S.armaEnMano?.actual?.indice ?? null, nombre: S.armaEnMano?.actual?.nombre ?? null,
+          unaVez: S.armaEnMano?.actual?.unaVez ?? null, visible: S.armaEnMano ? S.armaEnMano.visible : null,
+        });
+        for (let k = 0; k < 600; k++) {
+          if (S.brazo.fase === "quieto" && !S.brazo.cargando && !S.brazo.cargaHecha) break;
+          S.pasoDelBrazo(S.DT, false);
+        }
+        const reposo = leer();
+        let e = null;
+        if (cargar > 0) {
+          // El primer clic no carga: mandoble, soltar un paso y volver a pulsar.
+          for (let k = 0; k < 120 && !S.brazo.atacando; k++) S.pasoDelBrazo(S.DT, true);
+          S.pasoDelBrazo(S.DT, false);
+          for (let t = 0; t < cargar; t += S.DT) S.pasoDelBrazo(S.DT, true);
+          // Y soltar: el cargado se elige con el botón arriba, cuando el
+          // mandoble del primer clic ha acabado.
+          for (let k = 0; k < 600 && !e?.empieza; k++) e = S.pasoDelBrazo(S.DT, false);
+        } else {
+          e = S.pasoDelBrazo(S.DT, true);
+        }
+        if (!e?.empieza) return { reposo, empezo: false, cargaHecha: S.brazo.cargaHecha, fase: S.brazo.fase };
+        const ataque = { retorno: e.empieza.retorno ?? null, carga: e.empieza.carga ?? 0, prioridad: e.empieza.prioridad ?? 0 };
+        const alEmpezar = leer();
+        const cambios = [];
+        let ultimo = alEmpezar.indice, t = 0, acabo = false, escondido = alEmpezar.visible === false;
+        for (; t < despues && !acabo; t += S.DT) {
+          const r = S.pasoDelBrazo(S.DT, false);
+          const a = leer();
+          if (a.visible === false) escondido = true;
+          if (r?.acaba) { acabo = true; break; }
+          if (a.indice !== ultimo) { cambios.push({ t: Number(t.toFixed(2)), indice: a.indice, nombre: a.nombre }); ultimo = a.indice; }
+        }
+        return { reposo, empezo: true, ataque, alEmpezar, cambios, escondido, acabo, alAcabar: leer(), dura: Number(t.toFixed(2)) };
       },
       /** A quién le daría un mandoble AHORA, sin darlo. */
       objetivo() {

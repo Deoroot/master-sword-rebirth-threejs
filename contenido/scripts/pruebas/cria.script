@@ -1,0 +1,15 @@
+// GUION DE PRUEBA NUESTRO: lo que crea `pruebas/oleada`.
+//
+// La rata gigante del juego, entera, más lo que el motor le manda a todo lo
+// creado con `createnpc`: `game_dynamically_created`, con los parámetros que
+// van detrás del origen (scriptcmds.cpp:2802-2808). Los guarda y avisa a quien
+// la creó por `ent_creationowner` (`ENT_CREATIONOWNER`, :2796).
+#include monsters/giantrat
+
+{ game_dynamically_created   //PARAM1 = etiqueta   PARAM2 = número   PARAM3 = «oleada»
+
+	setvard MI_ETIQUETA PARAM1
+	setvard MI_NUMERO PARAM2
+	setvard MI_TIPO PARAM3
+	callexternal ent_creationowner cria_lista PARAM1 PARAM2
+}

@@ -3,6 +3,11 @@ import { BASE_COMUN, rutaComun } from "./play/recursos.js";
 import { GuionDelJugador, EVENTOS_DEL_JUGADOR } from "./play/guionjugador.js";
 import { GuionesDeObjeto, GuionDeObjeto, QUIEN_VISTE } from "./play/guionobjeto.js";
 import { vestir, fichasPuestas, seVisteAlCargar, correEnElServidor } from "./play/armadura.js";
+import {
+  equipoDelMuneco, equipoEnLaEleccion, piezasConCuerpo, firmaDe, aLaVistaSinGuion,
+  cuerpoGuardado, piezaDelCuerpo,
+} from "./play/equipovisto.js";
+import { Equipo3D } from "./render/equipo3d.js";
 import { Equipo } from "./play/equipar.js";
 import { colocar as colocarEnContenedores, dentroDe as dentroDelContenedor } from "./play/contenedores.js";
 import { TablaDeEfectos } from "./play/efectos.js";
@@ -12,6 +17,7 @@ import { HABILIDADES, PROPIEDADES } from "./juego/stats.js";
 
 import * as THREE from "three";
 import { initPhysics, World, Player, PLAYER, perfilMsr } from "./play/player.js";
+import { PasoLocal } from "./play/atasco.js";
 import {
   velocidadAndando,
   velocidadCorriendo,
@@ -52,6 +58,8 @@ import { cargarBichos } from "./render/bichos.js";
 import { cargarArma } from "./render/arma.js";
 import { cargarMuneco } from "./render/muneco.js";
 import { cargarFlechas } from "./render/flechas.js";
+import { cargarEstallido } from "./render/estallido.js";
+import { ESTALLIDOS } from "./play/fenix.js";
 import { montarArco } from "./juego/arco.js";
 import { Brazo, elegirObjetivo, resolverGolpe, expDeLaMuerte, FASE, VozDeLaCarga, CRITICO } from "./play/golpe.js";
 import { Flecha, anguloDelTiro, danoDeFlecha, dadoDeFlecha } from "./play/proyectil.js";
@@ -108,7 +116,7 @@ import { montarInterfaz } from "./juego/interfaz.js";
 import { montarVgui2 } from "./vgui2/montar.js";
 import { montarHud, cargaDelTiro } from "./juego/hudms.js";
 import { montarChat } from "./juego/chat.js";
-import { avisoDeCanal, hablar, HABLA } from "./play/chat.js";
+import { avisoDeCanal, hablar, HABLA, panelDeRecado } from "./play/chat.js";
 // LO QUE PASA AL MORIR Y AL SUBIR (experimento 41): el velo rojo, el centrado,
 // el cartel que se escribe letra a letra y la lluvia de colores.
 import { montarMensajes } from "./juego/mensajes.js";
@@ -145,6 +153,8 @@ import {
 import { PanelDeHoja } from "./vgui/estadisticas.js";
 import { Retratos } from "./render/retratos.js";
 import { InteraccionesNpc } from "./juego/interacciones.js";
+// `createnpc`: lo que un guion crea en mitad de la partida. Ver el archivo.
+import { MundoDeCreados, esSolido, ARMAS_QUE_INVOCAN, aMotor as escenaAMotor } from "./play/creados.js";
 import { nombreVisibleDe } from "./play/usaropcion.js";
 import { Ciclador, Ranuras, cargarRanuras } from "./play/ranuras.js";
 import { AlmacenLocal, AlmacenMemoria } from "./juego/almacen.js";
@@ -158,7 +168,7 @@ import {
   experienciaDelBicho,
 } from "./juego/servidor.js";
 import { ClienteDeRed, AlmacenRemoto } from "./red/cliente.js";
-import { enlaceDeNavegador, urlPorDefecto, listarPartidas } from "./red/navegador.js";
+import { enlaceDeNavegador, urlPorDefecto, listarPartidas, urlDeConexion } from "./red/navegador.js";
 import { BOTON } from "./red/protocolo.js";
 import { cargarOtros } from "./render/otros.js";
 // La sonda: dos mil líneas que no son el juego y que hasta el 28 vivían aquí.
@@ -303,6 +313,12 @@ let guionJugador = null;
 let vgui = null;
 /** Los retratos 3D de la pantalla de personajes. `src/render/retratos.js`. */
 let retratosDelPanel = null;
+/**
+ * EL 101: lo que hace falta para VER el equipo puesto — `build/msr/equipo.json`
+ * (`npm run equipo`) y los modelos ya traídos. `null` si no está horneado: el
+ * muñeco y la pantalla de elección salen sin equipo, y se dice en la consola.
+ */
+let equipoALaVista = null;
 /** El esquema de fuentes de VGUI. Lo usan los paneles, que se montan en dos sitios. */
 let esquemaVgui = null;
 /** Las opciones de menú de los NPC, de `build/<mapa>/menus.json`. */
@@ -328,7 +344,15 @@ let fichaDeGuiones = null;
  * analizador de dependencias marcó, y el que habría dejado dos variables con
  * el mismo nombre y ningún error. El ciclador la pone por `arco.elegirMunicion`.
  */
-function suceso(tipo, texto) {
+function suceso(tipo, texto, o = null) {
+  // EL 100: LO QUE SE DICE VA A LA OTRA CONSOLA. El `saytext` de un NPC y la
+  // opción `say` de un menú son `Speak`, y `Speak` acaba en `PrintSayText` —la
+  // caja de la izquierda— y no en `PrintEvent` (vgui_hud.cpp:304-313, :469-485).
+  // Quién es qué lo decide `panelDeRecado`, que es la regla y está probada en
+  // Node; aquí sólo se reparte. Sin la caja montada cae a la de sucesos: una
+  // frase en el sitio equivocado es mejor que una frase perdida.
+  const destino = panelDeRecado(o);
+  if (destino.panel === "chat" && chatMs) { chatMs.recibir(destino.tipo, texto); return; }
   // Antes de que el HUD exista —durante la carga— no se pierde nada: va a la
   // línea de estado, que es donde iba todo hasta ahora.
   if (!hudMs) { say(texto); return; }
@@ -637,6 +661,14 @@ async function arrancarJuego() {
     const fichaObjetos = await traerJson(rutaComun("objetosguion.json"));
     if (!fichaObjetos) console.warn("sin build/msr/objetosguion.json: los objetos van sin guion. Corre `npm run objetos:guion`.");
     guionesDeObjeto = fichaObjetos ? new GuionesDeObjeto(fichaObjetos) : null;
+    // EL 101: los modelos del equipo que se ve puesto (muñeco y elección).
+    {
+      const manifiestoDeEquipo = await traerJson(rutaComun("equipo.json"));
+      if (!manifiestoDeEquipo) console.warn("sin build/msr/equipo.json: el muñeco y la pantalla de personajes van sin equipo. Corre `npm run equipo`.");
+      equipoALaVista = manifiestoDeEquipo
+        ? { manifiesto: manifiestoDeEquipo, equipo3d: new Equipo3D({ base: BASE_COMUN }) }
+        : null;
+    }
     // Y los de EFECTO: la cura del sacerdote, el sentarse, los venenos. Un
     // efecto es otro guion que se pega a una entidad (scriptedeffects.cpp:27).
     const fichaEfectos = await traerJson(rutaComun("efectosguion.json"));
@@ -759,7 +791,16 @@ async function arrancarJuego() {
           ping: "", url: p.url,
         }));
       },
-      alConectar: (fila) => { if (fila?.url) location.search = `?red=${encodeURIComponent(fila.url)}`; },
+      // CONECTAR ES ENTRAR. En el motor, `connect` te mete en el mapa del servidor
+      // (`CL_Connect_f` -> `Host_Map` del lado del cliente, y de ahí a elegir
+      // personaje). Aquí sólo se ponía `?red=`: la página volvía con el MENÚ
+      // PRINCIPAL delante y la conexión hecha por detrás, sin nada en pantalla que
+      // lo dijera, y quien se unía desde la pestaña Lan veía que «se desconecta al
+      // instante». Lo vio el usuario con `npm run servidor` y la aplicación de
+      // escritorio. Ahora se entra con el mapa de la fila y `menu=1`, que es lo que
+      // pone «Start»: la partida arranca en el mapa del servidor y sale la elección
+      // de personaje. Si la fila no trae mapa, la bienvenida lo corrige (el 61).
+      alConectar: (fila) => { const q = urlDeConexion(fila); if (q) location.search = q; },
       porQueVacio: "No Steam master server here. Run `npm run servidor` and look in the Lan tab.",
     }).then((v) => { vgui2 = v; }).catch((e) => console.warn("sin las ventanas de VGUI2:", e));
     retratosDelPanel = new Retratos(losCuerpos);
@@ -844,12 +885,38 @@ async function arrancarJuego() {
     let censoDePersonajes = [];
     const refrescarCenso = async () => {
       try { censoDePersonajes = await sesion.almacen.listar(); } catch { censoDePersonajes = []; }
+      // EL 101: CÓMO SE VE CADA UNO. El género, si empuña algo y sus piezas,
+      // como el `charinfo_t` que el servidor del mod manda con la lista
+      // (playershared.cpp:1522-1558). `vista` la pone el almacén
+      // (`aLaVistaDe`); aquí se resuelve con los guiones de objeto.
+      censoDePersonajes = censoDePersonajes.map((d) => {
+        if (!d?.vista) return d;
+        const fichaDe = (id) => catalogoDeObjetos?.porId?.get(id) ?? null;
+        // EL 101b: y el CUERPO con lo que la armadura esconde — el `body`
+        // que el mod guarda para esta pantalla (mscharacter.h:86). Sin esto el
+        // pantalón asomaba por debajo de la coraza. Ver `cuerpoGuardado`.
+        const cuerpo = piezaDelCuerpo({
+          cuerpos: cuerpoGuardado({ personaje: d.vista, guiones: guionesDeObjeto, fichaDelJugador }),
+          genero: d.vista.genero, manifiesto: equipoALaVista?.manifiesto ?? null,
+        });
+        const piezas = piezasConCuerpo(
+          [...(cuerpo ? [cuerpo] : []), ...equipoEnLaEleccion({ personaje: d.vista, guiones: guionesDeObjeto, fichaDe })],
+          equipoALaVista?.manifiesto ?? null);
+        // `m_ItemInHand`: algo que no va puesto (vgui_choosecharacter.cpp:
+        // 1352-1360). Los puños no son un objeto guardado (`HAND_PLAYERHANDS`).
+        const conArma = ["derecha", "izquierda"].some((m) => {
+          const id = d.vista.manos?.[m];
+          return Boolean(id) && fichaDe(id)?.mano !== "undroppable";
+        });
+        return { ...d, aspecto: { genero: d.vista.genero, conArma, piezas, firma: firmaDe(piezas) } };
+      });
       vgui?.buscar("newchar")?.refrescar();
     };
 
     vgui.poner(new PanelDePersonaje({
       esquema: esquemaVgui,
       retratos: retratosDelPanel,
+      equipo3d: equipoALaVista?.equipo3d ?? null,
       armas: armasDePartida,
       // El cvar `name`, que es de dónde saca el mod el nombre que propone.
       nombrePropuesto: ajustesDelJugador?.nombre ?? "",
@@ -1367,6 +1434,10 @@ async function arrancarJuego() {
   const rumbo = rumboDeLlegada(RAPIER, world, level.start);
   const player = new Player(world, level.start, { perfil });
   player.yaw = rumbo;
+  // EL 100: el paso del jugador con `PM_CheckStuck` delante y los bichos que
+  // ya están dentro apartados, lo mismo que el servidor desde el 99
+  // (src/play/atasco.js `PasoLocal`). Todo `step` del jugador pasa por aquí.
+  const pasoLocal = new PasoLocal(player);
 
   // El render se crea ANTES de cargar las texturas, y no por gusto: la
   // anisotropia se le pregunta a la TARJETA con `getMaxAnisotropy()`, y sin
@@ -2216,7 +2287,9 @@ async function arrancarJuego() {
       const pies = cuerpo.feet;
       cuerpo.yaw = o.yaw;
       cuerpo.pitch = o.cabeceo;
-      cuerpo.step(o.msec / 1000, {
+      // EL 100: la orden rehecha también pasa por `PM_CheckStuck`, como en el
+      // motor, donde el cliente corre `PM_Move` entero en cada orden que predice.
+      (cuerpo === player ? pasoLocal : cuerpo).step(o.msec / 1000, {
         forward: o.adelante, strafe: o.lado,
         jump: (o.botones & BOTON.SALTAR) !== 0,
         agachar: (o.botones & BOTON.AGACHAR) !== 0,
@@ -2467,6 +2540,8 @@ async function arrancarJuego() {
           ahora: () => reloj,
           suceso: (tipo, texto) => suceso(tipo, texto),
           maximos: () => maximosDelPersonaje(),
+          // `createnpc` y compañía: lo que el objeto le pide al mundo.
+          mundo: mundoDeObjetos,
         });
         // `char_menu` cuando ya estaba en la mochila al aparecer y
         // `CGenericItem::WearItem` cuando llega jugando: el guion mira ese
@@ -3312,6 +3387,213 @@ async function arrancarJuego() {
     // viven en la capa del guion con su cita; ver `lineaDeVision`.
     lineaDeVision: (ref, instancia) => lineaDeVision(ref, instancia),
   });
+
+  // ── `createnpc`: LO QUE UN GUION CREA EN MITAD DE LA PARTIDA ─────────────
+  //
+  // La regla está en `src/play/creados.js`, que no sabe de Three ni de Rapier;
+  // aquí se le da el mundo: de dónde sale la ficha horneada, cómo se monta la
+  // instancia (por `bichos.crear`, el mismo camino que los bichos del mapa),
+  // dónde está el jugador, la traza y el daño.
+  //
+  // CON SERVIDOR NO SE CREA NADA, y es a propósito: la manada es del servidor,
+  // viaja por índice y su lado no sabe crear (`src/red/`). `crearInstancia`
+  // devuelve `null`, `createnpc` lo cuenta en `sinManada` y el arma que lo
+  // pidió no corre su guion (ver `guionVivoDelArma`): se queda como antes.
+
+  /** La ficha horneada de un guion creable: la de `creables` o la de un colocado con ese guion. */
+  function fichaCreable(script) {
+    if (!fichaDeGuiones?.guiones?.[script]) return null;       // sin guion horneado no hay entidad
+    const f = censoDeBichos?.creables?.[script]
+      ?? (censoDeBichos?.colocados ?? []).find((c) => c.script === script) ?? null;
+    return f ? { ...f, aparecedor: null } : null;
+  }
+  /**
+   * La luz de lo creado: el luxel del bicho colocado MÁS CERCANO al punto. El
+   * motor muestrea el suelo de debajo (`R_LightVec`); aquí el árbol BSP no está
+   * en el navegador (lo dice `tools/bichos.mjs`), así que se toma prestado el
+   * de quien esté más cerca. Es una aproximación y va dicha.
+   */
+  function luzCercana(donde) {
+    let mejor = null, d2 = Infinity;
+    for (const c of censoDeBichos?.colocados ?? []) {
+      if (!c.luz || !c.escena) continue;
+      const d = (c.escena[0] - donde[0]) ** 2 + (c.escena[1] - donde[1]) ** 2 + (c.escena[2] - donde[2]) ** 2;
+      if (d < d2) { d2 = d; mejor = c.luz; }
+    }
+    return mejor ?? [128, 128, 128];
+  }
+  /** El rumbo de la vista del jugador en grados del motor (`pev->angles.y`). */
+  function rumboDelJugador() {
+    const m = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+    const g = (Math.atan2(-m.z, m.x) * 180) / Math.PI;
+    return g < 0 ? g + 360 : g;
+  }
+  /**
+   * `$get(<jugador>,target)`: `ENT_TARGET`, lo primero que toca la vista a 2 048
+   * unidades con `dont_ignore_monsters` (player.cpp:4596-4617). El motor lo
+   * refresca una vez por segundo (`TimeUpdateIDInfo`); aquí se traza al
+   * preguntar, que es hasta un segundo más fresco. «0» si no hay nadie.
+   */
+  function objetivoDelJugador() {
+    if (!player || !bichosSolidos) return "0";
+    const m = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+    const ojo = player.eye;
+    const g = world.world.castRay(
+      new RAPIER.Ray({ x: ojo[0], y: ojo[1], z: ojo[2] }, { x: m.x, y: m.y, z: m.z }),
+      2048 / level.unitsPerMetre, true, undefined, undefined, undefined, player.body);
+    if (!g) return "0";
+    const p = bichosSolidos.puestos.find((q) => q.colisionador.handle === g.collider.handle);
+    return p && !p.instancia.muerto ? creados.asaDe(p.instancia) : "0";
+  }
+  /**
+   * `$get_traceline(a,b,worldonly)`: dónde acaba la traza contra el MUNDO, sin
+   * monstruos (script.cpp:2695-2700). Entra y sale en unidades y ejes del
+   * motor; `null` si no choca con nada.
+   */
+  function trazaDelMundoEnMotor(desde, hasta) {
+    const Um = level.unitsPerMetre;
+    const o = { x: desde[0] / Um, y: desde[2] / Um, z: -desde[1] / Um };
+    const d = { x: hasta[0] / Um - o.x, y: hasta[2] / Um - o.y, z: -hasta[1] / Um - o.z };
+    const L = Math.hypot(d.x, d.y, d.z);
+    if (!(L > 0)) return null;
+    d.x /= L; d.y /= L; d.z /= L;
+    const deBicho = new Set((bichosSolidos?.puestos ?? []).map((q) => q.colisionador.handle));
+    const g = world.world.castRay(new RAPIER.Ray(o, d), L, true,
+      undefined, undefined, undefined, player.body, (c) => !deBicho.has(c.handle));
+    if (!g) return null;
+    const t = g.timeOfImpact ?? g.toi ?? 0;
+    return escenaAMotor([o.x + d.x * t, o.y + d.y * t, o.z + d.z * t], Um);
+  }
+  /**
+   * EL DAÑO DE UNA INVOCACIÓN, que es del jugador: `xdodamage <bicho> direct
+   * <daño> 100% <jugador> ent_me <habilidad> <tipo>`. Va por `bichos.herir`,
+   * como la espada y la flecha, con el cubo de experiencia de la habilidad que
+   * dice el guion. Con servidor no se llega aquí (no hay invocación).
+   */
+  function herirPorInvocacion(i, dano, { habilidad = "", tipo = "" } = {}) {
+    if (!bichos || red) return null;
+    const h = habilidadDeArma(habilidad);
+    const props = h ? propiedadesDe(h.habilidad) : [];
+    const prop = h?.propiedad ?? props[Math.floor(Math.random() * props.length)] ?? "power";
+    const golpe = bichos.herir(i, dano, {
+      cubo: `${h?.habilidad ?? "?"}.${prop}`, tipo, ahora: reloj, dados: { quien: JUGADOR },
+    });
+    if (golpe.parado) {
+      if (!golpe.hablaElGuion) suceso("ataque", `Your attack was ${golpe.mensaje ?? "parried!"}`);
+      return golpe;
+    }
+    suceso("ataque", golpeAsestado({ nombre: i.ficha.nombre, dano, tipo }));
+    if (golpe.muerto) {
+      cuentas.muertes++;
+      bichosSolidos?.quitar(i);
+      repartirExperiencia(i);
+      soltarElBotin(i, golpe.suelta);
+    }
+    return golpe;
+  }
+  const creados = new MundoDeCreados({
+    unidadesPorMetro: level.unitsPerMetre,
+    ahora: () => reloj,
+    entidades: interacciones.registroDeEntidades,
+    instancias: () => bichos?.manada?.instancias ?? [],
+    razas: () => (tablaDeRazas.size ? tablaDeRazas : null),
+    fichaDe: (script) => fichaCreable(script),
+    crearInstancia: (ficha, donde) => {
+      if (red || !bichos) return null;
+      // La costura tiene que estar puesta ANTES de que nazca su guion: el
+      // cuerpo de lo creado lo da la manada enchufada (`guionDe`).
+      interacciones.enchufarA(bichos.manada);
+      const i = bichos.crear({ ...ficha, luz: luzCercana(donde) }, donde);
+      if (!i) return null;
+      // Cilindro sólo si su guion no dice `setsolid none|trigger`: una
+      // invocación no choca con nadie, un monstruo creado por guion sí.
+      i.conCilindro = esSolido(fichaDeGuiones?.guiones?.[ficha.script]) ? Boolean(bichosSolidos?.poner(i)) : false;
+      return i;
+    },
+    guionDe: (i) => interacciones.guionDe(i),
+    guionSiHay: (i) => interacciones.guionesVivos.get(i.id) ?? null,
+    retirarGuion: (i) => interacciones.guionesVivos.get(i.id)?.retirar?.(),
+    jugador: () => {
+      const p = sesion?.personaje ?? null;
+      if (!p || !player) return null;
+      return {
+        ref: interacciones.contextoDelJugador().ref, personaje: p,
+        pies: [...player.feet], yaw: rumboDelJugador(), vivo: (p.vida ?? 0) > 0,
+      };
+    },
+    herir: (i, dano, o) => herirPorInvocacion(i, dano, o),
+    curar: (que, cantidad) => guionJugador?.recibir?.(que, cantidad),
+    trazar: (a, b) => trazaDelMundoEnMotor(a, b),
+    alBorrar: (i) => { bichosSolidos?.quitar(i); i.conCilindro = false; },
+  });
+  // Y los guiones de los NPC pueden crear también (un jefe que saca crías).
+  interacciones.creados = creados;
+  /** Lo que un OBJETO con guion le pide al mundo (ver `GuionDeObjeto`, `mundo`). */
+  const mundoDeObjetos = {
+    crearNpc: (script, origen, params, o) => creados.crear(script, origen, params, o),
+    asaDeObjeto: (objeto) => creados.asaDeObjeto(objeto),
+    asaDelDueño: () => interacciones.contextoDelJugador().ref,
+    origenDelDueño: () => {
+      if (!player) return null;
+      const m = escenaAMotor(player.feet, level.unitsPerMetre);
+      m[2] += 36;                              // el `origin` del jugador es su centro
+      return m;
+    },
+    objetivoDelDueño: () => objetivoDelJugador(),
+    /** `callexternal <asa> <evento>` a algo creado: su guion, si sigue vivo. */
+    llamarA: (asa, evento, params) => {
+      const e = interacciones.registroDeEntidades.recuperar(asa);
+      const g = e?.que?.ficha ? interacciones.guionesVivos.get(e.que.id) ?? null : null;
+      if (!g?.guion) return false;
+      g.guion.llamar(evento, params);
+      return true;
+    },
+  };
+  /**
+   * EL GUION VIVO DEL ARMA DE LA MANO, si es de las que atacan por su guion
+   * (`ARMAS_QUE_INVOCAN`). `null` en todas las demás, con servidor, y si el
+   * arma no está en el personaje —`probe.arco.empunar` sólo monta el brazo—:
+   * entonces el ataque es el horneado de siempre.
+   */
+  const avisadoSinInvocacion = new Set();
+  function guionVivoDelArma() {
+    const id = equipo.brazo?.arma?.id ?? null;
+    if (!id || red || !ARMAS_QUE_INVOCAN.has(id)) return null;
+    // Y SÓLO SI LO QUE INVOCA ESTÁ HORNEADO EN ESTE MAPA Y YA HA LLEGADO. Si no,
+    // su `_start` quitaría la espada de la mano y su `_strike` no podría crear
+    // a quien se la devuelve: una espada perdida para siempre. Sin ello el
+    // ataque se queda en el andamio de antes, y se dice una vez.
+    const suyos = Object.entries(censoDeBichos?.creables ?? {}).filter(([, f]) => f.por?.includes(`items/${id}`)).map(([s]) => s);
+    if (!suyos.length || !suyos.every((s) => fichaCreable(s))) {
+      if (!suyos.length && !avisadoSinInvocacion.has(id)) {
+        avisadoSinInvocacion.add(id);
+        console.warn(`${id}: su invocación no está horneada en este mapa (\`npm run mapa:bichos\` y \`npm run guiones\` con --mapa): el lanzamiento se queda en el andamio.`);
+      }
+      return null;
+    }
+    const p = sesion?.personaje ?? null;
+    if (!p) return null;
+    const o = loQueLleva(p).find((x) => x.id === id) ?? null;
+    return o ? objetosVivos.get(String(o.uid ?? o.id)) ?? null : null;
+  }
+  /**
+   * EL `precache` DE UN ARMA QUE INVOCA (scriptcmds.cpp:2765): al empuñarla se
+   * traen el modelo y el guion de lo que puede crear, que están horneados A
+   * PETICIÓN (`aPeticion` en bichos.json, `guiones_creables.json`). Si no llega
+   * a tiempo no se rompe nada: lo creado nace sin dibujo y lo recibe al llegar
+   * (`bichos.crear`); sin su guion, el `createnpc` se cuenta en `sinFicha`.
+   */
+  let guionesCreablesPedidos = null;
+  async function precargarInvocaciones(id) {
+    if (!id || red || !ARMAS_QUE_INVOCAN.has(id)) return 0;
+    guionesCreablesPedidos ??= traerJson(ruta("guiones_creables.json")).catch(() => null);
+    const g = await guionesCreablesPedidos;
+    if (g?.guiones && fichaDeGuiones?.guiones) {
+      for (const [k, v] of Object.entries(g.guiones)) fichaDeGuiones.guiones[k] ??= v;
+    }
+    if (!bichos) return 0;
+    return bichos.precargar(bichos.clavesCreablesPor(`items/${id}`));
+  }
 
   // ── EL MENÚ DE INTERACCIÓN, que necesita a los bichos y al jugador ────────
   vgui.poner(new MenuInteractuar({
@@ -4177,6 +4459,10 @@ async function arrancarJuego() {
     // Las flechas van en el mismo fichero y en una lista aparte, porque no son
     // armas: son munición. El arco de árbol no tiene daño propio.
     if (m?.flechas) catalogos.flechas = new Map(m.flechas.map((f) => [f.id, f]));
+    // EL 100: y la bola de maná del Orion Bow, que no es munición (src/play/orion.js).
+    if (m?.bolas) catalogos.bolas = new Map(m.bolas.map((b) => [b.id, b]));
+    // EL 101: lo que se ve al reventar un proyectil (`estallidos` de armas.json).
+    if (m?.estallidos) catalogos.estallidos = new Map(m.estallidos.map((e) => [e.id, e]));
   } catch (e) {
     console.warn("el catalogo de armas no se ha podido leer:", e);
   }
@@ -4353,18 +4639,30 @@ async function arrancarJuego() {
       // se quedan clavadas donde caen y se tapan con las paredes.
       // EL 99: `tiraProyectiles` y no `esDeTiro`: la Unholy Blade y las astas
       // que lanzan también sueltan algo que vuela, y sin el conjunto volaba sin dibujo.
-      if (equipo.brazo?.tiraProyectiles && !arco.flechasPuestas) {
-        const cual = catalogos.flechas?.get("proj_arrow_generic")?.clave;
-        if (cual) {
-          arco.flechasPuestas = await cargarFlechas(cual, { U: level.unitsPerMetre });
+      // EL 100: un conjunto POR MODELO, el de cada cosa que este brazo puede
+      // tirar (`clavesQueTira`), y no el de la flecha de madera para todo.
+      if (equipo.brazo?.tiraProyectiles) {
+        for (const cual of arco.clavesQueTira(equipo.brazo)) {
+          if (arco.tieneConjunto(cual)) continue;
+          const c = await cargarFlechas(cual, { U: level.unitsPerMetre });
           // EL 97: era `scene.add`, y `scene` no existe en este archivo (la
           // escena del mundo es `escena`): un `ReferenceError` que el `catch`
           // de abajo convertía en «el arma no se ha podido montar» con el
           // conjunto ya asignado y FUERA de la escena — ninguna flecha se ha
           // dibujado volando desde que se la llevó el refactor 720b246. Visto en la sonda del 97.
-          if (arco.flechasPuestas) escena.add(arco.flechasPuestas.grupo);
+          if (c && !arco.tieneConjunto(cual)) { arco.ponerConjunto(cual, c); escena.add(c.grupo); }
+        }
+        // EL 101: y lo que se ve cuando lo que tira REVIENTA — la llamarada de la
+        // flecha del Fénix (`src/render/estallido.js`). Mismo sitio y mismo
+        // motivo: es un modelo más, y sólo hace falta con ese arco en la mano.
+        for (const id of arco.estallidosQueTira(equipo.brazo)) {
+          if (arco.tieneEstallido(id)) continue;
+          const c = await cargarEstallido(catalogos.estallidos?.get(id) ?? null, ESTALLIDOS[id], { U: level.unitsPerMetre });
+          if (c && !arco.tieneEstallido(id)) { arco.ponerEstallido(id, c); escena.add(c.grupo); }
         }
       }
+      // Y si es un arma que INVOCA, lo que puede crear: su `precache`.
+      await precargarInvocaciones(ficha.id);
     } catch (e) {
       console.warn("el arma no se ha podido montar:", e);
     }
@@ -5492,6 +5790,7 @@ async function arrancarJuego() {
     brazo: () => equipo.brazo,
     armaEnMano: () => equipo.armaEnMano,
     catalogoDeFlechas: () => catalogos.flechas,
+    catalogoDeBolas: () => catalogos.bolas ?? null,
     reloj: () => reloj,
     suceso,
     potenciaDe,
@@ -5520,8 +5819,39 @@ async function arrancarJuego() {
     if (!equipo.brazo) return null;
     const e = equipo.brazo.tic(dt, {
       pulsado: Boolean(pulsado),
-      destreza: destrezaDe(equipo.brazo.ataques[0]),
+      // EL 100: `ataqueDeReferencia` es `ataques[0]`, salvo en el Orion Bow,
+      // que no tiene ninguno y mira la arquería (bows_orion1.script:167).
+      destreza: destrezaDe(equipo.brazo.ataqueDeReferencia),
+      // EL 100: el maná de AHORA, que es lo que mira `UseAmmo` (giattack.cpp:898).
+      mana: sesion?.personaje?.mana ?? 0,
     });
+    // EL 100: EL MANÁ. Se cobra al empezar (`Give(GIVE_MP, -flMPDrain)`,
+    // giattack.cpp:1052-1053, con el recorte a cero de `Give`,
+    // msmonsterserver.cpp:1971-1999); sin bastante, el ataque se cancela, el
+    // aguante se va igual (:357 va antes que :392) y sale el gris del motor.
+    if (e.gastaMana > 0 && sesion?.personaje) {
+      sesion.personaje.mana = Math.max(0, (sesion.personaje.mana ?? 0) - e.gastaMana);
+      sesion.tocado?.();
+    }
+    // ── EL ARMA QUE ATACA POR SU GUION (la Blood Drinker) ──────────────────
+    //
+    // En el motor todo ataque llama a `<retorno>_start` al empezar y a
+    // `<retorno>_strike` al caer (giattack.cpp:345 y :877). Aquí sólo para las
+    // armas de `ARMAS_QUE_INVOCAN` y sin servidor (`guionVivoDelArma`): en
+    // ellas el `_strike` es quien hace el `createnpc`. Lo que su guion deje
+    // puesto con `setviewmodel` es lo que se ve en la mano (abajo).
+    const vivo = guionVivoDelArma();
+    if (e.sinMana) {
+      // `_start` va ANTES de `UseAmmo` (:345 y :392): sin maná el guion corre
+      // igual y dice lo suyo antes que el motor («Blood Drinker: Insufficient
+      // mana for Blood Dance», swords_blood_drinker.script:156-162).
+      vivo?.llamar(`${e.sinMana.retorno}_start`, []);
+      fatiga.aguante = Math.max(0, fatiga.aguante - equipo.brazo.aguanteDe(e.sinMana));
+      suceso("nopuedes", "You don't have enough MP");
+    }
+    // Y el Orion Bow: sus mensajes y su bola (src/play/orion.js).
+    for (const m of e.mensajes ?? []) suceso(m.tipo, m.texto);
+    if (e.bola) arco.tirarBola(e.bola);
     if (e.empieza) {
       // La animación la elige el arma entre sus tres (`ATTACK_ANIMS`), y
       // se pone UNA VEZ: `playviewanim` no repite.
@@ -5534,6 +5864,22 @@ async function arrancarJuego() {
       if (equipo.armaEnMano && cual !== null && cual !== undefined) {
         equipo.armaEnMano.pon(cual, { unaVez: true });
       }
+      // `setviewmodel none` en el `_start` del ataque: la Blood Drinker al
+      // lanzarse (swords_blood_drinker.script:146-150) y el cuchillo de fuego.
+      // En el juego el arma vuelve cuando su invocación llama a `sword_return`
+      // (:209-218), que NO está portada: aquí vuelve al acabar el ataque. Es
+      // un andamio declarado, y está en `Brazo.vistaDe`.
+      //
+      // CORRECCIÓN: ya está portada para las armas de `ARMAS_QUE_INVOCAN`: ahí
+      // corre el `_start` de verdad y la vista la decide su guion. El andamio
+      // se queda para lo demás —el cuchillo de fuego, y cualquier arma con
+      // servidor o sin su guion horneado—, donde sigue volviendo al acabar.
+      if (vivo) {
+        vivo.llamar(`${e.empieza.retorno}_start`, []);
+        // Por si se empuñó antes de que hubiera bichos montados (entrando por
+        // el menú): el `precache` otra vez, que no hace nada si ya está.
+        precargarInvocaciones(equipo.brazo.arma?.id).catch(() => {});
+      } else if (e.sinModelo && equipo.armaEnMano) equipo.armaEnMano.visible = false;
       // El silbido va con el mismo retardo que el golpe
       // (`MELEE_SOUND_DELAY MELEE_DMG_DELAY`), así que no suena aquí.
       fatiga.aguante = Math.max(0, fatiga.aguante - equipo.brazo.aguanteDe(e.empieza));
@@ -5541,16 +5887,55 @@ async function arrancarJuego() {
     if (e.golpe) {
       const s = equipo.brazo.arma?.sonidos?.blandir;
       if (s && audio.despierto) audio.unaVez(`snd/${s}`);
-      pegar(e.golpe);
+      const r = pegar(e.golpe);
+      // `<retorno>_strike` con los cuatro parámetros del motor (giattack.cpp:
+      // 871-877): qué tocó, dónde acabó la traza, a quién, y si entró. El
+      // segundo —el final de la traza— este puerto no lo tiene: va el centro
+      // del jugador, que es lo que vale cuando el alcance es 0, como en el
+      // lanzamiento. Un guion que lo lea para apuntar todavía no puede (ver
+      // `ARMAS_QUE_INVOCAN`).
+      if (vivo) {
+        const o = mundoDeObjetos.origenDelDueño();
+        vivo.llamar(`${e.golpe.retorno}_strike`, [
+          r?.objetivo ? "npc" : "none",
+          o ? `(${o.map((x) => x.toFixed(2)).join(",")})` : "(0,0,0)",
+          r?.objetivo?.ficha ? creados.asaDe(r.objetivo) : "¯NONE¯",
+          r?.objetivo && !r.parado ? "1" : "0",
+        ]);
+      }
     }
     // Y LA CUERDA: el tiro sale al soltar, con lo que se haya tensado.
     if (e.tira) tirar(e.tira, e.sostenido ?? 0);
+    // La secuencia que el guion del ataque pone DESPUÉS de empezar: el mazazo
+    // del segundo nivel levanta el arma a los 0,9 s (`callevent 0.9 bash`,
+    // blunt_base_onehanded.script:83-91). Va antes que `acaba` para que, si
+    // caen en el mismo paso, quede el reposo.
+    if (e.animacionTardia !== null && e.animacionTardia !== undefined && equipo.armaEnMano) {
+      equipo.armaEnMano.pon(e.animacionTardia, { unaVez: true });
+    }
     if (e.acaba && equipo.armaEnMano) {
+      // Con su guion vivo, que la espada vuelva no lo decide el fin del ataque
+      // (0,2 s): lo decide `sword_return`, cuando la invocación lo llama.
+      if (!vivo) equipo.armaEnMano.visible = true;
       equipo.armaEnMano.pon(equipo.brazo.arma?.animaciones?.parado ?? 1);
+    }
+    // LO QUE SE VE EN LA MANO ES `m_ViewModel` (genericitem.cpp:1934-1948):
+    // `setviewmodel none` la vacía y `setviewmodel <ruta>` la devuelve. Se lee
+    // en cada paso porque quien la devuelve no es el brazo sino la invocación,
+    // desde su propio reloj. `undefined` es «el guion no lo ha tocado».
+    if (vivo && equipo.armaEnMano && vivo.vista !== undefined) {
+      const seVe = vivo.vista !== null;
+      // Al VOLVER, el modelo en reposo: `sword_return` -> `setviewmodel MODEL_VIEW`.
+      if (seVe && !equipo.armaEnMano.visible && !equipo.brazo.atacando) {
+        equipo.armaEnMano.pon(equipo.brazo.arma?.animaciones?.parado ?? 1);
+      }
+      equipo.armaEnMano.visible = seVe;
     }
     // LAS FLECHAS EN EL AIRE, con el paso fijo: a 750 u/s, medir el vuelo con el
     // `dt` de dibujo cambia el punto de impacto según los fotogramas.
     if (arco.flechasEnVuelo.length) pasoDeFlechas(dt);
+    // EL 101: lo que está reventando sigue su reloj aunque ya no vuele nada.
+    arco.pasoDeEfectos(dt);
     return e;
   }
 
@@ -6122,7 +6507,7 @@ async function arrancarJuego() {
       // (pm_shared.cpp:3166). El resto se guarda para la siguiente (`msecDe`).
       const msOrden = red?.dentro ? red.msecDe(DT) : null;
       const dtCuerpo = msOrden > 0 ? msOrden / 1000 : DT;
-      const r = player.step(dtCuerpo, manda ? {
+      const r = pasoLocal.step(dtCuerpo, manda ? {
         forward: q.adelante, strafe: q.lado, jump: q.saltar, agachar: q.agachar,
         maxima, tope: conTrabas.tope, agua: enAgua, escalera,
       } : { agua: enAgua, escalera });
@@ -6484,6 +6869,30 @@ async function arrancarJuego() {
         // es poner otra, es devolverle la postura al cuerpo.
         muneco.pon(fatiga.corriendo ? "run" : (equipo.brazo ? "idle" : "attention"));
       }
+      // ── EL 101: EL MUÑECO LLEVA LO QUE LLEVAS ───────────────────────────
+      //
+      // `RenderGearItem` por cada objeto del `Gear` (clrenderent.cpp:310-312,
+      // 458-486). Se mira CADA FOTOGRAMA y no en los sitios donde cambia el
+      // equipo, porque esos sitios son muchos —el inventario, el ciclador, la
+      // red, una misión que te da algo— y el que se olvide deja un muñeco con
+      // la armadura de antes sin un solo error. Preguntar es barato: la regla
+      // guarda el aspecto de cada objeto y aquí sólo se compara una firma.
+      if (equipoALaVista && sesion?.personaje) {
+        const piezas = piezasConCuerpo(
+          equipoDelMuneco({ personaje: sesion.personaje, guiones: guionesDeObjeto, fichaDe: fichaDeObjeto }),
+          equipoALaVista.manifiesto);
+        const firma = firmaDe(piezas);
+        if (muneco.firmaDeEquipo !== firma) {
+          muneco.firmaDeEquipo = firma;
+          muneco.vestir(equipoALaVista.equipo3d, piezas);
+        }
+        // Y lo que lleva a la vista y NO se puede dibujar, dicho una vez.
+        const sinGuion = aLaVistaSinGuion({ personaje: sesion.personaje, guiones: guionesDeObjeto, fichaDe: fichaDeObjeto });
+        if (sinGuion.join("|") !== equipoALaVista.sinGuion?.join("|")) {
+          equipoALaVista.sinGuion = sinGuion;
+          if (sinGuion.length) console.warn(`el muñeco no enseña ${sinGuion.join(", ")}: su guion no está horneado (\`npm run objetos:guion\`).`);
+        }
+      }
       muneco.animar(dtB);
       muneco.visible = !interfaz?.abierta && (!sesion || sesion.estado === ESTADO.JUGANDO);
     }
@@ -6584,6 +6993,10 @@ async function arrancarJuego() {
           // ya está puesta.
           interacciones.enchufarA(bichos.manada);
           bichos.cazar(dtB, { ...arnesDePaseo, ahora: reloj });
+          // LO CREADO CON `createnpc`: su vuelo, su `Think` y su `game_touch`.
+          // Después de la caza —los bichos ya están donde van a estar este
+          // fotograma— y antes de cuadrar los cilindros. Ver `creados.js`.
+          if (creados.paso(dtB)) bichos.refrescar();
           bichosSolidos?.seguir();
         }
       }
@@ -6831,6 +7244,8 @@ async function arrancarJuego() {
     get armaEnMano() { return equipo.armaEnMano; },
     // EL 96: ponerse una pieza y lo que hizo la armadura con el último golpe.
     get vestirObjeto() { return vestirObjeto; },
+    // EL 101: lo que el muñeco debería enseñar y no puede (sin guion horneado).
+    get equipoSinGuion() { return equipoALaVista?.sinGuion ?? []; },
     get ultimaArmadura() { return ultimaArmadura; },
     // EL 97: lo que leen las sondas del equipo (src/play/equipar.js).
     get ultimoMovimiento() { return ultimoMovimiento; },
@@ -6916,6 +7331,9 @@ async function arrancarJuego() {
     get guionDe() { return instancia => interacciones.guionDe(instancia); },
     get guionesVivos() { return interacciones.guionesVivos; },
     get relojDeGuiones() { return interacciones.reloj; },
+    get creados() { return creados; },
+    get guionVivoDelArma() { return guionVivoDelArma; },
+    get precargarInvocaciones() { return precargarInvocaciones; },
     // EL 91: lo que la costura ha hecho y lo que se ha quedado por el camino.
     get costuraDeBichos() { return interacciones.costura; },
     get fichaDeGuiones() { return fichaDeGuiones; },
@@ -6973,6 +7391,8 @@ async function arrancarJuego() {
     get pegar() { return pegar; },
     get perfil() { return perfil; },
     get player() { return player; },
+    // EL 100: el paso del jugador con `PM_CheckStuck` (src/play/atasco.js).
+    get pasoLocal() { return pasoLocal; },
     get ponerMuneco() { return ponerMuneco; },
     get potenciaDe() { return potenciaDe; },
     get puertas() { return puertas; },
@@ -7004,6 +7424,8 @@ async function arrancarJuego() {
     get ultimaFlecha() { return arco.ultimaFlecha; },
     /** EL 97: lo que hicieron los guiones de los proyectiles (src/juego/arco.js). */
     get deGuionDelArco() { return arco.deGuion; },
+    /** EL 101: los estallidos montados (`src/render/estallido.js`), para la sonda. */
+    get estallidosDelArco() { return arco.estallidos; },
     get ultimoGolpe() { return ultimoGolpe; },
     get velo() { return velo; },
     get velocidadParaLosPasos() { return velocidadParaLosPasos; },

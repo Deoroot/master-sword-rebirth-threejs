@@ -26,11 +26,11 @@
 // que escriben y se para con cualquier línea de error o de fuga.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { mapa } from "./mapagen.mjs";
-import { CONTENIDO } from "./mapa.mjs";
+import { CONTENIDO, SCRIPTS_DEL_JUEGO, SCRIPTS_MONTADOS } from "./mapa.mjs";
 import { esNombreDeMapa } from "../src/play/mapa.js";
 
 export const SALIDA = resolve("build", "contenido", "maps");
@@ -55,6 +55,58 @@ function correr(exe, args, registro) {
   console.log(`   ✓ ${ultima?.trim() ?? ""}`);
 }
 
+/** Los guiones NUESTROS: `contenido/scripts/<carpeta>/<nombre>.script`. */
+export const SCRIPTS_NUESTROS = resolve("contenido", "scripts");
+
+/** Todos los `.script` de una carpeta, con la ruta relativa y barras normales. */
+function guionesDe(dir, base = dir, fuera = []) {
+  if (!existsSync(dir)) return fuera;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const ruta = join(dir, e.name);
+    if (e.isDirectory()) guionesDe(ruta, base, fuera);
+    else if (e.name.endsWith(".script")) fuera.push(ruta.slice(base.length + 1).split("\\").join("/"));
+  }
+  return fuera;
+}
+
+/**
+ * MONTA los guiones: copia los del juego a `build/contenido/scripts` y pone los
+ * nuestros encima. Así un guion nuestro puede hacer `#include monsters/base_chat`
+ * y los siete lectores del horneado siguen leyendo UNA carpeta.
+ *
+ * **Un guion nuestro no puede llamarse como uno del juego**: es la misma regla
+ * que la de los `.bsp` (`bspDe`). Si uno tapara al otro en silencio, cambiaría
+ * un NPC de Master Sword sin que nadie lo hubiera decidido. Modificar un NPC del
+ * juego es otra cosa y se hará, el día que se haga, con otro nombre.
+ *
+ * Devuelve los guiones nuestros que ha montado.
+ */
+export function montarScripts({ juego = SCRIPTS_DEL_JUEGO, nuestros = SCRIPTS_NUESTROS, sale = SCRIPTS_MONTADOS } = {}) {
+  if (!existsSync(join(juego, "monsters"))) throw new Error(`no encuentro los guiones del juego en ${juego}`);
+  const mios = guionesDe(nuestros);
+  const pisan = mios.filter((r) => existsSync(join(juego, r)));
+  if (pisan.length) throw new Error(`estos guiones nuestros se llaman como uno del juego: ${pisan.join(", ")}`);
+  rmSync(sale, { recursive: true, force: true });
+  cpSync(juego, sale, { recursive: true });
+  for (const r of mios) {
+    mkdirSync(join(sale, r, ".."), { recursive: true });
+    cpSync(join(nuestros, r), join(sale, r));
+  }
+  writeFileSync(join(sale, "PROCEDENCIA.md"), [
+    "# De dónde sale lo que hay aquí — NO REDISTRIBUIR",
+    "",
+    `Los guiones de Master Sword: Rebirth, copiados de \`${juego}\`, con los NUESTROS`,
+    "(contenido/scripts/, de este repositorio) puestos encima. Lo monta",
+    "tools/contenido.mjs para hornear los mapas nuestros. No se versiona ni se publica.",
+    "",
+    "Los nuestros:",
+    ...mios.map((r) => `- \`${r}\``),
+    "",
+  ].join("\n"));
+  console.log(`montados ${mios.length} guiones nuestros sobre los del juego en ${sale}`);
+  return mios;
+}
+
 export async function compilar(nombre) {
   if (!esNombreDeMapa(nombre)) throw new Error(`«${nombre}» no es un nombre de mapa`);
   const desc = await import(pathToFileURL(resolve("contenido", `${nombre}.mjs`)).href);
@@ -64,6 +116,7 @@ export async function compilar(nombre) {
   for (const w of wads) if (!existsSync(w)) throw new Error(`falta ${w}`);
 
   mkdirSync(SALIDA, { recursive: true });
+  montarScripts();
   const base = join(SALIDA, nombre);
   const texto = mapa({
     mundo: { ...desc.mundo, wad: wads.join(";") },

@@ -322,7 +322,9 @@ await pag.waitForTimeout(400);
 const alLlegar = await pag.evaluate(() => ({
   edrin: window.probe.mundo.npc("edrin"),
   escenas: window.probe.mundo.escenas(),
-  dichos: window.probe.hud.estado()?.consola ?? null,
+  // EL 100: lo que dice un NPC está en la consola del chat y no en la de
+  // sucesos; `visto()` trae lo que se ve en las dos.
+  dichos: { lineas: window.probe.misiones.visto() },
   escenasDeNpc: window.probe.mundo.escenasDeNpc(),
 }));
 const fotoLlegada = await foto("en-las-flores");

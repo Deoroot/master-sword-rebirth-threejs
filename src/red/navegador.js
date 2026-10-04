@@ -62,3 +62,20 @@ export async function listarPartidas(url = urlPorDefecto()) {
   if (!r?.ok) return [];
   return r.json().catch(() => []);
 }
+
+/**
+ * La búsqueda (`?red=…&map=…&menu=1`) con la que «Connect» entra a la partida de
+ * una fila del navegador de servidores, o `null` si la fila no tiene dirección.
+ *
+ * Lleva el MAPA de la fila y `menu=1`, que es lo que deja «Start»: sin ellos la
+ * página vuelve al menú principal con la conexión hecha por detrás, y eso se lee
+ * como una desconexión. Un mapa que no es un nombre válido no se manda: la
+ * bienvenida del servidor dice el suyo y el cliente recarga con él (el 61).
+ */
+export function urlDeConexion(fila, esMapa = (m) => /^[a-z0-9_]+$/.test(String(m ?? ""))) {
+  if (!fila?.url) return null;
+  const q = new URLSearchParams();
+  q.set("red", fila.url);
+  if (esMapa(fila.mapa)) { q.set("map", fila.mapa); q.set("menu", "1"); }
+  return `?${q}`;
+}

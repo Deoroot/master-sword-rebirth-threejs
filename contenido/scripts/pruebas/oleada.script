@@ -1,0 +1,46 @@
+// GUION DE PRUEBA NUESTRO: el segundo caso de `createnpc`.
+//
+// No es de ningún mapa. Lo corren `test/createnpc.test.mjs` y la sonda
+// `sondas/createnpc.mjs`, que le dan el TEXTO de este archivo al analizador:
+// así el comando lo parte quien lo parte en el juego (CLAUDE.md, apartado 4).
+//
+// Es la forma más corta de lo que hace un jefe que saca crías o una oleada de
+// `game_master`: crear un bicho en un punto, pasarle parámetros y quedarse con
+// su asa. El primer caso es la Blood Drinker, que es del juego
+// (items/swords_blood_drinker.script:171).
+{
+	setvard CRIAS_HECHAS 0
+}
+
+{ game_spawn
+
+	name Wave Caller
+	hp 50
+	width 32
+	height 72
+	race human
+	roam 0
+	invincible 1
+}
+
+//PARAM1 = el guion de la cría   PARAM2 = dónde, «(x,y,z)» en unidades   PARAM3 = una etiqueta
+{ llamar_oleada
+
+	createnpc PARAM1 PARAM2 PARAM3 CRIAS_HECHAS oleada
+	setvard ULTIMA_CRIA $get(ent_lastcreated,id)
+	add CRIAS_HECHAS 1
+}
+
+//Sin los dos parámetros que el motor exige: no crea nada (ERROR_MISSING_PARMS).
+{ llamar_mal
+
+	createnpc PARAM1
+	setvard TRAS_MAL $get(ent_lastcreated,id)
+}
+
+//Lo llama la cría con `callexternal ent_creationowner`.
+{ cria_lista   //PARAM1 = la etiqueta que recibió   PARAM2 = su número
+
+	setvard CRIA_ETIQUETA PARAM1
+	setvard CRIA_NUMERO PARAM2
+}

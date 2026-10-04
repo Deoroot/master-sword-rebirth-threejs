@@ -366,7 +366,14 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
     // El 98 sumó uno, `registercontainer` (genericitem.cpp:352, gipack.cpp:
     // 50-77): lo que cabe en un contenedor. Ver `test/inventario98.test.mjs`.
     // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2 + 1`.
-    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2 + 1 + 1);
+    // `createnpc` sumó cinco: él y los cuatro que pide una invocación para
+    // moverse sola —`setcallback`, `fly`, `setanim.movespeed` y `race`—. Los
+    // cinco van a un gancho y sin gancho se apuntan. Ver `test/createnpc.test.mjs`.
+    // Lectura vieja: `90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2 + 1 + 1`.
+    assert.equal(COMANDOS.size, 90 + 9 + 3 + 4 + 5 + 4 + 2 + 1 + 2 + 1 + 1 + 5);
+    for (const c of ["createnpc", "setcallback", "fly", "setanim.movespeed", "race"]) {
+      assert.ok(COMANDOS.has(c), `falta ${c}, que es de \`createnpc\``);
+    }
     assert.ok(COMANDOS.has("registercontainer"), "falta registercontainer, que es del 98");
     for (const c of ["registerarmor", "setdmg"]) assert.ok(COMANDOS.has(c), `falta ${c}, que es del 96`);
     assert.ok(COMANDOS.has("nopush"), "falta nopush, que es del 97");
@@ -435,7 +442,13 @@ describe("EL SUBCONJUNTO PORTADO, dicho aquí para que no crezca a escondidas", 
     // EL 96, `$neg`: sin él ninguna resistencia elemental del jugador llegaba
     // a `takedmg` (player/server/element_resist.script:87).
     // (Lectura vieja: `21 + 6 + 1 + 1 + 1`.)
-    assert.equal(GETTERS.size, 21 + 6 + 1 + 1 + 1 + 1);
+    // `createnpc` sumó cuatro, los de `monsters/summon/blood_drinker`: `$vec`,
+    // `$dir`, `$get_tsphere` y `$get_traceline`. Ver `test/createnpc.test.mjs`.
+    // (Lectura vieja: `21 + 6 + 1 + 1 + 1 + 1`.)
+    assert.equal(GETTERS.size, 21 + 6 + 1 + 1 + 1 + 1 + 4);
+    for (const g of ["$vec", "$dir", "$get_tsphere", "$get_traceline"]) {
+      assert.ok(GETTERS.has(g), `falta ${g}, que es de \`createnpc\``);
+    }
     assert.ok(GETTERS.has("$neg"), "falta $neg, que es del 96");
     assert.ok(GETTERS.has("$relvel"), "falta $relvel, que es del 93");
     assert.ok(GETTERS.has("$relpos"), "falta $relpos, que es del 95");

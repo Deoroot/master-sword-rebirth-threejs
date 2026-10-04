@@ -249,6 +249,27 @@ export function loQueLleva(p) {
   return fuera;
 }
 
+/**
+ * LO QUE LA LISTA DE PERSONAJES DICE DE CÓMO SE VE CADA UNO — el 101.
+ *
+ * En Master Sword la lista que el servidor manda a la pantalla de elección
+ * lleva, por personaje, su género y un `gearinfo_t` por objeto: modelo, `body`
+ * y si va puesto (`charinfo_t`, playershared.cpp:1522-1558; se envía en
+ * player.cpp:6630-6642). Con eso el cliente viste a los tres sin cargarlos.
+ *
+ * Aquí la lista no puede traer el modelo ya resuelto —el almacén no tiene los
+ * guiones—, así que trae lo mínimo para que quien SÍ los tiene lo resuelva
+ * (`equipoEnLaEleccion`, src/play/equipovisto.js): el género, las dos manos y,
+ * de cada objeto, su id y si va puesto. Nada de habilidades ni de oro.
+ */
+export function aLaVistaDe(p) {
+  return {
+    genero: p?.genero === "female" ? "female" : "male",
+    manos: { derecha: p?.manos?.derecha ?? null, izquierda: p?.manos?.izquierda ?? null },
+    objetos: (p?.objetos ?? []).map((o) => ({ id: o.id, ...(o.puesto ? { puesto: true } : {}) })),
+  };
+}
+
 /** Deja el documento listo para guardar: sella la fecha y nada más. */
 export function sellar(p, ahora = null) {
   return { ...p, actualizado: ahora ?? new Date().toISOString() };

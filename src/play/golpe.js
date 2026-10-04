@@ -20,6 +20,10 @@
 //   `CGenericItem::Attack`          giattack.cpp:403   los dos relojes
 //   `CGenericItem::StrikeLand`      giattack.cpp:736   el daño
 //   `DoDamage( Damage, Hits )`      giattack.cpp:1532  a quién le da
+//   `CGenericItem::UseAmmo`         giattack.cpp:890   el maná (el 100)
+
+// EL 100: el arco de Orión no tiene ataque: lo hace su guion (src/play/orion.js).
+import { ORION, CargaDeOrion } from "./orion.js";
 
 /**
  * `VIEW_FIELD_NARROW` (util.h:178), y con dos avisos que cambian el juego:
@@ -542,6 +546,32 @@ export class Brazo {
     this.tSuelta = 0;
     /** Cuál de las animaciones de ataque tocó, que el arma tiene varias. */
     this.animacion = null;
+    /** Las que el guion del ataque en curso pone más tarde: `[{ t, indice }]`. Ver `vistaDe`. */
+    this.tardias = [];
+    /** El ataque en curso quita el modelo de vista (`setviewmodel none`). */
+    this.sinModelo = false;
+    /**
+     * EL 100: `BlockButton(IN_ATTACK)` —el botón «se queda en falso hasta que se
+     * suelta» (playershared.cpp:1343-1349)—, que pone `UseAmmo` al faltar maná
+     * (giattack.cpp:905). Sin él, aguantar el botón sin maná reintentaría el
+     * ataque en cada fotograma.
+     */
+    this.bloqueado = false;
+    /**
+     * EL 100: el arma que no ataca por el motor sino por su GUION. Sólo el
+     * Orion Bow en los 833 guiones de `items/` (`createnpc items/proj_mana2`,
+     * bows_orion1.script:189, es el único). Su reloj empieza al empuñar
+     * (`game_deploy`), que es cuando se monta este `Brazo`.
+     */
+    this.guionDeTiro = arma?.id === ORION.id ? new CargaDeOrion() : null;
+  }
+
+  /**
+   * EL 100: el ataque con el que se mira la habilidad del brazo cuando no tiene
+   * ninguno de verdad: el Orion Bow mira la de arquería (bows_orion1.script:167).
+   */
+  get ataqueDeReferencia() {
+    return this.ataques[0] ?? (this.guionDeTiro ? { habilidad: ORION.habilidad } : null);
   }
 
   /**
@@ -558,7 +588,100 @@ export class Brazo {
    * conjunto de nodos que dibuja lo que vuela pregunta esto y no `esDeTiro`.
    */
   get tiraProyectiles() {
-    return this.ataques.some((a) => a.tipo === "charge-throw-projectile");
+    return Boolean(this.guionDeTiro) || this.ataques.some((a) => a.tipo === "charge-throw-projectile");
+  }
+
+  /**
+   * LA SECUENCIA DEL MODELO DE VISTA DE UN ATAQUE.
+   *
+   * No es del arma: es de CADA ataque, y no es un campo suyo. Al empezar, el
+   * motor llama al evento `<retorno>_start` del guion del arma
+   *
+   *     CallScriptEvent(CurrentAttack->CallbackName + "_start");   giattack.cpp:345
+   *
+   * y la secuencia es la que ese evento ponga con `playviewanim`
+   * (genericitem.cpp:2015-2033) o, desde el servidor, con `splayviewanim`
+   * (scriptcmds.cpp:6836-6857). Lo que cada `_start` deja puesto se hornea en
+   * `ataque.vista` corriendo el evento con el intérprete (tools/animvista.mjs).
+   *
+   * Hasta ahora esto sorteaba entre `ANIM_ATTACK1..5` del arma para TODOS sus
+   * ataques. Eso es lo que hace `melee_start` de `swords_base_onehanded`
+   * (:26-35) y de `axes_base_onehanded`, y sólo ése: el golpe cargado de la
+   * Blood Drinker pone `ANIM_LUNGE` (swords_blood_drinker.script:185-190) y
+   * salía con el tajo normal; el bastón no declara ningún `ANIM_ATTACK` y no
+   * se movía al pegar; una maza pone siempre `MELEE_VIEWANIM_ATK`
+   * (base_melee.script:137) y aquí alternaba entre tres.
+   *
+   *   - `secuencias` trae UNA POR CARA del dado del guion: se sortea entre
+   *     ellas. Con una sola no hay sorteo, pero el dado se tira igual que antes.
+   *   - **Vacía no es «la 0»**: el `_start` no toca la secuencia y el motor
+   *     deja la que hubiera. Se devuelve `null` y quien dibuja no cambia nada.
+   *   - `tardias` son las que pone después, con su hora (`callevent 0.9 bash`).
+   *   - `sinModelo`: el `_start` hace `setviewmodel none` (la Blood Drinker al
+   *     lanzarse, :146-150).
+   *
+   * Sin `vista` —un catálogo horneado antes de esto, o un arma sin guion— o con
+   * una que el intérprete no supo resolver (`sinResolver`), el sorteo de antes.
+   */
+  vistaDe(a) {
+    const v = a?.vista;
+    if (!v || v.sinResolver) {
+      const anims = this.arma?.animaciones?.ataque ?? [];
+      return {
+        animacion: anims.length ? anims[Math.floor(this.azar() * anims.length)] : null,
+        tardias: [], sinModelo: false,
+      };
+    }
+    const s = v.secuencias ?? [];
+    return {
+      animacion: s.length ? s[Math.floor(this.azar() * s.length)] : null,
+      tardias: [...(v.tardias ?? [])].sort((x, y) => x.t - y.t),
+      sinModelo: Boolean(v.sinModelo),
+    };
+  }
+
+  /**
+   * EL 100: ¿PUEDE PAGAR el maná de este ataque? `UseAmmo`, que `StartAttack`
+   * llama DESPUÉS de cobrar el aguante y de llamar a `<callback>_start`
+   * (giattack.cpp:345-392):
+   *
+   *     if (CurrentAttack->flMPDrain && m_pOwner->m_MP < CurrentAttack->flMPDrain
+   *         && !FBitSet(m_pOwner->pev->flags, FL_GODMODE)) {
+   *       m_pPlayer->SendEventMsg(HUDEVENT_UNABLE, "You don't have enough MP");
+   *       m_pPlayer->BlockButton(IN_ATTACK);
+   *       return false;                              -> CancelAttack()
+   *     }                                            giattack.cpp:897-908
+   *     ...
+   *     if (CurrentAttack->flMPDrain) m_pOwner->Give(GIVE_MP, -CurrentAttack->flMPDrain);   :1051-1053
+   *
+   * O sea que se cobra AL EMPEZAR, entero, y no al caer el golpe ni al soltar
+   * el tiro; y que sin maná el aguante YA se ha ido (:357, antes de :392). El
+   * modo dios no está portado.
+   */
+  _pagaMana(a, mana, out) {
+    const coste = a?.mana ?? 0;
+    if (!(coste > 0)) return true;
+    if (mana < coste) {
+      out.sinMana = a;
+      this.bloqueado = true;
+      return false;
+    }
+    out.gastaMana = coste;
+    return true;
+  }
+
+  /**
+   * EL 100: el paso de un arma de GUION (el Orion Bow). No hay ataque del motor
+   * —`ataques` está vacío—; lo que sale es lo que devuelve `CargaDeOrion`: el
+   * maná que se cobra (`gastaMana`), los mensajes y, al soltar, `bola`.
+   */
+  ticDelGuion(dt, { pulsado = false, destreza = 0, mana = 0 } = {}) {
+    const r = this.guionDeTiro.paso(dt, { pulsado, mana, competencia: destreza });
+    this.pulsadoAntes = pulsado;
+    return {
+      empieza: null, golpe: null, tira: null, acaba: false, fase: this.fase,
+      gastaMana: r.gasta, bola: r.suelta, mensajes: r.mensajes, cargaDeGuion: r.empieza,
+    };
   }
 
   /**
@@ -668,9 +791,16 @@ export class Brazo {
    *     golpe     el ataque cuyo daño cae en ESTE paso — uno por ataque
    *     acaba     verdadero el paso en que termina
    */
-  tic(dt, { pulsado = false, destreza = 0 } = {}) {
+  tic(dt, { pulsado = false, destreza = 0, mana = 0 } = {}) {
     this.destreza = destreza;
-    if (this.esDeTiro) return this.ticDelTiro(dt, { pulsado, destreza });
+    // EL 100: el botón bloqueado por falta de maná se lee ARRIBA hasta que el
+    // jugador lo suelta de verdad (`BlockButton`, playershared.cpp:1343-1349).
+    if (this.bloqueado) {
+      if (pulsado) pulsado = false;
+      else this.bloqueado = false;
+    }
+    if (this.guionDeTiro) return this.ticDelGuion(dt, { pulsado, destreza, mana });
+    if (this.esDeTiro) return this.ticDelTiro(dt, { pulsado, destreza, mana });
     const out = { empieza: null, golpe: null, acaba: false, fase: this.fase };
     const pulsaAhora = pulsado && !this.pulsadoAntes;
 
@@ -712,7 +842,15 @@ export class Brazo {
     //    paso de después.
     if (this.fase === FASE.QUIETO) {
       const { ataque: a, porFallback } = this.elegir({ pulsado, destreza });
-      if (a) {
+      // EL 100: sin maná el ataque empieza y se cancela en el mismo paso
+      // (`UseAmmo` -> `CancelAttack`, giattack.cpp:392-393): el aguante se cobra
+      // igual (`sinMana`, que quien llama trata como `empieza` para eso) y la
+      // carga se pierde (`m_TimeChargeStart = 0` y `m_LastChargedAmt = 0`, :369,
+      // :374 y :395).
+      if (a && !this._pagaMana(a, mana, out)) {
+        if (porFallback || a.carga) this.cargando = 0;
+        this.cargaHecha = 0;
+      } else if (a) {
         // La salida de emergencia del motor tira el reloj de carga.
         if (porFallback) this.cargando = 0;
         this.ataque = a;
@@ -723,11 +861,13 @@ export class Brazo {
         this.soltado = false;
         this.tSuelta = 0;
         this.cargaHecha = 0; // se limpia al elegir, como en el motor
-        const anims = this.arma?.animaciones?.ataque ?? [];
-        this.animacion = anims.length
-          ? anims[Math.floor(this.azar() * anims.length)] : null;
+        const vista = this.vistaDe(a);
+        this.animacion = vista.animacion;
+        this.tardias = vista.tardias;
+        this.sinModelo = vista.sinModelo;
         out.empieza = a;
         out.animacion = this.animacion;
+        if (vista.sinModelo) out.sinModelo = true;
       }
     }
 
@@ -736,6 +876,13 @@ export class Brazo {
     //    en el motor `tStart` es el instante de ahora.
     if (this.fase === FASE.BLANDIENDO && !out.empieza) {
       this.t += dt;
+      // Las secuencias que el guion pone DESPUÉS de empezar (`callevent 0.9
+      // bash`, blunt_base_onehanded.script:83-91). Una por paso, en su hora.
+      while (this.tardias.length && this.t >= this.tardias[0].t) {
+        out.animacionTardia = this.tardias[0].indice;
+        this.animacion = out.animacionTardia;
+        this.tardias = this.tardias.slice(1);
+      }
       // EL 99: el tiro cargado de un arma cuerpo a cuerpo NO es un mandoble con
       // otro número: `Attack()` llama a `ChargeThrowProj` y no a `StrikeLand`
       // según el TIPO del ataque (giattack.cpp:470-476). Hasta hoy caía aquí y
@@ -746,6 +893,8 @@ export class Brazo {
         this.fase = FASE.QUIETO;
         this.ataque = null;
         this.animacion = null;
+        this.tardias = [];
+        this.sinModelo = false;
         out.acaba = true;
       } else if (!this.golpeDado && this.t >= (this.ataque?.retardo ?? 0)) {
         this.golpeDado = true;
@@ -799,6 +948,8 @@ export class Brazo {
         this.fase = FASE.QUIETO;
         this.ataque = null;
         this.animacion = null;
+        this.tardias = [];
+        this.sinModelo = false;
         out.acaba = true;
       }
     } else if (desde >= (a?.retardo ?? 0)) {
@@ -834,7 +985,7 @@ export class Brazo {
    *
    * Devuelve `tira` en el paso del disparo, con lo que se aguantó.
    */
-  ticDelTiro(dt, { pulsado = false, destreza = 0 } = {}) {
+  ticDelTiro(dt, { pulsado = false, destreza = 0, mana = 0 } = {}) {
     const out = { empieza: null, golpe: null, tira: null, acaba: false, fase: this.fase };
     // EL 99: CUÁL de los ataques del arco, con el MISMO bucle que el mandoble.
     // `StartAttack` no distingue arcos de espadas al elegir (giattack.cpp:269-334):
@@ -856,6 +1007,14 @@ export class Brazo {
       if (a?.pideHabilidad > 0 && destreza < a.pideHabilidad) {
         // Igual que en el mandoble: el motor no lo impide, sólo deja tirar peor
         // (y es el ataque 0, así que el `i > 0` no lo salva). Aquí se deja pasar.
+      }
+      // EL 100: y el maná, al empezar a tensar, igual que el mandoble (ver
+      // `_pagaMana`). Ningún arco del juego registra `mpdrain`; va por simetría
+      // con `StartAttack`, que no distingue.
+      if (!this._pagaMana(a, mana, out)) {
+        this.pulsadoAntes = pulsado;
+        out.fase = this.fase;
+        return out;
       }
       this.ataque = a;
       this.fase = FASE.TENSANDO;

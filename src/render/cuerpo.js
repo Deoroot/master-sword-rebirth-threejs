@@ -46,6 +46,7 @@
 
 import * as THREE from "three";
 import { ESPACIO } from "./bsp_escena.js";
+import { enEscenaDe } from "./equipo3d.js";
 
 import { BASE_COMUN } from "../play/recursos.js";
 import { traerJson } from "../play/json.js";
@@ -311,6 +312,40 @@ class Ranura {
 
     this.malla = malla;
     this.mezclador = new THREE.AnimationMixer(this.nodo);
+    // EL 101: lo que `Equipo3D.vestir` necesita. Es un cuerpo NUEVO, así que
+    // lo que llevaba el anterior hay que volver a colgarlo (ver `vestir`).
+    this.destino = { ejes, huesos, ficha: G.ficha, malla };
+    if (this._vestido) this.vestir(this._vestido.equipo3d, this._vestido.piezas);
+  }
+
+  /**
+   * EL 101: el equipo del personaje guardado, colgado de su cuerpo.
+   * `CRenderChar::Render` (vgui_choosecharacter.cpp:1247-1301, 1337). `piezas`
+   * sale de `piezasConCuerpo(equipoEnLaEleccion(...))`.
+   */
+  vestir(equipo3d, piezas = []) {
+    this._vestido = { equipo3d, piezas };
+    return equipo3d.vestir(this.destino, piezas);
+  }
+
+  /** Las mallas de equipo que cuelgan de sus ejes AHORA, leídas del grafo. */
+  get equipoEnEscena() { return this.destino ? enEscenaDe(this.destino) : []; }
+
+  /** Las mallas colgadas, para que la sonda las esconda y cuente píxeles. */
+  //
+  // SIN la del cuerpo: esconder «el equipo» no puede llevarse el cuerpo.
+  get mallasDeEquipo() { return (this.destino?._equipo ?? []).filter((c) => !c.esCuerpo).map((c) => c.malla).filter(Boolean); }
+
+  /** EL 101b: ¿se ve la malla ENTERA del cuerpo, o la ha sustituido una con partes escondidas? */
+  get cuerpoEntero() { return this.malla?.visible !== false; }
+
+  /** Lo que lleva colgado AHORA, leído de la escena. Para la sonda. */
+  get equipo() {
+    return (this.destino?._equipo ?? []).map((c) => ({
+      id: c.id, clave: c.clave, cuerpo: c.cuerpo, donde: c.donde, triangulos: c.triangulos,
+      esCuerpo: c.esCuerpo,
+      enEscena: Boolean(c.malla && c.malla.parent === this.destino.ejes),
+    }));
   }
 
   /** La cámara para esta ranura: misma lente que el original, otro recorte. */

@@ -153,7 +153,14 @@ async function montar({ betoEn = 3, betoHabla = true } = {}) {
 /** Las líneas de la consola de sucesos (`tipo -1`) y las ventanas (`tipo -2`). */
 const sucesos = (q) => q.llega.filter((m) => m.tipo === -1).map((m) => m.texto);
 const ventanas = (q) => q.llega.filter((m) => m.tipo === -2).map((m) => `${m.titulo}|${m.texto}`);
-const dice = (q, frase) => sucesos(q).includes(`Crier says,  "${frase}"`);
+/**
+ * EL 100: lo que se DICE ya no viaja como suceso. `Speak` manda su `saytext_e`
+ * (msmonsterserver.cpp:1721-1727) y el cliente lo pinta en la consola del chat
+ * (vgui_hud.cpp:469-485): un NPC llega con `SAYTEXT_NPC` (3) y un jugador con
+ * `SAYTEXT_LOCAL` (1). Hasta el 100 las dos iban con `tipo -1`.
+ */
+const voces = (q, tipo = null) => q.llega.filter((m) => m.tipo >= 0 && (tipo === null || m.tipo === tipo)).map((m) => m.texto);
+const dice = (q, frase) => voces(q, 3).includes(`Crier says,  "${frase}"`);
 
 describe("con servidor y dos jugadores, lo que dice un guion de NPC va a quien dice el motor", { skip: !HAY }, () => {
   test("CONTROL: el reloj corrió, Beto habló el último y el guion del pregonero es de Ana", async () => {
@@ -189,8 +196,10 @@ describe("con servidor y dos jugadores, lo que dice un guion de NPC va a quien d
   test("`saytext` es por DISTANCIA y no por quién habló: Beto a 6 m (236 u) lo oye aunque no le habló", async () => {
     const { ana, beto } = await montar({ betoEn: 3 });
     for (const q of [ana, beto]) {
-      assert.ok(dice(q, "At the default range"), `${q.p.nombre}: ${sucesos(q).join(" | ")}`);
-      assert.ok(dice(q, "Back to the default"), `${q.p.nombre}: ${sucesos(q).join(" | ")}`);
+      assert.ok(dice(q, "At the default range"), `${q.p.nombre}: ${voces(q).join(" | ")}`);
+      assert.ok(dice(q, "Back to the default"), `${q.p.nombre}: ${voces(q).join(" | ")}`);
+      // EL 100: y NINGUNA en la consola de sucesos, que es donde iban.
+      assert.ok(!sucesos(q).some((t) => t.includes("says,")), `${q.p.nombre}: ${sucesos(q).join(" | ")}`);
     }
   });
 
@@ -221,9 +230,12 @@ describe("con servidor y dos jugadores, lo que dice un guion de NPC va a quien d
     const { partida, ana, beto } = await montar({ betoEn: 25 });
     ana.llega.length = 0; beto.llega.length = 0;
     await partida.recibir(ana.c.id, { t: MENSAJE.DECIR, tipo: 1, texto: "good day" });
-    const eco = (q) => sucesos(q).some((t) => t.startsWith("Ana says"));
-    assert.ok(eco(ana), `Ana: ${sucesos(ana).join(" | ")}`);
-    assert.ok(!eco(beto), `Beto, a 28 m: ${sucesos(beto).join(" | ")}`);
+    // EL 100: por el canal LOCAL y UNA vez. Hasta aquí le llegaba dos: la del
+    // chat y un eco como suceso (`yaDicho`, que no lo leía nadie).
+    const eco = (q) => voces(q, 1).filter((t) => t.startsWith("Ana says"));
+    assert.equal(eco(ana).length, 1, `Ana: ${voces(ana).join(" | ")}`);
+    assert.equal(eco(beto).length, 0, `Beto, a 28 m: ${voces(beto).join(" | ")}`);
+    for (const q of [ana, beto]) assert.ok(!sucesos(q).some((t) => t.startsWith("Ana says")), sucesos(q).join(" | "));
   });
 
   test("con UN jugador hablando (sin el segundo caso) todo le llega a Ana: el control que no puede fallar", async () => {
@@ -281,7 +293,7 @@ async function sylphiel({ abrirMenu }) {
 }
 
 describe("abrir el menú de un NPC no deja al jugador en «0» para su guion", { skip: !HAY_EDANA }, () => {
-  const tarea = (llega) => llega.some((m) => m.tipo === -1 && /I have a task for you/.test(m.texto));
+  const tarea = (llega) => llega.some((m) => m.tipo === 3 && /I have a task for you/.test(m.texto));
 
   test("CONTROL: sin abrir el menú, «job» por el chat hace contestar a Sylphiel (su `$cansee(player,128)` ve a Ana)", async () => {
     const { llega } = await sylphiel({ abrirMenu: false });

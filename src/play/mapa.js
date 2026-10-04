@@ -101,7 +101,7 @@ export const MAPA_POR_DEFECTO = "gatecity";
  * juego no tiene carpeta `scripts/edanasewers` (sólo `edanasewers_old`, con un
  * `map_startup`). Y como los dos de antes, no está en `npm run hornear`.
  */
-export const MAPAS_PORTADOS = Object.freeze(["gatecity", "edana", "gertenheld_forest2", "sala88", "edanasewers"]);
+export const MAPAS_PORTADOS = Object.freeze(["gatecity", "edana", "gertenheld_forest2", "sala88", "edanasewers", "gatecity_anexo"]);
 
 /**
  * LOS MAPAS QUE PUEDEN SALIR DETRÁS DEL MENÚ PRINCIPAL.

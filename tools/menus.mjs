@@ -108,9 +108,9 @@
 import { writeFileSync, existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { mapaDeArgv, posicionalesDe, salidaDe, enSalida } from "./mapa.mjs";
+import { mapaDeArgv, posicionalesDe, salidaDe, enSalida, scriptsDe } from "./mapa.mjs";
 const MAPA = mapaDeArgv();
-const SCRIPTS = posicionalesDe()[0] ?? "../MSC/MSCScripts/scripts";
+const SCRIPTS = posicionalesDe()[0] ?? scriptsDe(MAPA);
 const SALIDA = enSalida(MAPA, "menus.json");
 
 /** Los ocho tipos, con el nombre que les da el script. `npcscript.cpp:953-973`. */

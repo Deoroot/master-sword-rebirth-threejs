@@ -41,9 +41,9 @@ import { comandosDelMod } from "./insignias.mjs";
 // para que un segundo extractor pueda usarlo sin ejecutar este censo entero.
 import { leerScript, cargarGuion } from "./scriptsmsr.mjs";
 
-import { mapaDeArgv, posicionalesDe, salidaDe, enSalida } from "./mapa.mjs";
+import { mapaDeArgv, posicionalesDe, salidaDe, enSalida, scriptsDe } from "./mapa.mjs";
 const MAPA = mapaDeArgv();
-const RAIZ = posicionalesDe()[0] ?? "../MSC/MSCScripts/scripts";
+const RAIZ = posicionalesDe()[0] ?? scriptsDe(MAPA);
 const SALIDA = enSalida(MAPA, "guiones.json");
 
 if (!existsSync(join(RAIZ, "monsters"))) {
@@ -75,7 +75,7 @@ export { cargarGuion };
  * su plantilla— y el motor los ejecuta los dos (`RunScriptEventByName`).
  */
 export function tieneMenu(ruta) {
-  return cargarGuion(ruta).eventos.some((e) => e?.nombre === "game_menu_getoptions");
+  return cargarGuion(ruta, new Set(), RAIZ).eventos.some((e) => e?.nombre === "game_menu_getoptions");
 }
 
 // ── EL CENSO ────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ for (const r of rutas) {
 
 const censo = [];
 for (const r of conMenu) {
-  const g = cargarGuion(r);
+  const g = cargarGuion(r, new Set(), RAIZ);
   // A. sólo el menú: ¿se dibuja bien la lista de opciones?
   const soloMenu = fuera(necesidades(g.eventos, "game_menu_getoptions", { seguirRetrollamadas: false }));
   // B. el NPC entero: el menú y TODAS sus retrollamadas.
@@ -265,9 +265,20 @@ for (const c of caben) console.log(`    ${c.script}`);
 
 /** Los NPC que hay puestos en el mapa, si el mapa ya está horneado. */
 let delMapa = [];
+/** Lo que sólo crea un ARMA con `createnpc`: va en un archivo aparte, a petición. */
+let deArmas = [];
 try {
   const b = JSON.parse(readFileSync(enSalida(MAPA, "bichos.json"), "utf8"));
-  delMapa = [...new Set((b.colocados ?? []).map((c) => c.script).filter(Boolean))];
+  // Y lo que un guion puede CREAR con `createnpc` (`creables`, tools/bichos.mjs):
+  // su guion tiene que llegar al navegador igual que el de un bicho colocado.
+  // Lo que crea un guion del mapa va con los del mapa; lo que sólo crea un arma
+  // va aparte (`guiones_creables.json`) y se pide al empuñarla: son unos 300 KB
+  // por guion, con sus plantillas resueltas, y no se le cobran a quien entra al
+  // mapa con una espada corta.
+  const creables = Object.entries(b.creables ?? {});
+  delMapa = [...new Set([...(b.colocados ?? []).map((c) => c.script),
+    ...creables.filter(([, f]) => f.delMapa).map(([s]) => s)].filter(Boolean))];
+  deArmas = creables.filter(([s, f]) => !f.delMapa && !delMapa.includes(s)).map(([s]) => s);
 } catch {
   console.log(`\n  (no hay ${enSalida(MAPA, "bichos.json")}: se guardan los ${conMenu.length} con menú)`);
   delMapa = conMenu;
@@ -275,7 +286,7 @@ try {
 
 const guiones = {};
 for (const r of delMapa) {
-  const g = cargarGuion(r);
+  const g = cargarGuion(r, new Set(), RAIZ);
   if (!g.eventos.length) continue;
   const c = censo.find((x) => x.script === r) ?? null;
   guiones[r] = {
@@ -307,6 +318,28 @@ writeFileSync(SALIDA, JSON.stringify({
 
 console.log(`\n  guardados ${Object.keys(guiones).length} guiones de los ${delMapa.length} del mapa`);
 console.log(`  -> ${SALIDA}\n`);
+
+// Los de lo que sólo crea un arma, aparte. Se escribe SIEMPRE, aunque esté
+// vacío: un archivo viejo con guiones que ya no son creables sería una medida
+// vieja con cara de nueva.
+{
+  const aparte = {};
+  for (const r of deArmas) {
+    const g = cargarGuion(r, new Set(), RAIZ);
+    if (!g.eventos.length) continue;
+    aparte[r] = { eventos: g.eventos, preload: g.preload, cabe: null, faltan: [] };
+  }
+  const f = enSalida(MAPA, "guiones_creables.json");
+  const texto = JSON.stringify({
+    procedencia: "derivado local de los .script de Master Sword Rebirth, leídos no copiados. No redistribuible.",
+    raiz: RAIZ,
+    paraQue: "los guiones de lo que un arma crea con `createnpc`; se piden al empuñarla (src/main.js)",
+    guiones: aparte,
+  }, null, 1);
+  writeFileSync(f, texto, "utf8");
+  console.log(`  y ${Object.keys(aparte).length} guiones de lo que sólo crea un arma (createnpc), ${(texto.length / 1e6).toFixed(1)} MB, a petición`);
+  console.log(`  -> ${f}\n`);
+}
 
 // ── 3. la procedencia, que en este proyecto va con lo extraído ─────────────
 

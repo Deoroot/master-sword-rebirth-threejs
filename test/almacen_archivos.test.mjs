@@ -50,7 +50,16 @@ test("guardar, leer, listar y borrar", async (t) => {
   assert.equal(lista[0].id, p.id);
   // La lista es un resumen, no el personaje: si trae las estadísticas enteras,
   // la pantalla de elegir personaje se baja treinta veces lo que necesita.
-  assert.deepEqual(Object.keys(lista[0]).sort(), ["actualizado", "id", "mapa", "nombre", "version"]);
+  //
+  // EL 101 añade `vista`, que es lo que el servidor del mod manda con la lista
+  // para vestir a los tres (`charinfo_t`: género y un `gearinfo_t` por objeto,
+  // playershared.cpp:1522-1558). Sigue siendo un resumen, y se comprueba: el
+  // género, las manos y de cada objeto su id — ni habilidades ni oro.
+  assert.deepEqual(Object.keys(lista[0]).sort(), ["actualizado", "id", "mapa", "nombre", "version", "vista"]);
+  assert.deepEqual(Object.keys(lista[0].vista).sort(), ["genero", "manos", "objetos"]);
+  for (const o of lista[0].vista.objetos) {
+    assert.deepEqual(Object.keys(o).filter((k) => k !== "puesto"), ["id"], "de cada objeto, sólo qué es y si va puesto");
+  }
 
   await a.borrar(p.id);
   assert.equal(await a.leer(p.id), null);

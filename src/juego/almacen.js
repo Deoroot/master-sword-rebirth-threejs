@@ -28,7 +28,7 @@
 // Por eso `exportar`/`importar` no son un extra: **son la copia de
 // seguridad**, y están desde el primer día.
 
-import { abrirPersonaje, sellar } from "./personaje.js";
+import { abrirPersonaje, sellar, aLaVistaDe } from "./personaje.js";
 
 const BASE = "mydra-personajes";
 const TIENDA = "personajes";
@@ -94,7 +94,7 @@ export class AlmacenLocal {
   async listar() {
     const todos = await this._tx("readonly", (t) => t.getAll());
     return (todos ?? [])
-      .map((d) => ({ id: d.id, nombre: d.nombre, actualizado: d.actualizado, version: d.version, mapa: d.mapa ?? null }))
+      .map((d) => ({ id: d.id, nombre: d.nombre, actualizado: d.actualizado, version: d.version, mapa: d.mapa ?? null, vista: aLaVistaDe(d) }))
       .sort((a, b) => String(b.actualizado).localeCompare(String(a.actualizado)));
   }
 
@@ -128,7 +128,7 @@ export class AlmacenMemoria {
   }
   async listar() {
     return [...this.mapa.values()]
-      .map((d) => ({ id: d.id, nombre: d.nombre, actualizado: d.actualizado, version: d.version, mapa: d.mapa ?? null }))
+      .map((d) => ({ id: d.id, nombre: d.nombre, actualizado: d.actualizado, version: d.version, mapa: d.mapa ?? null, vista: aLaVistaDe(d) }))
       .sort((a, b) => String(b.actualizado).localeCompare(String(a.actualizado)));
   }
   async leer(id) { const d = this.mapa.get(id); return d ? abrirPersonaje(structuredClone(d)) : null; }

@@ -152,6 +152,16 @@ export function extraerBicho(relativo, {
   // El valor es la `clave` del modelo que sí las trae, y se comprueba que el
   // esqueleto sea el mismo antes de fiarse.
   pistasDe = null,
+  // EL 101: EL CONTROL DEL BOBINADO, CON SALIDA Y CON RAZÓN, como el de la caja.
+  //
+  // Tres submodelos de `armor/p_helmets.mdl` (`ref1e`, `ref2e`, `ref3e`: los
+  // yelmos de placas, mongol y de caballero) traen el 100 % de sus NORMALES al
+  // revés de como giran sus triángulos, y los otros 29 del mismo archivo no. El
+  // motor no mira la normal para decidir qué cara se ve: recorta por el giro
+  // (`glCullFace`), y la normal sólo ilumina. Así que aquí se dejan girar como
+  // el resto del archivo, y quien lo pide dice por qué. Sin razón, el control
+  // sigue parando el horneado.
+  bobinadoContraNormal = null,
 } = {}) {
   const nombre = relativo.replace(/\.mdl$/i, "").replace(/\\/g, "/");
   const clave = `${nombreArchivo(nombre)}${cuerpo ? `_b${cuerpo}` : ""}`;
@@ -175,7 +185,9 @@ export function extraerBicho(relativo, {
     console.error(`  FALLO: ${nombre}: ${malla.leidos} triángulos leídos de ${malla.esperados}`);
     process.exit(1);
   }
-  if (!malla.bobinadoBien) {
+  if (!malla.bobinadoBien && bobinadoContraNormal) {
+    // Se devuelve en la ficha (`bobinadoEximido`) para que se pueda contar.
+  } else if (!malla.bobinadoBien) {
     console.error(`  FALLO: ${nombre}: el ${(malla.contraNormalFrac * 100).toFixed(0)} % de los triángulos gira contra su normal`);
     process.exit(1);
   }
@@ -428,6 +440,7 @@ export function extraerBicho(relativo, {
     );
   }
   return {
+    bobinadoEximido: (!malla.bobinadoBien && bobinadoContraNormal) ? bobinadoContraNormal : null,
     clave, modelo: nombre, cuerpo,
     // `carpeta` se DERIVA de donde se ha escrito, y no se escribe a mano.
     //

@@ -69,6 +69,23 @@ const esCaptura = (ruta) =>
   ruta.startsWith(CAPTURAS.carpeta) && !ruta.slice(CAPTURAS.carpeta.length).includes("/")
   && extname(ruta).toLowerCase() === CAPTURAS.extension;
 
+/**
+ * LA SEGUNDA EXCEPCIÓN, y también la firma el usuario (2026-10-04, al empezar las
+ * misiones propias): *«we can create custom scripts, no problem there»*.
+ *
+ * Un `.script` tiene la forma de un asset de Master Sword y por eso está en
+ * `DEL_JUEGO`. Los de `contenido/scripts/` no lo son: están escritos para este
+ * proyecto, igual que los mapas de `contenido/*.mjs`. Hacen `#include` de
+ * guiones del juego, pero no llevan dentro ni una línea suya.
+ *
+ *   - **Sólo `.script`, y sólo debajo de `contenido/scripts/`.** Un `.script` en
+ *     cualquier otro sitio sigue siendo rojo.
+ *   - **No pueden llamarse como uno del juego**: eso lo vigila
+ *     `tools/contenido.mjs` (`montarScripts`) al montarlos, que es donde se ve.
+ */
+const GUIONES_NUESTROS = "contenido/scripts/";
+const esGuionNuestro = (ruta) => ruta.startsWith(GUIONES_NUESTROS) && extname(ruta).toLowerCase() === ".script";
+
 /** Lo que no se recorre: no está versionado y pesa 190 MB. */
 // `empaquetado/` es la salida de electron-builder: el `.exe`, su runtime de
 // Chromium y los `.dll` de Electron. Nada de eso es nuestro ni del juego, y
@@ -96,7 +113,7 @@ function todos(dir = RAIZ, fuera = []) {
 
 const permitido = (ruta) => {
   const base = ruta.split("/").pop();
-  return SIN_EXTENSION.has(base) || EXTENSIONES.has(extname(base).toLowerCase()) || esCaptura(ruta);
+  return SIN_EXTENSION.has(base) || EXTENSIONES.has(extname(base).toLowerCase()) || esCaptura(ruta) || esGuionNuestro(ruta);
 };
 
 test("en el repositorio no hay un solo asset del juego", async (t) => {
@@ -109,7 +126,7 @@ test("en el repositorio no hay un solo asset del juego", async (t) => {
   });
 
   await t.test("y ninguno tiene la forma de un asset de Half-Life o de MSR", () => {
-    assert.deepEqual(archivos.filter((r) => DEL_JUEGO.test(r)), []);
+    assert.deepEqual(archivos.filter((r) => DEL_JUEGO.test(r) && !esGuionNuestro(r)), []);
   });
 
   await t.test("las capturas: sólo JPEG, sólo en su carpeta, y pequeñas", () => {
@@ -169,6 +186,9 @@ test("en el repositorio no hay un solo asset del juego", async (t) => {
       "snd/ui/buttonclick.wav",
       "assets/gatecity.wad",
       "scripts/base_npc.script",
+      // un guion fuera de su carpeta, aunque esté en `contenido/`
+      "contenido/base_npc.script",
+      "src/play/warden.script",
     ]) {
       assert.ok(
         !permitido(colado) || DEL_JUEGO.test(colado),
@@ -183,6 +203,13 @@ test("en el repositorio no hay un solo asset del juego", async (t) => {
     ]) {
       assert.ok(permitido(bueno) && !DEL_JUEGO.test(bueno), `falso positivo: ${bueno}`);
     }
+    // Un guion fuera de su carpeta NO va, ni siquiera dentro de contenido/.
+    for (const fuera of ["contenido/base_npc.script", "src/play/warden.script", "contenido/scripts/x/rat.mdl"]) {
+      assert.ok(!permitido(fuera), "la excepción de los guiones deja pasar " + fuera);
+    }
+    // Un guion nuestro, en su sitio, va.
+    assert.ok(permitido("contenido/scripts/gatecity_anexo/warden.script"));
+    assert.ok(esGuionNuestro("contenido/scripts/gatecity_anexo/warden.script"));
   });
 
   await t.test("y la procedencia de lo extraído sigue declarada", () => {

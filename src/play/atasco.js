@@ -221,3 +221,183 @@ export function probadorDe(cuerpo, { esJugador = () => false } = {}) {
     return col ? { jugador: Boolean(esJugador(col)) } : null;
   };
 }
+
+// ── EL 100: LO QUE HACE EL PASO, EN UN SITIO PARA LOS DOS LADOS ────────────
+//
+// Hasta el 99 esto vivía en `Partida._atascado` y `Partida._bichosDentro`
+// (src/red/partida.js), o sea SÓLO en el servidor: en solitario el navegador
+// llamaba a Rapier desde dentro de la roca y con la araña dentro, que es justo
+// lo que el 99 midió que cuesta segundos. En el motor no hay dos copias: es
+// el mismo `PM_PlayerMove` en los dos lados, con `pmove->server` como única
+// diferencia (pm_shared.cpp:3183-3189 corre en cliente y servidor). Aquí
+// tampoco: el servidor y el navegador llaman a estas tres funciones.
+
+/**
+ * `if (PM_CheckStuck()) return;` (pm_shared.cpp:3183-3189) sobre un `Player`.
+ * Devuelve `true` si ESTE paso no se mueve: porque el motor devuelve 1, o
+ * porque ha devuelto 0 sin sacarle y `PM_FlyMove` empieza en sólido, pone la
+ * velocidad a cero y no mueve (pm_shared.cpp:1059-1067). Si el motor mueve el
+ * origen (un empujón grande de la tabla, los 54 intentos del cliente o el
+ * forcejeo contra otro jugador), el cuerpo se coloca ahí.
+ */
+export function atascarse(cuerpo, atasco, { t, botones = 0, probar }) {
+  const pies = cuerpo.feet;
+  const r = atasco.comprobar({ pies, t, botones, probar });
+  if (r.pies !== pies) cuerpo.colocar(r.pies);
+  if (r.atascado || r.dentro) {
+    if (!r.atascado) cuerpo.vel = [0, 0, 0];
+    return true;
+  }
+  return false;
+}
+
+const GIRO_CERO = { x: 0, y: 0, z: 0, w: 1 };
+
+/**
+ * LOS BICHOS QUE YA ESTÁN DENTRO DEL JUGADOR: los colisionadores cinemáticos
+ * que no son jugadores y cortan la cápsula ENTERA (sin la holgura de
+ * `probadorDe`). No los apaga: eso lo hace quien llama, y los vuelve a
+ * encender (ver `pasoSinAtasco`).
+ *
+ * En el motor un monstruo no se mete en un jugador: anda con `SV_movestep`,
+ * que traza su caja con `MOVE_NORMAL` y no avanza si choca (ReHLDS
+ * sv_move.cpp:232 y :268-273). Aquí los cilindros los coloca el paseo sin
+ * preguntar al jugador, y con uno dentro el controlador de Rapier tarda hasta
+ * 125 ms por llamada (doc/REAPARECER_99.md §4). El que ya está dentro no cuenta
+ * para el paso del jugador —que sale andando, como saldría en el motor si
+ * hubiera llegado a entrar—; los que sólo le tocan siguen ahí y le paran.
+ *
+ * Lo que es nuestro, dicho: «cinemático» son los cilindros de los bichos
+ * (src/play/solidos.js) y TAMBIÉN las puertas y las correderas, que en este
+ * puerto son cuerpos cinemáticos. Una puerta metida en el jugador tampoco le
+ * retiene en ese paso; en el motor la puerta le empujaría o se pararía
+ * (`Blocked`), y eso no lo hace esta función.
+ */
+export function bichosDentro(cuerpo, { esJugador = () => false } = {}) {
+  const w = cuerpo?.world?.world;
+  if (!w || !cuerpo.collider) return [];
+  cuerpo._formaEntera ??= new RAPIER.Capsule(cuerpo.half, cuerpo.perfil.radius);
+  const dentro = [];
+  const donde = cuerpo.body.translation();
+  const preguntar = (forma, vale) => w.intersectionsWithShape(donde, GIRO_CERO, forma,
+    (col) => { if (vale(col) && !dentro.includes(col)) dentro.push(col); return true; },
+    RAPIER.QueryFilterFlags.ONLY_KINEMATIC, undefined, cuerpo.collider, cuerpo.body,
+    (col) => !esJugador(col));
+  preguntar(cuerpo._formaEntera, () => true);
+  // EL 100: SALIR DEL TODO. El controlador de Rapier no se despega de lo que
+  // tiene a menos de su `offset` (la piel, `perfil.skin`, 2 cm): medido, un
+  // cilindro a 0,2-1,9 cm por DETRÁS deja al jugador clavado andando hacia
+  // delante. Y salir de un bicho apartado deja al jugador, por construcción,
+  // justo ahí: el último paso con el cilindro apagado acaba en cuanto la
+  // cápsula deja de cortarlo, o sea en el borde (medido: a 0,6-1,8 cm, en 50
+  // de 400 salidas al azar). Es el borde del 81 otra vez. Así que el que
+  // estaba apartado en el paso anterior SIGUE apartado mientras esté a menos
+  // de dos pieles. Uno que no estaba dentro no entra por aquí: el que sólo
+  // toca —el controlador te para a una piel de él— sigue parando.
+  const antes = cuerpo._apartadosAntes;
+  if (antes?.size) {
+    cuerpo._formaSalida ??= new RAPIER.Capsule(cuerpo.half, cuerpo.perfil.radius + 2 * (cuerpo.perfil.skin ?? 0.02));
+    preguntar(cuerpo._formaSalida, (col) => antes.has(col.handle));
+  }
+  cuerpo._apartadosAntes = dentro.length ? new Set(dentro.map((col) => col.handle)) : null;
+  return dentro;
+}
+
+/**
+ * EL PASO ENTERO: `PM_CheckStuck` delante y, si se mueve, los bichos de dentro
+ * apartados mientras corre `paso()` (que es `cuerpo.step(...)`) y encendidos
+ * otra vez en un `finally`. Devuelve `{ movido, apartados, r }`, con `r` lo que
+ * devolvió `paso()` o `null` si no se movió.
+ */
+export function pasoSinAtasco(cuerpo, { atasco, probar, t, botones = 0, esJugador = () => false }, paso) {
+  if (atascarse(cuerpo, atasco, { t, botones, probar })) return { movido: false, apartados: 0, r: null };
+  const fuera = bichosDentro(cuerpo, { esJugador });
+  encender(cuerpo, fuera, false);
+  try {
+    return { movido: true, apartados: fuera.length, r: paso() };
+  } finally {
+    encender(cuerpo, fuera, true);
+  }
+}
+
+/**
+ * Enciende o apaga `cols` y, si hay alguno, PONE AL DÍA EL ÁRBOL DE CONSULTAS.
+ *
+ * EL 100, y es lo que hacía que apartar funcionara la mitad de las veces: en
+ * Rapier 0.14 `setEnabled` no llega a las consultas —ni a las de
+ * `intersectionsWithShape` ni a las del controlador de personaje— hasta el
+ * siguiente `world.step()` o `updateSceneQueries()`. Medido paso a paso con un
+ * cilindro metido en la cápsula: en un paso se le ve dentro y se apaga, pero
+ * el controlador todavía choca con él (avanza 0,06 cm); el `world.step` de
+ * ese paso lo apaga en el árbol, se enciende después, y en el paso siguiente
+ * ni se le ve dentro ni choca (avanza 8 cm). Uno sí y uno no. Y cuando el
+ * paso «libre» acaba a menos de la piel del controlador (2 cm) del cilindro, el
+ * siguiente choca y ahí se queda: **clavado andando**, con la velocidad entera
+ * y sin moverse, en un 9,5 % de 400 salidas al azar. El 99 lo midió como «sale
+ * andando» porque la mitad de los pasos bastaban.
+ *
+ * Sólo cuesta cuando hay alguno dentro, que es casi nunca.
+ */
+export function encender(cuerpo, cols, si) {
+  if (!cols.length) return;
+  for (const col of cols) col.setEnabled(si);
+  cuerpo.world?.world?.updateSceneQueries?.();
+}
+
+/**
+ * EL 100: EL PASO DEL JUGADOR DEL NAVEGADOR. Es lo que llama src/main.js en
+ * vez de `player.step` —en el bucle de paso fijo y al rehacer órdenes tras una
+ * corrección del servidor—, y lo que llaman las pruebas: así la prueba entra
+ * por la misma puerta que el juego (el 59).
+ *
+ * Es `pmove->server = 0`: el `Atasco` del cliente, con su bucle de 54 intentos
+ * contra «el mundo o un modelo del BSP» (pm_shared.cpp:1876-1900). En el
+ * motor el cliente corre `PM_CheckStuck` en cada orden que predice, igual que
+ * el servidor en cada una que recibe; por eso va también en la rehecha.
+ *
+ * Lo que es nuestro, dicho:
+ *
+ *   1. **El reloj** de `rgStuckCheckTime` es la suma de los `dt` que han
+ *      pasado por aquí, no `Sys_FloatTime`. Al rehacer órdenes avanza también,
+ *      o sea más deprisa que el reloj de pared; en el motor el cliente usa el
+ *      de pared y las rehechas caen en el mismo instante («Too soon?»). Aquí
+ *      se prefiere que el mismo paso dé lo mismo en una prueba y en la página.
+ *   2. **Con el jugador parado el MUNDO sigue**: se llama a
+ *      `world.world.step()` aunque no se mueva. En el navegador ése es el
+ *      único `step` del mundo (lo da `Player.step`), y sin él los cilindros de
+ *      los bichos y las puertas se quedarían donde estaban mientras dure el
+ *      atasco. En el motor `PM_CheckStuck` sólo para al jugador: el resto del
+ *      mundo piensa igual. El servidor no lo necesita así (src/red/fauna.js
+ *      pone el árbol al día por su cuenta).
+ *   3. Los botones del forcejeo (salto, agacharse, atacar) se pasan, pero en
+ *      el navegador no hay otros jugadores con colisionador: esa rama
+ *      (pm_shared.cpp:1936-1966) no puede dispararse aquí.
+ */
+export class PasoLocal {
+  constructor(cuerpo, { servidor = false, esJugador = () => false } = {}) {
+    this.cuerpo = cuerpo;
+    this.esJugador = esJugador;
+    this.atasco = new Atasco({ servidor, unidadesPorMetro: cuerpo.perfil?.unidadesPorMetro ?? 39.37 });
+    this.probar = probadorDe(cuerpo, { esJugador });
+    this.reloj = 0;
+    /** Para medir; no lo lee ninguna regla. */
+    this.cuenta = { pasos: 0, parados: 0, apartados: 0 };
+  }
+
+  /** Lo mismo que `Player.step(dt, input)`, con `PM_CheckStuck` delante. `null` si no se movió. */
+  step(dt, input = {}) {
+    this.reloj += dt;
+    this.cuenta.pasos++;
+    // Los bits del cable (src/red/protocolo.js `BOTON`): atacar 1, saltar 2, agacharse 4.
+    const botones = (input.atacar ? 1 : 0) | (input.jump ? 2 : 0) | (input.agachar ? 4 : 0);
+    const p = pasoSinAtasco(this.cuerpo, {
+      atasco: this.atasco, probar: this.probar, t: this.reloj, botones, esJugador: this.esJugador,
+    }, () => this.cuerpo.step(dt, input));
+    this.cuenta.apartados += p.apartados;
+    if (!p.movido) {
+      this.cuenta.parados++;
+      this.cuerpo.world?.world?.step();
+    }
+    return p.r;
+  }
+}

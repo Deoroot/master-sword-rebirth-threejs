@@ -107,13 +107,25 @@ export async function cargarBichos(manifiesto, { base = BASE_POR_DEFECTO } = {})
 
   // --- 1. los modelos, una vez cada uno ------------------------------------
   const modelos = new Map();
-  for (const m of manifiesto.modelos) {
+  const cargarUno = async (clave) => {
+    if (modelos.has(clave)) return modelos.get(clave);
+    const m = manifiesto.modelos.find((x) => x.clave === clave);
+    if (!m) return null;
     const ficha = await traerJson(`${base}/${m.carpeta}/bicho.json`);
     if (!ficha) throw new Error(`falta ${base}/${m.carpeta}/bicho.json: ese mapa no tiene bichos extraídos`);
     const { geo, texturas, clips } = await armarModelo(ficha, `${base}/${m.carpeta}`, cargador);
-    modelos.set(m.clave, { ficha, geo, texturas, clips });
+    // Dos peticiones a la vez del mismo modelo: gana la primera que acabó.
+    if (!modelos.has(clave)) modelos.set(clave, { ficha, geo, texturas, clips });
+    return modelos.get(clave);
+  };
+  for (const m of manifiesto.modelos) {
+    // A PETICIÓN: los modelos de lo que sólo crea un arma con `createnpc`
+    // (tools/bichos.mjs). Se cargan al empuñarla —`precargar`, abajo—, que es
+    // el `precache` del motor (scriptcmds.cpp:2765).
+    if (m.aPeticion) continue;
+    await cargarUno(m.clave);
   }
-  return montarBichos(manifiesto, modelos);
+  return montarBichos(manifiesto, modelos, cargarUno);
 }
 
 /**
@@ -230,7 +242,7 @@ async function armarModelo(ficha, dir, cargador, fuenteDePistas = null) {
  * identificándolos con `q.instancia === i` y que el arnés de física los reciba
  * tal cual.
  */
-function montarBichos(manifiesto, modelos) {
+function montarBichos(manifiesto, modelos, cargarUno = async () => null) {
   const grupo = new THREE.Group();
   grupo.name = "bichos";
   const U = manifiesto.unidadesPorMetro ?? 39.37;
@@ -248,10 +260,15 @@ function montarBichos(manifiesto, modelos) {
     cajasPorClave: new Map([...modelos].map(([k, m]) => [k, m.ficha.cajaMedida ?? m.ficha.caja ?? null])),
   });
 
-  for (const i of manada.instancias) {
+  /**
+   * EL NODO DE UNA INSTANCIA: esqueleto, malla, materiales y mezclador. Era el
+   * cuerpo del bucle; está en una función para que lo que un guion crea con
+   * `createnpc` (`crear`, abajo) se monte por el MISMO sitio que lo del mapa.
+   */
+  const montar = (i) => {
     const c = i.ficha;
     const M = modelos.get(c.clave);
-    if (!M) continue;
+    if (!M) return false;
 
     // Un esqueleto por instancia: dos zombis en fotogramas distintos no pueden
     // compartirlo.
@@ -332,6 +349,22 @@ function montarBichos(manifiesto, modelos) {
     // `i.pon` se queda porque lo llaman de fuera (una sonda mide la animación
     // de un bicho a mano). Pide a la manada y aplica en el acto.
     i.pon = (nombre) => { const s = manada.pon(i, nombre); aplicarAnimacion(i); return s ? i.actual : null; };
+    return true;
+  };
+  for (const i of manada.instancias) montar(i);
+
+  /** Los modelos de A PETICIÓN, cargados y dados de alta en la manada. */
+  async function precargar(claves = []) {
+    let n = 0;
+    for (const k of claves) {
+      if (modelos.has(k)) continue;
+      const M = await cargarUno(k);
+      if (!M) continue;
+      manada._secuenciasPorClave.set(k, M.ficha.secuencias);
+      manada._cajasPorClave.set(k, M.ficha.cajaMedida ?? M.ficha.caja ?? null);
+      n++;
+    }
+    return n;
   }
 
   /**
@@ -502,6 +535,42 @@ function montarBichos(manifiesto, modelos) {
       return cambian;
     },
     aparecedor,
+    /**
+     * `createnpc`: una instancia nueva en mitad de la partida, con su nodo.
+     * La regla está en `Manada.crear`; aquí sólo se le cuelga el dibujo, y si
+     * su modelo no está horneado se queda sin él y se dice (`sinModelo`).
+     */
+    crear(ficha, donde) {
+      const i = manada.crear(ficha, donde);
+      if (!i || montar(i)) return i;
+      // Su modelo es de los de A PETICIÓN y nadie lo precargó: la entidad
+      // existe y su guion corre desde ya; el dibujo llega cuando llegue.
+      i.sinModelo = true;
+      precargar([i.ficha.clave]).then(() => {
+        i.secuencias = modelos.get(i.ficha.clave)?.ficha.secuencias ?? i.secuencias;
+        if (montar(i)) { i.sinModelo = false; manada.ponDeAndarOParar(i, manada.quieto(i)); }
+      }).catch((e) => console.warn(`createnpc: el modelo de ${i.ficha.script} no se ha podido cargar:`, e));
+      return i;
+    },
+    /** Carga los modelos de esas claves si no lo están. Ver `cargarBichos`. */
+    precargar,
+    /**
+     * Las claves de modelo de todo lo que `script` puede crear con `createnpc`,
+     * en cadena (`creables[x].por`, tools/bichos.mjs): lo que hay que precargar
+     * al empuñar el arma de ese guion.
+     */
+    clavesCreablesPor(script) {
+      const claves = new Set(), vistos = new Set([script]), cola = [script];
+      while (cola.length) {
+        const de = cola.shift();
+        for (const [s, f] of Object.entries(manifiesto.creables ?? {})) {
+          if (!f.por?.includes(de)) continue;
+          claves.add(f.clave);
+          if (!vistos.has(s)) { vistos.add(s); cola.push(s); }
+        }
+      }
+      return [...claves];
+    },
     /** Colocar los bichos donde diga el servidor. */
     aplicar(lista) { manada.aplicar(lista); },
     herir(i, dano, opciones) { return manada.herir(i, dano, opciones); },

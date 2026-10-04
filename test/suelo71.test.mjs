@@ -295,15 +295,27 @@ describe("71 · el `game_fall` dice qué submodelo, y no una fórmula", { skip: 
     assert.equal(f.enElMundo.animacionSuelo, null);
   });
 
-  test("las comillas SIMPLES no son comillas: la comparación de `base_miscitem` es falsa siempre", () => {
-    // Sólo las dobles agrupan (`GetParams`, script.cpp:5049-5064). Así que
-    // `if ( MODEL_WORLD equals 'misc/p_misc.mdl' )` compara «misc/p_misc.mdl»
-    // con «'misc/p_misc.mdl'» —con las comillas dentro— y nunca es cierto. Por
-    // eso TODO lo que hereda de `base_miscitem` acaba en el submodelo 0.
-    const r = caidaDe(
-      ["game_fall", "if ( A equals 'A' )", "setmodelbody 0 7", "else", "setmodelbody 0 0"],
-      (n) => (n === "A" ? "A" : null));
-    assert.equal(r.cuerpo, 0);
+  test("las comillas SIMPLES son un literal: se quitan y NO se resuelven", () => {
+    // CORRECCIÓN (2026-10-04). Esta prueba afirmaba lo contrario —«la
+    // comparación de `base_miscitem` es falsa siempre»— y estaba verde con la
+    // regla mal: defendía una lectura de `GetConst`, que es de la CARGA del
+    // guion. Al ejecutar, cada parámetro pasa por `GetVar` (script.cpp:5745), y
+    // un literal entre comillas simples sale SIN ellas y sin resolver
+    // (script.cpp:4405-4409). Lo enseñó el usuario jugando: la rata soltaba una
+    // manzana que al cogerla era un pellejo.
+    const caida = (lineaIf, consts) => caidaDe(
+      ["game_fall", lineaIf, "setmodelbody 0 7", "else", "setmodelbody 0 0"],
+      (n) => consts[n] ?? null).cuerpo;
+    // La de `base_miscitem`: la constante vale lo que dice el literal. CIERTA.
+    assert.equal(caida("if ( A equals 'p_misc' )", { A: "p_misc" }), 7);
+    // Y el literal NO se resuelve: `'B'` es el texto «B», no la constante B.
+    // Sin esta mitad, «quitar las comillas y resolver» pasaría la de arriba.
+    assert.equal(caida("if ( A equals 'B' )", { A: "p_misc", B: "p_misc" }), 0);
+    assert.equal(caida("if ( A equals B )", { A: "p_misc", B: "p_misc" }), 7);
+    // De verdad, con el guion del juego: el pellejo de rata cae en su `_floor`.
+    const f = leerFichaObjeto(SCRIPTS, "items/skin_ratpelt");
+    assert.equal(f.enElMundo.cuerpoSuelo, 35);
+    assert.equal(f.enElMundo.animacionSuelo, "rat_floor_idle");
   });
 
   test("un `if` VIEJO con la condición falsa abandona el evento entero", () => {

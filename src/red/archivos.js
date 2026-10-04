@@ -24,7 +24,7 @@
 
 import { mkdir, readdir, readFile, writeFile, rename, unlink, copyFile } from "node:fs/promises";
 import { join } from "node:path";
-import { abrirPersonaje, sellar } from "../juego/personaje.js";
+import { abrirPersonaje, sellar, aLaVistaDe } from "../juego/personaje.js";
 
 export class AlmacenArchivos {
   constructor({ carpeta }) {
@@ -53,7 +53,7 @@ export class AlmacenArchivos {
     for (const n of nombres) {
       try {
         const doc = JSON.parse(await readFile(join(this.carpeta, n), "utf8"));
-        fuera.push({ id: doc.id, nombre: doc.nombre, actualizado: doc.actualizado, version: doc.version, mapa: doc.mapa ?? null });
+        fuera.push({ id: doc.id, nombre: doc.nombre, actualizado: doc.actualizado, version: doc.version, mapa: doc.mapa ?? null, vista: aLaVistaDe(doc) });
       } catch {
         // Un personaje ilegible no puede tumbar la lista de los demás: se
         // salta y se queda en el disco para poder mirarlo.
@@ -69,7 +69,31 @@ export class AlmacenArchivos {
     return abrirPersonaje(JSON.parse(texto));
   }
 
-  async escribir(p) {
+  /**
+   * EL 100: LOS GUARDADOS DE UN MISMO PERSONAJE, EN FILA.
+   *
+   * Dos `escribir` del mismo id a la vez comparten `<id>.json.tmp`: los dos lo
+   * escriben, el primero lo renombra y **el segundo encuentra el temporal ya
+   * movido** y revienta con `ENOENT`. Lo enseñó la sonda reaparecer99 —«no se
+   * ha podido guardar el personaje: ENOENT, rename …reaparecer99a.json.tmp»,
+   * con A muriendo y volviendo— y en una prueba aparte son 12 fallos de 40
+   * guardados lanzados de dos en dos (doc/SERVIDOR_100.md §4). Los reintentos
+   * de abajo no lo arreglan: un temporal que ya no existe no aparece esperando.
+   * Así que cada guardado espera al anterior del mismo personaje; el último
+   * que se pide es el que queda en el disco, que es lo que se quería.
+   */
+  escribir(p) {
+    this._filas ??= new Map();
+    const id = p?.id;
+    const antes = this._filas.get(id) ?? Promise.resolve();
+    const este = antes.catch(() => {}).then(() => this._escribirYa(p));
+    this._filas.set(id, este);
+    const limpiar = () => { if (this._filas.get(id) === este) this._filas.delete(id); };
+    este.then(limpiar, limpiar);
+    return este;
+  }
+
+  async _escribirYa(p) {
     await this._preparar();
     const doc = sellar(p);
     const ruta = this._ruta(doc.id);
@@ -96,8 +120,15 @@ export class AlmacenArchivos {
     // Tres intentos con espera creciente, porque quien tenga el archivo abierto
     // lo suelta en milisegundos. Si a la tercera sigue sin poder, el error sube:
     // un guardado que no se puede hacer tiene que decirse, no taparse.
+    //
+    // EL 100: y dos intentos más, a medio segundo y a segundo y medio. Con la
+    // máquina al 100 % (cuatro sesiones y sus sondas) la sonda reaparecer99
+    // vio un `EPERM` que sobrevivió a los tres: quien tiene el archivo abierto
+    // puede ser este mismo servidor LEYÉNDOLO —`listar` abre todos los
+    // personajes para contestar a «lista», y lo pidió B a la vez que A
+    // guardaba— y con la máquina cargada esa lectura tarda más de 150 ms.
     let ultimo = null;
-    for (const espera of [0, 30, 120]) {
+    for (const espera of [0, 30, 120, 500, 1500]) {
       if (espera) await new Promise((r) => setTimeout(r, espera));
       try { await rename(temporal, ruta); ultimo = null; break; }
       catch (e) { ultimo = e; }

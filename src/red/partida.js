@@ -32,14 +32,14 @@
 
 import { Sesion, ESTADO, ENTRADA } from "../juego/sesion.js";
 // EL 99: `PM_CheckStuck` y `PM_TestPlayerPosition` (doc/REAPARECER_99.md).
-import { Atasco, probadorDe } from "../play/atasco.js";
+import { Atasco, probadorDe, atascarse, bichosDentro, encender } from "../play/atasco.js";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { vitalesDe, velocidadDelPaso } from "./andar.js";
 // El techo de daño sale de las mismas tres piezas que el daño del navegador, y
 // eso es lo que hace que sea un techo y no un número inventado.
 import { fraccionDePotencia, TOPE_PROPIEDAD, CRITICO, expDeLaMuerte } from "../play/golpe.js";
 import { entrenar } from "../juego/personaje.js";
-import { hablar, MAX_LETRAS, RANGO_LOCAL, HABLA, loOye, distancia2D, dentroDelCorral } from "../play/chat.js";
+import { hablar, MAX_LETRAS, RANGO_LOCAL, HABLA, loOye, distancia2D, dentroDelCorral, panelDeRecado } from "../play/chat.js";
 import { InteraccionesNpc } from "../juego/interacciones.js";
 // EL 95: el brillo de un jugador viaja en SU foto (doc/BRILLO_95.md).
 import { brilloDeLaEntidad, podarBrillos, mismoBrillo } from "../play/brillo.js";
@@ -100,6 +100,33 @@ export function puntoDeAparicion(escena) {
 // medido que fuera el tope, pero un tope que pudiera tirar órdenes buenas
 // por la carga de la máquina sería un fallo nuevo, y 200 deja ese margen.
 export const TOPE_MS_POR_MENSAJE = 200;
+
+/**
+ * EL 100: lo más que puede costar, en reloj de pared, correr las órdenes de UN
+ * CLIENTE en cada segundo de reloj de pared (`_correrOrdenes`). Nuestro, como
+ * el de arriba, y es el que de verdad acota.
+ *
+ * El tope por mensaje deja correr SIEMPRE la primera orden (`corridas > 0`),
+ * así que no acota nada cuando la primera ya cuesta más que lo que tarda en
+ * llegar el mensaje siguiente. Medido en la sonda del 99 colgada (doc/SERVIDOR_100.md
+ * §2): `computeColliderMovement` a 100-250 ms POR LLAMADA, el reloj de la
+ * partida parado en el mismo `t` durante minutos, y cada mensaje pagando una
+ * orden: los mensajes llegaban más deprisa de lo que se despachaban y la cola
+ * del socket crecía sin fondo. 250 por segundo deja a un cliente roto en el
+ * cuarto de un segundo y al resto de la partida —el paso fijo, los otros
+ * jugadores, `/partidas`— en los otros tres; una orden normal cuesta menos de
+ * un milisegundo, así que sesenta por segundo no se acercan.
+ *
+ * Y sólo a partir del SEGUNDO segundo seguido por encima (`_correrOrdenes`):
+ * la primera versión mordía en el primero y `npm test` en paralelo la puso
+ * roja en cinco archivos de red — un primer paso de 738 ms, de construir el
+ * árbol con la máquina cargada, se llevaba el presupuesto y las veintinueve
+ * órdenes buenas de detrás se quedaban sin correr. Y sólo si ese segundo
+ * anterior costó más reloj que el tiempo que simulaba: la segunda versión
+ * dejaba «clavado» al de test/atasco100, que manda 3 600 órdenes baratas
+ * seguidas, más deprisa que el tiempo real, con la máquina cargada.
+ */
+export const TOPE_MS_POR_SEGUNDO = 250;
 
 /** Lo que un cliente es para la partida. */
 class Cliente {
@@ -522,7 +549,13 @@ export class Partida {
    * **Sin jugador no se adivina** (la regla del 94): se cuenta en `voz`.
    */
   _sucesoDeGuion(tipo, texto, o = null) {
-    const datos = { tipo: -1, texto, suceso: tipo };
+    // EL 100: lo que se DICE no es un suceso. `Speak` manda `HUDInfoMsg` de
+    // tipo 4 con su `saytext_e` (msmonsterserver.cpp:1721-1727) y el cliente lo
+    // pinta en la consola del chat (vgui_hud.cpp:469-485); aquí viajaba como
+    // `tipo: -1` y acababa en la de sucesos. Ahora lleva el número del canal,
+    // que es por donde el cliente ya reparte (`src/red/cliente.js`, `TEXTO`).
+    const destino = panelDeRecado(o);
+    const datos = destino.panel === "chat" ? { tipo: destino.tipo, texto } : { tipo: -1, texto, suceso: tipo };
     const instancia = o?.instancia ?? null;
     if (o?.habla) {
       this.voz.dichas++;
@@ -2121,7 +2154,26 @@ export class Partida {
       // acuse sale y el cuerpo no se mueve; la reconciliación del cliente le
       // devuelve donde está. Una orden normal cuesta menos de un milisegundo:
       // el tope sólo lo toca lo que ya está roto.
-      if (corridas > 0 && performance.now() - desde > TOPE_MS_POR_MENSAJE) {
+      // EL 100: y el tope POR SEGUNDO, que cuenta entre mensajes: sin él, la
+      // primera orden de cada mensaje corre siempre y un Rapier de 200 ms por
+      // llamada cuelga al servidor igual (ver `TOPE_MS_POR_SEGUNDO`). Sólo
+      // muerde si el segundo ANTERIOR también se pasó: lo que cuelga es un
+      // coste que dura, y un primer paso caro —el árbol de Rapier que se
+      // construye, una máquina cargada: medido, 738 ms con `npm test` en
+      // paralelo— no puede tirar las órdenes buenas que vienen detrás. Y
+      // sólo si en ese segundo anterior simular costó MÁS de lo que duraba lo
+      // simulado (`pedido`, la suma de los `msec`): eso es no alcanzar nunca al
+      // reloj, que es la forma del cuelgue (150 ms de reloj por orden de 16).
+      // Un cliente que manda órdenes más deprisa que el tiempo real —una
+      // prueba que manda 3 600 seguidas— con cada una barata no lo toca.
+      const ahora = performance.now();
+      if (!c.gasto || ahora - c.gasto.desde >= 1000) {
+        const reciente = c.gasto && ahora - c.gasto.desde < 2000;
+        c.gasto = { desde: ahora, ms: 0, pedido: 0, antes: reciente ? c.gasto.ms : 0, antesPedido: reciente ? c.gasto.pedido : 0 };
+      }
+      const sinPresupuesto = c.gasto.antes > TOPE_MS_POR_SEGUNDO && c.gasto.antes > c.gasto.antesPedido
+        && c.gasto.ms > TOPE_MS_POR_SEGUNDO;
+      if ((corridas > 0 && ahora - desde > TOPE_MS_POR_MENSAJE) || sinPresupuesto) {
         c.sinTiempo = (c.sinTiempo ?? 0) + 1;
         if (o.seq > 0) c.ultimaOrden = o.seq;
         continue;
@@ -2130,6 +2182,8 @@ export class Partida {
         if (ms <= 0) continue;
         this._simular(c, o, ms / 1000);
       }
+      c.gasto.ms += performance.now() - ahora;
+      c.gasto.pedido += o.msec;
       if (o.seq > 0) c.ultimaOrden = o.seq;
       c.ultimaCorrida = o;
       corridas++;
@@ -2203,7 +2257,9 @@ export class Partida {
           tope: conTrabas.tope,
         });
       } finally {
-        for (const col of apartados) col.setEnabled(true);
+        // EL 100: con el árbol de consultas al día, o el siguiente paso no se
+        // entera (ver `encender`, src/play/atasco.js).
+        encender(cuerpo, apartados, true);
       }
     }
     // EL 97: EL ESCUDO, con el mismo paso que el cuerpo. El botón es el de la
@@ -2226,11 +2282,8 @@ export class Partida {
     const probar = this._probador(c);
     if (!probar) return false;
     c.atasco ??= new Atasco({ servidor: true, unidadesPorMetro: this.mundo.perfil?.unidadesPorMetro ?? 39.37 });
-    const pies = cuerpo.feet;
-    const r = c.atasco.comprobar({ pies, t: this.t, botones, probar });
-    if (r.pies !== pies) cuerpo.colocar(r.pies);
-    if (r.atascado || r.dentro) {
-      if (!r.atascado) cuerpo.vel = [0, 0, 0];
+    // EL 100: la regla es `atascarse`, la misma que corre el navegador.
+    if (atascarse(cuerpo, c.atasco, { t: this.t, botones, probar })) {
       c.pasosAtascado = (c.pasosAtascado ?? 0) + 1;
       return true;
     }
@@ -2260,17 +2313,14 @@ export class Partida {
    * siempre.
    */
   _bichosDentro(c) {
-    const cuerpo = c.cuerpo;
-    const w = cuerpo?.world?.world;
-    if (!w || !cuerpo.collider) return [];
-    const fuera = [];
-    const t = cuerpo.body.translation();
-    c.formaEntera ??= new RAPIER.Capsule(cuerpo.half, cuerpo.perfil.radius);
+    // EL 100: la pregunta es `bichosDentro` (src/play/atasco.js), la misma que
+    // hace el navegador; aquí sólo se dice quién es jugador.
     const jugadores = new Set([...this.clientes.values()].map((o) => o.cuerpo?.collider?.handle).filter((h) => h !== undefined));
-    w.intersectionsWithShape(t, { x: 0, y: 0, z: 0, w: 1 }, c.formaEntera, (col) => { fuera.push(col); return true; },
-      RAPIER.QueryFilterFlags.ONLY_KINEMATIC, undefined, cuerpo.collider, cuerpo.body,
-      (col) => !jugadores.has(col.handle));
-    for (const col of fuera) col.setEnabled(false);
+    const fuera = bichosDentro(c.cuerpo, { esJugador: (col) => jugadores.has(col.handle) });
+    // EL 100: `encender` y no `setEnabled` a pelo: sin poner al día el árbol
+    // de consultas, el controlador seguía chocando con el apagado en uno de
+    // cada dos pasos (src/play/atasco.js).
+    encender(c.cuerpo, fuera, false);
     c.bichosApartados = (c.bichosApartados ?? 0) + fuera.length;
     return fuera;
   }

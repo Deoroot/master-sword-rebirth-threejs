@@ -409,6 +409,9 @@ export function entornoDe({
       // UNIDADES del motor, como lo escribe el guion: quien sabe dónde está
       // cada uno (el servidor) convierte. Un navegador con un jugador no lo
       // mira todavía (doc/RED_95.md §8).
+      // EL 100: y `habla` es además lo que lo lleva a la consola del CHAT y no
+      // a la de sucesos (`panelDeRecado`, src/play/chat.js): `Speak` escribe un
+      // `HUDInfoMsg` de tipo 4 y ése acaba en `PrintSayText` (vgui_hud.cpp:469-485).
       suceso?.("normal", `${npc?.nombre ?? "Someone"} says,  "${t}"`, { habla: { rango: entorno.alcanceDeVoz } });
     },
 
@@ -1341,7 +1344,13 @@ export class GuionDeNpc {
     // EL 94: `(ref) => boolean`, el `npcatk_settarget` que pide OTRA entidad.
     // Ver `_objetivoPedidoDeFuera`. Sin él, la llamada se cierra como hasta el
     // 93 y se cuenta en `cerrados`.
-    fijarObjetivo = null }) {
+    fijarObjetivo = null,
+    // `createnpc`: `(entorno, guionDeNpc) => void`, lo que el mundo de lo creado
+    // (`src/play/creados.js`) le añade al entorno de una invocación. Se llama
+    // con el entorno ya montado y ANTES de correr ningún evento: su
+    // `game_spawn` ya hace `fly 1` y `setcallback touch enable`. Reenviado
+    // desde `InteraccionesNpc.guionDe`, por el 63.
+    ampliar = null }) {
     this.npc = npc;
     this.fijarObjetivo = fijarObjetivo;
     /** EL 94: profundidad de llamadas que vienen de OTRO guion (`llamar`). */
@@ -1465,7 +1474,10 @@ export class GuionDeNpc {
     const nombreCompleto = () => {
       const crudo = String(npc?.nombre ?? "");
       const barra = crudo.indexOf("|");
-      if (barra < 0) return crudo;
+      // Desde que la manada parte el nombre al cargar la ficha
+      // (`partirNombreDeFicha`), el prefijo llega aparte; el nombre crudo con
+      // su barra sólo lo trae quien monta el `npc` a mano.
+      if (barra < 0) return npc?.prefijo ? `${npc.prefijo} ${crudo}` : crudo;
       const prefijo = crudo.slice(0, barra), nombre = crudo.slice(barra + 1);
       return prefijo ? `${prefijo} ${nombre}` : nombre;
     };
@@ -1518,6 +1530,7 @@ export class GuionDeNpc {
         dueño.alHacerDano({ ...d, alJugador });
       };
     }
+    ampliar?.(this.entorno, this);
     this.guion = new Guion({
       eventos: ficha?.eventos ?? [],
       preload: ficha?.preload ?? [],

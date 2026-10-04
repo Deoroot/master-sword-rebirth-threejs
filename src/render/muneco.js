@@ -34,9 +34,18 @@
 // (`RenderGearItem`), así que en el juego el muñeco lleva tu espada en la mano
 // y tu armadura puesta. Eso pide los puntos de anclaje del `.mdl`, que todavía
 // no se leen: aquí sale con las manos vacías.
+//
+// CORRECCIÓN DEL 101: lo de arriba ya no es verdad, y la razón que daba era
+// falsa. No hacen falta puntos de anclaje: `RenderGearItem` ata cada objeto con
+// `AttachTo` (clrenderent.cpp:329), que casa HUESOS POR NOMBRE. Desde el 101 el
+// muñeco lleva lo que llevas: `vestir()` aquí abajo, la regla en
+// `src/play/equipovisto.js` y el cuelgue en `src/render/equipo3d.js`. Y NO
+// esconde el cuerpo debajo de la coraza, como tampoco el del motor
+// (clrenderent.cpp:397-412 le pisa el `body` con el género cada fotograma).
 
 import * as THREE from "three";
 import { cargarModelo } from "./bichos.js";
+import { enEscenaDe } from "./equipo3d.js";
 import { ESPACIO } from "./bsp_escena.js";
 
 import { BASE_COMUN } from "../play/recursos.js";
@@ -156,8 +165,29 @@ export async function cargarMuneco(manifiesto, {
   const adelante = new THREE.Vector3();
   const arriba = new THREE.Vector3();
 
+  /** Lo que `Equipo3D.vestir` necesita de un cuerpo. */
+  const destino = { ejes, huesos, ficha, malla };
+
   return {
     nodo, malla, ficha, clips, pon,
+    /**
+     * EL 101: le cuelga el equipo. `piezas` sale de `piezasConCuerpo`.
+     * Devuelve lo colgado y lo que falta, con su porqué.
+     */
+    vestir(equipo3d, piezas = []) { return equipo3d.vestir(destino, piezas); },
+    /** Lo que lleva colgado AHORA, para la sonda: se lee de la escena, no de la regla. */
+    get equipo() {
+      return (destino._equipo ?? []).map((c) => ({
+        id: c.id, clave: c.clave, cuerpo: c.cuerpo, donde: c.donde, triangulos: c.triangulos,
+        enEscena: Boolean(c.malla && c.malla.parent === ejes),
+        huesosCasados: c.malla?.userData.casados ?? 0,
+      }));
+    },
+    get faltaDeEquipo() { return destino._faltaDeEquipo ?? []; },
+    /** Las mallas de equipo que cuelgan de sus ejes AHORA, leídas del grafo. */
+    get equipoEnEscena() { return enEscenaDe(destino); },
+    /** Las mallas colgadas, para que la sonda las esconda y cuente píxeles. */
+    get mallasDeEquipo() { return (destino._equipo ?? []).filter((c) => !c.esCuerpo).map((c) => c.malla).filter(Boolean); },
     get animacion() { return actual?.seq?.nombre ?? null; },
     /**
      * ¿ESTÁ SONANDO TODAVÍA UNA ANIMACIÓN DE UN SOLO PASE? — el 85.

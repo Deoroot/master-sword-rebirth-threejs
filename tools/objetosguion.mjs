@@ -47,6 +47,8 @@ import { partirGuion, COMANDOS, repeticionDe } from "../src/play/guion.js";
 import { resolverGuion } from "../src/play/cargador.js";
 import { leerScript, RAIZ_POR_OMISION } from "./scriptsmsr.mjs";
 import { posicionalesDe } from "./mapa.mjs";
+import { creadosPor, lectorDe } from "./creables.mjs";
+import { ARMAS_QUE_INVOCAN } from "../src/play/creados.js";
 
 const RAIZ = posicionalesDe()[0] ?? RAIZ_POR_OMISION;
 const SALIDA_DIR = "build/msr";
@@ -168,6 +170,37 @@ const armaduras = objetos.filter((o) => o.vestible
   && ((o.tipos ?? []).includes("armadura") || /^armor_helm_/.test(o.id)));
 for (const o of armaduras) crudos.add(o.id);
 console.log(`  armaduras y yelmos (96)    ${armaduras.length}`);
+
+// ── Y LAS ARMAS QUE CREAN ALGO CON `createnpc` ──────────────────────────────
+//
+// El lanzamiento de la Blood Drinker no es un número de su ficha: es su evento
+// `throwsword_strike`, que hace `createnpc monsters/summon/blood_drinker …`
+// (items/swords_blood_drinker.script:171), y su `sword_return`, al que la
+// invocación llama de vuelta (:209-218). Sin el GUION del arma corriendo no hay
+// quien cree nada ni quien devuelva la espada a la mano. Ninguna tienda de los
+// dos mapas la vende, así que entra a mano, como las armaduras.
+//
+// SÓLO las de `ARMAS_QUE_INVOCAN` (src/play/creados.js), que son las que se han
+// medido: hornear el guion de un arma hace que CORRA cuando la llevas —su
+// `game_spawn`, sus bucles—, y eso no se enciende para 37 armas sin mirar qué
+// hace cada una. Cuántas quedan fuera, se dice.
+{
+  const ARMAS = "build/msr/armas.json";
+  const lector = lectorDe(RAIZ);
+  let n = 0, otras = 0;
+  if (existsSync(ARMAS)) {
+    for (const a of JSON.parse(readFileSync(ARMAS, "utf8")).armas ?? []) {
+      const o = porId.get(a.id);
+      if (!o || !creadosPor(o.ruta, lector).usos) continue;
+      if (!ARMAS_QUE_INVOCAN.has(a.id)) { if (!crudos.has(a.id)) otras++; continue; }
+      if (crudos.has(a.id)) continue;
+      crudos.add(a.id);
+      n++;
+    }
+  }
+  console.log(`  armas con createnpc        ${n} (y ${otras} más que lo usan y NO se hornean: su invocación no está medida)` +
+    `${existsSync(ARMAS) ? "" : " (falta build/msr/armas.json: pasa `npm run armas`)"}`);
+}
 
 // Un `addstoreitem` puede llevar una VARIABLE en vez de un nombre
 // (`RND_ITEM`, `$get_array(...)`): eso se resuelve al correr y aquí no hay

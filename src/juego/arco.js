@@ -54,6 +54,9 @@ import {
   centroDeLaRafaga, rafagaOscura, danoDeSombra, espiralDelArco, golpesDeVuelo,
 } from "../play/proyectilguion.js";
 import { relacionEnTexto } from "../play/efectos.js";
+// EL 100: la bola de maná del Orion Bow.
+import { BOLA_DE_MANA, ORION, radioDeLaBola } from "../play/orion.js";
+import { ESTALLIDOS, estallidoDelFenix } from "../play/fenix.js";
 // EL 86: el informe del golpe lo escribe el mod y no este archivo.
 import { golpeAsestado } from "../play/mensajesdecombate.js";
 
@@ -74,6 +77,8 @@ export function montarArco({
   bichos = () => null, bichosSolidos = () => null,
   brazo = () => null, armaEnMano = () => null,
   catalogoDeFlechas = () => null, reloj = () => 0,
+  // EL 100: las bolas de `armas.json` (`bolas`): la de maná del Orion Bow.
+  catalogoDeBolas = () => null,
   // Lo que el arco no sabe hacer y pide prestado
   suceso = () => {}, potenciaDe = () => 0, destrezaDe = () => 0,
   repartirExperiencia = () => {}, alMatar = () => {},
@@ -83,9 +88,27 @@ export function montarArco({
   candidatosVivos = () => [], trazaDelMundo = () => true,
   JUGADOR = "jugador",
 } = {}) {
-  /** El conjunto de nodos, montado al empuñar un arco. Lo pone `empunar`. */
-  let flechasPuestas = null;
-  const flechasEnVuelo = [];    // `{ flecha, pieza }`
+  /**
+   * LOS CONJUNTOS DE NODOS, uno por MODELO (la `clave` de la carpeta horneada).
+   *
+   * Hasta el 99 había uno solo, el de `proj_arrow_generic`, y todo lo que volaba
+   * se dibujaba con la flecha de madera: la sombra del Unholy Blade
+   * (`weapons_projectiles_b36`), la lanza de la Shadow Lance (`b73`), la esfera
+   * de Torkalath (`b1`)... El motor pone a cada proyectil su modelo y su
+   * submodelo al nacer (`NewGenericItem(sProjectile)`, giattack.cpp:1066, con el
+   * `setmodel`/`setmodelbody` de su guion). EL 100: un conjunto por clave, que
+   * se montan al empuñar (`ponerConjunto`, desde main.js) con todas las claves
+   * que el arma puede tirar (`clavesQueTira`).
+   */
+  const conjuntos = new Map();
+  /**
+   * EL 101: LOS ESTALLIDOS, uno por PROYECTIL (`src/render/estallido.js`): lo
+   * que se ve al reventar. Se montan al empuñar, igual que los conjuntos de
+   * arriba y desde el mismo sitio de main.js (`estallidosQueTira`,
+   * `ponerEstallido`).
+   */
+  const estallidos = new Map();
+  const flechasEnVuelo = [];    // `{ flecha, pieza, conjunto }`
   const cuentas = {
     tiros: 0, flechazos: 0, perdidas: 0,
     // EL 97: lo que hizo el guion de cada proyectil, para medir. `golpes` son
@@ -97,6 +120,16 @@ export function montarArco({
     // Lance, la esfera de Torkalath y la sombra del Unholy Blade—, una fila por
     // `xdodamage`, y los tiros que el arco cancela en su `ranged_start`.
     areas: [], cancelados: 0,
+    // EL 100: lo que sale sin conjunto montado para su modelo (vuela, no se ve),
+    // y las bolas de maná del Orion Bow, una fila por bola.
+    sinPieza: 0, bolas: [],
+    // EL 101: lo que se PIDE que suene al tirar y al reventar, una fila por
+    // sonido con su porqué — y si el audio estaba dormido, también, que eso es
+    // lo que separa «no se pidió» de «no se dejó sonar». Lo que de verdad ha
+    // sonado lo dice `Audio.ultimas`, no esto. Y las explosiones que no han
+    // tenido con qué dibujarse: un estallido sin conjunto montado hace daño y
+    // no se ve, que es justo como estaba antes del 101.
+    sonidos: [], sinEstallido: 0,
   };
   /**
    * La última que se ha soltado, y no es un adorno de la sonda: es la única
@@ -316,9 +349,10 @@ export function montarArco({
         : { dano: espiral?.dano ?? 0, tipo: espiral?.tipo ?? null, cubo: "archery", radio: vuelo.vuelo.radio, caida: vuelo.vuelo.caida };
       f.areaDeVuelo = { ...a, proximo: vuelo.vuelo.primero };
     }
-    const pieza = flechasPuestas?.coger() ?? null;
-    if (pieza) flechasPuestas.apuntar(pieza, [ojo[0], ojo[1], ojo[2]], [dir.x, dir.y, dir.z]);
-    flechasEnVuelo.push({ flecha: f, pieza });
+    // EL 100: la pieza del conjunto de SU modelo, no la de la flecha de madera.
+    const { pieza, conjunto } = cogerPieza(flecha);
+    if (pieza) conjunto.apuntar(pieza, [ojo[0], ojo[1], ojo[2]], [dir.x, dir.y, dir.z]);
+    flechasEnVuelo.push({ flecha: f, pieza, conjunto });
     ultimaFlecha = f;
 
     // El sonido del arco, que lo pone su propio `ranged_toss`.
@@ -329,8 +363,27 @@ export function montarArco({
     // `pole_powerthrow_start` (polearms_base.script:374-384), nada en la Unholy
     // Blade (`dark_shard_toss` no existe)—, que no está portado. Mejor callado que
     // el silbido de otra cosa, o la cuerda de un arco que no hay.
-    const s = elBrazo?.esDeTiro === false ? null : (elBrazo?.arma?.sonidos?.blandir ?? "weapons/bow/bow.wav");
-    if (s && elAudio?.despierto) elAudio.unaVez(`snd/${s}`);
+    //
+    // EL 101: y es `SOUND_SHOOT`, no `SOUND_SWIPE` — `playsound game.sound.weapon
+    // game.sound.maxvol SOUND_SHOOT` (bows_base.script:56-58). Hasta hoy se leía
+    // `blandir`, que en los quince arcos es `null`, y caía SIEMPRE en la cuerda
+    // escrita aquí a mano: las ballestas sonaban a arco (`weapons/bow/crossbow.wav`,
+    // bows_crossbow_light.script:14) — o habrían sonado, porque `weapons/bow/` no
+    // se horneaba (ver `tools/sonido.mjs`) y no sonaba ninguno.
+    const s = elBrazo?.esDeTiro === false ? null
+      : (elBrazo?.arma?.sonidos?.disparo ?? elBrazo?.arma?.sonidos?.blandir ?? "weapons/bow/bow.wav");
+    if (s) sonar("disparo", s, { volumen: 1 });
+    // Y LO QUE TOCA EL PROYECTIL AL NACER: `game_tossprojectile` corre dentro de
+    // `TossProjectile` (giprojectile.cpp:114-116), y la flecha del Fénix grita
+    // ahí — `svplaysound 0 5 SOUND_PHOENIX`, `monsters/birds/hawkcaw.wav`
+    // (proj_arrow_phx.script:33, :54-57). Lo emite LA FLECHA y no el arco, así
+    // que suena también si la tira otra arma, y en el sitio de donde sale.
+    // «Sound on launch - follows arrow»: en el motor el sonido va pegado a la
+    // entidad; aquí se queda donde nació, que para un grito de un segundo y una
+    // flecha que se aleja de quien escucha es la diferencia que no se porta.
+    for (const g of flecha.sonidos?.alSalir ?? []) {
+      sonar("alSalir", g.archivo, { volumen: g.volumen, donde: [desde[0] / u, desde[1] / u, desde[2] / u] });
+    }
     const enMano = armaEnMano();
     if (enMano && elBrazo?.arma?.animaciones?.disparar !== null) {
       enMano.pon(elBrazo.arma.animaciones.disparar, { unaVez: true });
@@ -510,6 +563,20 @@ export function montarArco({
     return g?.punto?.[1] ?? null;
   }
 
+  /**
+   * EL 101: pide un sonido y lo APUNTA. `porQue` es de dónde sale la orden
+   * (`disparo`, `alSalir`, `estallido`), y `despierto` si el navegador dejaba
+   * sonar: sin gesto del usuario el `AudioContext` está suspendido y no suena
+   * nada, que no es lo mismo que no haberlo pedido.
+   */
+  function sonar(porQue, archivo, { volumen = 1, donde = null } = {}) {
+    const elAudio = audio();
+    const despierto = Boolean(elAudio?.despierto);
+    cuentas.sonidos.push({ porQue, archivo, volumen, donde, despierto });
+    if (cuentas.sonidos.length > 64) cuentas.sonidos.shift();
+    if (despierto) elAudio.unaVez(`snd/${archivo}`, { volumen, donde });
+  }
+
   /** `game_projectile_hitwall` de la flecha del Fénix — ver `explosionDelFenix`. */
   function explotarFenix(f, punto) {
     const yo = origenDelTirador();
@@ -520,9 +587,54 @@ export function montarArco({
     const e = explosionDelFenix({
       distancia, potencia: propiedad("archery", "power"), arqueria: habilidad("archery"),
     });
+    // EL 101: LO QUE SE VE Y SE OYE, que va ANTES del daño y no depende de que
+    // haya alguien dentro: `clientevent new all items/proj_arrow_phx_cl MY_ORG
+    // MY_RADIUS` (proj_arrow_phx.script:99), cinco líneas por encima del
+    // `xdodamage` (:104). La llamarada, la luz y el vapor — `src/play/fenix.js`.
+    const efecto = lanzarEstallido(f.ficha?.id, centro, e.radio);
     const golpeados = repartirArea(f, centro, { dano: e.dano, radio: e.radio, caida: 0, tipo: e.tipo, cubo: "archery" });
-    cuentas.explosiones.push({ centro, distancia, ...e, golpeados });
+    cuentas.explosiones.push({ centro, distancia, ...e, golpeados, efecto });
     return golpeados;
+  }
+
+  /**
+   * EL 101: el efecto de cliente de una explosión. Devuelve lo que se pidió y
+   * si había con qué dibujarlo. El sonido va aunque no haya dibujo, y al revés:
+   * son dos órdenes del guion (`cleffect tempent` y `sound.play3d`,
+   * proj_arrow_phx_cl.script:36 y :49) y ninguna espera a la otra.
+   */
+  function lanzarEstallido(id, centro, radio) {
+    if (!ESTALLIDOS[id]) return null;
+    const u = U();
+    const fx = estallidoDelFenix({ centro, radio });
+    const c = estallidos.get(id) ?? null;
+    if (c) c.lanzar(fx); else cuentas.sinEstallido++;
+    sonar("estallido", fx.sonido.archivo, {
+      volumen: fx.sonido.volumen,
+      donde: [fx.sonido.donde[0] / u, fx.sonido.donde[1] / u, fx.sonido.donde[2] / u],
+    });
+    return { ...fx, dibujado: Boolean(c) };
+  }
+
+  /** EL 101: el paso de lo que se está viendo reventar. Cada fotograma. */
+  function pasoDeEfectos(dt) {
+    for (const c of estallidos.values()) if (c.hayVivos) c.paso(dt);
+  }
+
+  /**
+   * EL 101: qué estallidos puede necesitar este brazo — los de los proyectiles
+   * que tira por nombre o por tipo, igual que `clavesQueTira`.
+   */
+  function estallidosQueTira(elBrazo) {
+    const ids = new Set();
+    const catalogo = catalogoDeFlechas();
+    for (const a of elBrazo?.ataques ?? []) {
+      if (a?.tipo !== "charge-throw-projectile") continue;
+      const tipo = String(a.proyectil ?? "arrow");
+      if (catalogo?.get(tipo)) { if (ESTALLIDOS[tipo]) ids.add(tipo); continue; }
+      for (const f of catalogo?.values() ?? []) if (f.id.includes(tipo) && ESTALLIDOS[f.id]) ids.add(f.id);
+    }
+    return [...ids];
   }
 
   /**
@@ -620,8 +732,14 @@ export function montarArco({
   function pasoDeFlechas(dt) {
     const u = U();
     for (let n = flechasEnVuelo.length - 1; n >= 0; n--) {
-      const { flecha: f, pieza } = flechasEnVuelo[n];
+      const { flecha: f, pieza, conjunto } = flechasEnVuelo[n];
       const antes = f.volando;
+      // EL 100: la bola de maná es `solid 0` (proj_mana2.script:46): atraviesa a
+      // los bichos y sólo la para el mundo. Ver `pasoDeBola`.
+      if (f.bolaDeMana) {
+        if (pasoDeBola(f, dt, pieza, conjunto)) flechasEnVuelo.splice(n, 1);
+        continue;
+      }
       const choque = f.paso(dt, { traza: trazaDeFlecha });
       if (choque && antes) aterrizar(f, choque);
       // EL 98: el área de la esfera y la sombra, sólo mientras SIGUE volando
@@ -636,7 +754,7 @@ export function montarArco({
         const vida = PROYECTILES_DE_GUION[f.ficha.id]?.vuelo?.vida ?? Infinity;
         if (!f.volando || f.vida >= vida) {
           if (f.volando) cuentas.perdidas++;
-          flechasPuestas?.soltar(pieza);
+          conjunto?.soltar(pieza);
           flechasEnVuelo.splice(n, 1);
           continue;
         }
@@ -645,16 +763,134 @@ export function montarArco({
       // se queda con el ángulo con el que entró, que es lo que hace el motor
       // al pasar a `MOVETYPE_NONE`.
       if (pieza && f.volando) {
-        flechasPuestas.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], f.vel);
+        conjunto.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], f.vel);
       } else if (pieza && choque) {
-        flechasPuestas.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], null);
+        conjunto.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], null);
       }
       if (f.caducada) {
         if (f.volando) cuentas.perdidas++;
-        flechasPuestas?.soltar(pieza);
+        conjunto?.soltar(pieza);
         flechasEnVuelo.splice(n, 1);
       }
     }
+  }
+
+  /**
+   * EL 100: la pieza del conjunto del MODELO de lo que se tira. Sin conjunto
+   * montado para esa clave, vuela sin dibujo y se cuenta (`sinPieza`): no se
+   * le presta el de la flecha de madera.
+   */
+  function cogerPieza(ficha) {
+    const conjunto = conjuntos.get(ficha?.clave) ?? null;
+    if (!conjunto) { cuentas.sinPieza++; return { pieza: null, conjunto: null }; }
+    const pieza = conjunto.coger();
+    pieza.clave = ficha.clave;
+    return { pieza, conjunto };
+  }
+
+  /**
+   * EL 100: LAS CLAVES DE MODELO que un brazo puede tirar, para montar sus
+   * conjuntos al empuñar. Un tiro con nombre (`proj_ub`, `proj_pole_sl`...) o con
+   * `ammodrain 0` sale del catálogo por su nombre (giattack.cpp:1046-1048); uno
+   * por TIPO (`arrow`, `bolt`) puede tirar cualquier munición del catálogo que
+   * case por texto, más la gratis (giattack.cpp:1005-1037, ver `municion`). Y el
+   * Orion Bow, su bola.
+   */
+  function clavesQueTira(elBrazo) {
+    const claves = new Set();
+    const catalogo = catalogoDeFlechas();
+    for (const a of elBrazo?.ataques ?? []) {
+      if (a?.tipo !== "charge-throw-projectile") continue;
+      const tipo = String(a.proyectil ?? "arrow");
+      const propio = catalogo?.get(tipo);
+      if (propio) { if (propio.clave) claves.add(propio.clave); continue; }
+      for (const f of catalogo?.values() ?? []) if (f.id.includes(tipo) && f.clave) claves.add(f.clave);
+    }
+    if (elBrazo?.guionDeTiro) {
+      const b = catalogoDeBolas()?.get(BOLA_DE_MANA.id);
+      if (b?.clave) claves.add(b.clave);
+    }
+    return [...claves];
+  }
+
+  /**
+   * EL 100: SOLTAR LA BOLA DE MANÁ del Orion Bow — el `game_-attack1` de
+   * bows_orion1.script:174-193:
+   *
+   *     local L_VEL $relvel($get(ent_owner,viewangles),(0,200,0))
+   *     createnpc items/proj_mana2 $get(ent_owner,eyepos) $get(ent_owner,id) L_VEL BALL_SIZE BALL_DMG archery
+   *
+   * Sale del OJO, a 200 u/s por donde mira la cruceta, sin cono, sin guiño y sin
+   * gravedad (`gravity 0`, proj_mana2.script:16). Nada de `anguloDelTiro`: no es
+   * un `TossProjectile`, es un NPC con una velocidad.
+   */
+  function tirarBola({ tamano = 0, dano = 0 } = {}) {
+    const ficha = catalogoDeBolas()?.get(BOLA_DE_MANA.id) ?? { id: BOLA_DE_MANA.id, clave: null };
+    const u = U();
+    const p = player();
+    const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(p.pitch, p.yaw, 0, "YXZ"));
+    const desde = [p.eye[0] * u, p.eye[1] * u, p.eye[2] * u];
+    const f = new Flecha({
+      desde, hacia: [dir.x, dir.y, dir.z], velocidad: BOLA_DE_MANA.velocidad,
+      gravedad: BOLA_DE_MANA.gravedad, dano: 0, tipoDano: BOLA_DE_MANA.tipo,
+      expira: 0, ficha, miraAdelante: false,
+    });
+    f.bolaDeMana = { tamano, dano, proximo: BOLA_DE_MANA.primero, golpes: [] };
+    cuentas.tiros++;
+    cuentas.bolas.push(f.bolaDeMana);
+    const { pieza, conjunto } = cogerPieza(ficha);
+    if (pieza) {
+      conjunto.apuntar(pieza, [p.eye[0], p.eye[1], p.eye[2]], [dir.x, dir.y, dir.z]);
+      conjunto.escalar?.(pieza, tamano * BOLA_DE_MANA.escalaPorTamano);
+    }
+    flechasEnVuelo.push({ flecha: f, pieza, conjunto });
+    ultimaFlecha = f;
+    return f;
+  }
+
+  /**
+   * EL 100: un paso de la bola (proj_mana2.script:61-97). Devuelve `true` si se va.
+   *
+   *   - vuela recto; la para el MUNDO y no los bichos (`solid 0`, :46). Al tocar
+   *     pared el efecto de cliente muere en el acto (`collide world;die`,
+   *     proj_mana2_cl.script:56) y el NPC en su siguiente `scan_cycle`, sin hacer
+   *     daño (`FX_VEL equals L_VEL` deja de cumplirse, :65-74): aquí se va al tocar;
+   *   - cada 0,3 s, un área de radio `radioDeLaBola(tamaño)` con el daño entero
+   *     (caída 0) en arquería y `magic` (:68);
+   *   - cada bicho al que ese área le quita vida le resta UN tamaño a la bola
+   *     (`ball_dodamage`, :77-90, que el motor llama una vez por blanco con el
+   *     daño en `PARAM6`, giattack.cpp:2037-2058); a cero, se va;
+   *   - a los 10 s, se va (:23).
+   */
+  function pasoDeBola(f, dt, pieza, conjunto) {
+    const u = U();
+    const b = f.bolaDeMana;
+    const choque = f.paso(dt, { traza: (a, c) => trazar(a, c, true) });
+    let fuera = Boolean(choque) || f.vida >= BOLA_DE_MANA.vida;
+    while (!fuera && b.proximo <= f.vida + 1e-9) {
+      const t = b.proximo;
+      b.proximo += BOLA_DE_MANA.periodo;
+      const radio = radioDeLaBola(b.tamano);
+      const golpeados = repartirArea(f, [...f.pos], {
+        dano: b.dano, radio, caida: BOLA_DE_MANA.caida, tipo: BOLA_DE_MANA.tipo, cubo: ORION.habilidad,
+      });
+      const restan = golpeados.filter((g) => g.dano > 0 && !g.parado).length;
+      b.golpes.push({ t, radio, dano: b.dano, tamano: b.tamano, golpeados });
+      cuentas.areas.push({ id: BOLA_DE_MANA.id, t, centro: [...f.pos], dano: b.dano, radio, caida: 0, tipo: BOLA_DE_MANA.tipo, golpeados });
+      b.tamano -= restan;
+      if (restan && b.tamano <= 0) fuera = true;
+    }
+    if (fuera) {
+      if (f.volando) cuentas.perdidas++;
+      conjunto?.soltar(pieza);
+      return true;
+    }
+    if (pieza) {
+      conjunto.apuntar(pieza, [f.pos[0] / u, f.pos[1] / u, f.pos[2] / u], f.vel);
+      // `reduce_size` y `update_arrow`: la escala sigue al tamaño (proj_mana2_cl.script:28-35).
+      conjunto.escalar?.(pieza, b.tamano * BOLA_DE_MANA.escalaPorTamano);
+    }
+    return false;
   }
 
   return {
@@ -662,9 +898,29 @@ export function montarArco({
     /** El ciclador elige con qué flecha se tira. `null` vuelve a la búsqueda. */
     elegirMunicion(id) { municionElegida = id ?? null; },
     get municionElegida() { return municionElegida; },
-    /** `empunar` monta el conjunto de nodos cuando hay un arco en la mano. */
-    get flechasPuestas() { return flechasPuestas; },
-    set flechasPuestas(v) { flechasPuestas = v; },
+    /**
+     * EL 100: los conjuntos, uno por clave de modelo. `empunar` (main.js) pide
+     * `clavesQueTira` y monta con `ponerConjunto` las que falten.
+     */
+    clavesQueTira,
+    tirarBola,
+    tieneConjunto(clave) { return conjuntos.has(clave); },
+    ponerConjunto(clave, c) { if (clave && c) conjuntos.set(clave, c); },
+    /** EL 101: los estallidos, uno por proyectil (ver `estallidos`). */
+    estallidosQueTira, pasoDeEfectos,
+    tieneEstallido(id) { return estallidos.has(id); },
+    ponerEstallido(id, c) { if (id && c) estallidos.set(id, c); },
+    get estallidos() { return estallidos; },
+    /**
+     * Lo que antes era EL conjunto, sumado sobre todos: `cuantas` nodos y
+     * `puestas` ocupados (lo leen las sondas), y las claves montadas.
+     */
+    get flechasPuestas() {
+      if (!conjuntos.size) return null;
+      let cuantas = 0, puestas = 0;
+      for (const c of conjuntos.values()) { cuantas += c.cuantas ?? 0; puestas += c.puestas ?? 0; }
+      return { cuantas, puestas, claves: [...conjuntos.keys()] };
+    },
     get flechasEnVuelo() { return flechasEnVuelo; },
     get ultimaFlecha() { return ultimaFlecha; },
     get tiros() { return cuentas.tiros; },
@@ -676,6 +932,8 @@ export function montarArco({
         golpes: cuentas.golpesDeGuion, saetas: cuentas.saetas, explosiones: cuentas.explosiones,
         sinPortar: { ...cuentas.sinPortar }, sinMunicion: cuentas.sinMunicion,
         areas: cuentas.areas, cancelados: cuentas.cancelados,
+        sinPieza: cuentas.sinPieza, bolas: cuentas.bolas,
+        sonidos: cuentas.sonidos, sinEstallido: cuentas.sinEstallido,
       };
     },
   };

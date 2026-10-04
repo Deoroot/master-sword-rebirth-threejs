@@ -26,7 +26,10 @@ import { leerMdl, TAM } from "../src/bsp/mdl.js";
 import { leerSecuencias, leerHuesos, clavesDeSecuencia, cabeEnLaCaja } from "../src/bsp/mdlanim.js";
 import { leerFichaObjeto } from "../src/bsp/script.js";
 import { PROYECTILES_DE_GUION } from "../src/play/proyectilguion.js";
+import { BOLA_DE_MANA } from "../src/play/orion.js";
+import { ESTALLIDOS } from "../src/play/fenix.js";
 import { extraerBicho, verticesCrudos } from "./bicho.mjs";
+import { vistaDeArma } from "./animvista.mjs";
 
 const SCRIPTS = process.argv[2] ?? "../MSC/MSCScripts/scripts";
 const MODELOS = "../MSC/assets/msr/models";
@@ -128,11 +131,37 @@ const t0 = Date.now();
 // pide la animación 5 se quedaba sin ella, sin un error. Así que primero se
 // junta lo que pide cada carpeta y luego se extrae UNA vez con la unión.
 const fichas = [];
+const cotejo = [];
 for (const ruta of LISTA) {
   const f = leerFichaObjeto(SCRIPTS, ruta);
   if (!f) { avisos.push(`${ruta}: no está el script`); continue; }
+  // ── LA SECUENCIA DE CADA ATAQUE, que no es un campo del ataque ───────────
+  //
+  // La pone el `playviewanim` del evento `<retorno>_start` (giattack.cpp:345,
+  // genericitem.cpp:2015-2033), así que se corre ese evento con el intérprete
+  // y se apunta lo que deja puesto. Ver tools/animvista.mjs, que lleva las
+  // citas y lo que se supone del que empuña. Va en `vista` de cada ataque; el
+  // que no la tenga (un guion sin eventos) se queda con el sorteo de antes.
+  const v = vistaDeArma(ruta, f.ataques, SCRIPTS);
+  if (v) {
+    f.ataques.forEach((a, i) => {
+      const w = v.vistas[i];
+      a.vista = {
+        existe: w.existe, secuencias: w.secuencias, tardias: w.tardias.map((x) => ({ t: x.t, indice: x.indice })),
+        sinModelo: w.sinModelo, otroModelo: w.otroModelo,
+        sinResolver: w.sinResolver || w.tardias.some((x) => x.sinResolver),
+      };
+    });
+    // EL COTEJO: lo que registra el intérprete contra lo que leyó la ficha.
+    cotejo.push({ id: f.id, ficha: f.ataques.map((a) => a.retorno ?? "?"), interprete: v.registrados.map((r) => r.retorno) });
+  }
   fichas.push(f);
 }
+
+/** Las secuencias que piden los ataques de una ficha por su `vista`. */
+const deLaVista = (f) => f.ataques.flatMap((a) => [
+  ...(a.vista?.secuencias ?? []), ...(a.vista?.tardias ?? []).map((x) => x.indice),
+]);
 
 const relDe = (m) => String(m ?? "").replace(/^models\//, "");
 const tieneModelo = (m) => Boolean(m) && m !== "none";
@@ -164,6 +193,9 @@ for (const f of fichas) {
         // arco se queda quieto mientras dispara. Hasta el 23 sólo se emitía
         // `idle1` de `v_bows.mdl` — una secuencia de cuatro.
         f.animaciones.tensar, f.animaciones.disparar,
+        // Y las que pone el `<retorno>_start` de cada ataque: la estocada de la
+        // Blood Drinker es la 3 y no está entre sus `ANIM_ATTACK`.
+        ...deLaVista(f),
       ].filter((v) => v !== null && v !== undefined);
       p.quieroVista = quiero;
       p.vista = pedir("vista", rel, f.enMano.submodelo ?? 0, quiero.length ? quiero : null, f.id);
@@ -486,7 +518,14 @@ for (const a of armas) {
 //    `detalleSecuencias`, por índice o por nombre.
 for (const a of armas) {
   if (!a.enMano.clave) continue;
-  const pide = [...new Set([a.animaciones.parado, ...a.animaciones.ataque]
+  // Y las de la `vista` de sus ataques, que pueden no estar en `ANIM_ATTACK`.
+  // Menos las que el ARCHIVO no tiene: un guion puede pedir una secuencia que
+  // no existe y entonces el motor pone la 0 (`if (sequence >= numseq) sequence
+  // = 0`, studiomodelrenderer.cpp:968); ésas se cuentan aparte, más abajo.
+  const tope = a.enMano.secuenciasEnElArchivo ?? Infinity;
+  const deVista = a.ataques.flatMap((x) => [...(x.vista?.secuencias ?? []), ...(x.vista?.tardias ?? []).map((y) => y.indice)])
+    .filter((i) => i < tope);
+  const pide = [...new Set([a.animaciones.parado, ...a.animaciones.ataque, ...deVista]
     .filter((v) => v !== null && v !== undefined).map(String))];
   // DE DISCO, no de lo que devolvió la extracción: la rotura deliberada del
   // 96 (extraer arma por arma) dejó este control VERDE con la carpeta de los
@@ -565,6 +604,58 @@ for (const a of armas) {
   control("un asta lanza si y sólo si declara POLE_CAN_POWER_THROW 1 (polearms_base.script:298)",
     mal.length === 0 && astas.length > 0,
     `${bien} de ${astas.length} bien, ${lanzan} lanzan${mal.length ? `; mal: ${mal.join(", ")}` : ""}`);
+}
+
+// 5c. LA SECUENCIA DE CADA ATAQUE (tools/animvista.mjs). Tres controles, y el
+//     primero es el que defiende a los otros dos: si el intérprete y el lector
+//     de fichas no registran los mismos ataques EN EL MISMO ORDEN, la `vista`
+//     de uno se le colgaría a otro sin dar error.
+const vistas = { ataques: 0, conSecuencia: 0, soloDespues: 0, noTocan: 0, sinResolver: [], sinModelo: [], otroModelo: [], fueraDelArchivo: [] };
+{
+  // El cotejo mira sólo los ataques que la ficha se ha quedado: el lector tira
+  // los de detrás de un `if` viejo falso (el 99) y el intérprete no los llega a
+  // registrar, así que los dos tienen que dar la misma lista.
+  const mal = cotejo.filter((c) => c.ficha.join(",") !== c.interprete.map((r) => (r === "reg.attack.callback" ? "?" : r)).join(","));
+  // NO para el horneado: la `vista` se cuelga por el NOMBRE del retorno de cada
+  // ataque de la ficha y no por su índice, así que un orden distinto no la
+  // descoloca. Se cuenta y se guarda, que es un hueco del lector y no de esto.
+  vistas.cotejoDistinto = mal.map((c) => `${c.id}: ficha [${c.ficha}] intérprete [${c.interprete}]`);
+  for (const a of armas) {
+    for (const x of a.ataques) {
+      if (!x.vista) continue;
+      vistas.ataques++;
+      if (x.vista.secuencias.length) vistas.conSecuencia++;
+      else if (x.vista.tardias.length) vistas.soloDespues++;
+      else vistas.noTocan++;
+      if (x.vista.sinResolver) vistas.sinResolver.push(`${a.id}/${x.retorno}`);
+      if (x.vista.sinModelo) vistas.sinModelo.push(`${a.id}/${x.retorno}`);
+      if (x.vista.otroModelo.length) vistas.otroModelo.push(`${a.id}/${x.retorno}`);
+      const tope = a.enMano.secuenciasEnElArchivo;
+      if (tope !== null && tope !== undefined && [...x.vista.secuencias, ...x.vista.tardias.map((y) => y.indice)].some((i) => i >= tope)) {
+        vistas.fueraDelArchivo.push(`${a.id}/${x.retorno}`);
+      }
+    }
+  }
+  const de = (id, retorno) => armas.find((a) => a.id === id)?.ataques.find((x) => x.retorno === retorno)?.vista ?? null;
+  // El número va escrito A MANO, con su cita: es la regla (CLAUDE.md §4, el 75).
+  const bd = de("swords_blood_drinker", "special_01");
+  control("el golpe cargado de la Blood Drinker pone ANIM_LUNGE, la 3 (swords_blood_drinker.script:20 y :187)",
+    JSON.stringify(bd?.secuencias) === "[3]", JSON.stringify(bd?.secuencias));
+  const bn = de("swords_blood_drinker", "melee");
+  control("y el normal, ANIM_ATTACK1, la 2 (:16 y :56; base_melee.script:137)",
+    JSON.stringify(bn?.secuencias) === "[2]", JSON.stringify(bn?.secuencias));
+  const q1 = de("polearms_qs", "attack_poke1"), q2 = de("polearms_qs", "attack_poke2");
+  control("el bastón: la estocada es VANIM_POKE1, la 4, y la cargada VANIM_POKE2, la 5 (polearms_base.script:36-37, :480, :486, :531)",
+    JSON.stringify(q1?.secuencias) === "[4]" && JSON.stringify(q2?.secuencias) === "[5]",
+    `${JSON.stringify(q1?.secuencias)} y ${JSON.stringify(q2?.secuencias)}`);
+  const rs = de("swords_rsword", "melee");
+  control("la espada oxidada sortea entre sus tres, una por cara del dado (swords_base_onehanded.script:26-35)",
+    JSON.stringify(rs?.secuencias) === "[2,3,4]", JSON.stringify(rs?.secuencias));
+  console.log(`
+  la vista de los ataques: ${vistas.ataques} ataques, ${vistas.conSecuencia} ponen secuencia al empezar, ` +
+    `${vistas.soloDespues} sólo después, ${vistas.noTocan} no la tocan; ${vistas.sinResolver.length} sin resolver, ` +
+    `${vistas.sinModelo.length} quitan el modelo, ${vistas.otroModelo.length} usan otro modelo, ` +
+    `${vistas.fueraDelArchivo.length} piden una que el archivo no tiene; cotejo distinto en ${vistas.cotejoDistinto.length} armas`);
 }
 
 // 6. Y la flecha tiene que traer daño y modelo. El daño es un dado del script
@@ -651,11 +742,85 @@ for (const f of flechas) {
   control(`${f.id} trae su modelo`, Boolean(f.clave), `${f.clave}`);
 }
 
+// ── EL 100: LA BOLA DE MANÁ DEL ORION BOW, que no es una flecha ────────────
+//
+// `items/proj_mana2` es un NPC (`createnpc`, bows_orion1.script:189) con
+// `setmodel none` (proj_mana2.script:21): lo que se VE es un efecto de cliente
+// con el submodelo 13 de `weapons/projectiles.mdl` (proj_mana2_cl.script:2,
+// :57). No tiene ficha de objeto que leer, así que sus números vienen de
+// `BOLA_DE_MANA` (src/play/orion.js), con su cita, y aquí sólo se hornea el
+// modelo. Va en una lista aparte (`bolas`) y no en `flechas`: no es munición,
+// no tiene dado y los controles de arriba no le aplican.
+const bolas = [];
+{
+  const b = BOLA_DE_MANA;
+  const bola = { id: b.id, modelo: b.modelo, submodelo: b.submodelo, clave: null, secuencias: [], bytes: 0 };
+  if (existsSync(`${MODELOS}/${b.modelo}`)) {
+    const r = extraerBicho(b.modelo, {
+      cuerpo: b.submodelo, base: MODELOS, salida: SALIDA, raizSalida: salidaComun(),
+      quiero: null, callar: true,
+    });
+    bola.clave = r?.clave ?? null;
+    bola.secuencias = r?.secuencias ?? [];
+    bola.bytes = r?.bytes ?? 0;
+    bola.pieza = submodelosDe(`${MODELOS}/${b.modelo}`, b.submodelo).submodelos[0]?.nombre ?? null;
+  } else avisos.push(`${b.id}: falta ${b.modelo}`);
+  bolas.push(bola);
+  console.log(`\n  la bola de maná   ${bola.clave ?? "sin modelo"} (submodelo ${b.submodelo}: ${bola.pieza ?? "?"})`);
+  control(`${b.id} trae su modelo`, Boolean(bola.clave), `${bola.clave}`);
+  // El oráculo del nombre, como con las armas: el 13 de `projectiles.mdl` es
+  // `aura_01`, un aura; si sale una lanza o una flecha, el número está mal.
+  control(`${b.id} es el submodelo «aura_01» (proj_mana2_cl.script:57)`, bola.pieza === "aura_01", `${bola.pieza}`);
+}
+
+// ── LOS ESTALLIDOS: lo que se VE cuando un proyectil revienta ─────────────
+//
+// La llamarada de la flecha del Fénix es el submodelo 51 de
+// `weapons/projectiles.mdl` puesto como entidad temporal por su guion de cliente
+// (proj_arrow_phx_cl.script:36, :70), con la secuencia 8 (:72). No es munición
+// ni tiene ficha de objeto: sus números vienen de `ESTALLIDOS`
+// (src/play/fenix.js), con su cita, y aquí sólo se hornea el modelo — una sola
+// secuencia, la suya, que el archivo tiene 23 y enteras pesan 1,2 MB.
+const estallidos = [];
+for (const e of Object.values(ESTALLIDOS)) {
+  const fila = {
+    id: e.proyectil, guion: e.guion, modelo: e.modelo, submodelo: e.submodelo,
+    secuencia: e.secuencia, clave: null, secuencias: [], bytes: 0, pieza: null,
+    sonido: e.sonido.archivo,
+  };
+  if (existsSync(`${MODELOS}/${e.modelo}`)) {
+    const nombres = leerSecuencias(leerMdl(`${MODELOS}/${e.modelo}`)).map((s) => s.nombre);
+    fila.nombreDeSecuencia = nombres[e.secuencia] ?? null;
+    const r = extraerBicho(e.modelo, {
+      cuerpo: e.submodelo, base: MODELOS, salida: SALIDA, raizSalida: salidaComun(),
+      quiero: fila.nombreDeSecuencia ? [fila.nombreDeSecuencia] : null, callar: true,
+    });
+    fila.clave = r?.clave ?? null;
+    fila.secuencias = r?.secuencias ?? [];
+    fila.bytes = r?.bytes ?? 0;
+    fila.pieza = submodelosDe(`${MODELOS}/${e.modelo}`, e.submodelo).submodelos[0]?.nombre ?? null;
+  } else avisos.push(`${e.proyectil}: falta ${e.modelo}`);
+  estallidos.push(fila);
+  console.log(`
+  el estallido de ${fila.id}   ${fila.clave ?? "sin modelo"} ` +
+    `(submodelo ${e.submodelo}: ${fila.pieza ?? "?"}, secuencia ${e.secuencia}: ${fila.nombreDeSecuencia ?? "?"})`);
+  control(`el estallido de ${fila.id} trae su modelo`, Boolean(fila.clave), `${fila.clave}`);
+  control(`el estallido de ${fila.id} trae su secuencia ${e.secuencia}`,
+    Boolean(fila.nombreDeSecuencia) && fila.secuencias.includes(fila.nombreDeSecuencia),
+    `${fila.nombreDeSecuencia} en [${fila.secuencias.join(", ")}]`);
+  // Y que el proyectil al que pertenece esté entre las flechas horneadas: un
+  // estallido de algo que no se puede tirar es una regla que no corre (el 62).
+  control(`el estallido de ${fila.id} es de un proyectil horneado`,
+    flechas.some((f) => f.id === fila.id), flechas.some((f) => f.id === fila.id) ? "sí" : "no está en `flechas`");
+}
+
 // Los bytes de VERDAD, por carpeta y no por arma: con carpetas compartidas,
 // sumar por arma cuenta dos veces la misma malla (daba 203 MB con 146 en disco).
 const porCarpeta = new Map();
 for (const r of [...extraido.values()]) if (r?.clave) porCarpeta.set(r.clave, r.bytes ?? 0);
 for (const f of flechas) if (f.clave) porCarpeta.set(f.clave, f.bytes ?? 0);
+for (const b of bolas) if (b.clave) porCarpeta.set(b.clave, b.bytes ?? 0);
+for (const e of estallidos) if (e.clave) porCarpeta.set(e.clave, e.bytes ?? 0);
 const bytes = [...porCarpeta.values()].reduce((s, b) => s + b, 0);
 const sinModeloEnMano = armas.filter((a) => !a.enMano.clave).map((a) => a.id);
 mkdirSync(SALIDA, { recursive: true });
@@ -673,8 +838,10 @@ writeFileSync(`${SALIDA}/../armas.json`, JSON.stringify({
     conModeloEnElMundo: armas.filter((a) => a.enElMundo.clave).length,
     carpetas: porCarpeta.size, bytes, segundos: Math.round(segundos),
     eximidosDeLaCaja: eximidos, pendientes, avisos,
+    // La secuencia de vista de cada ataque, contada (tools/animvista.mjs).
+    vistas,
   },
-  armas, flechas,
+  armas, flechas, bolas, estallidos,
 }, null, 1));
 
 // ── LA PROCEDENCIA, que es parte del trabajo y no papeleo ─────────────────

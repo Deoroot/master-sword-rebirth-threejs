@@ -75,8 +75,15 @@ function partida(id, { destreza = 60, azar = Math.random, paredZ = 40 } = {}) {
     potenciaDe: () => 50, destrezaDe: () => destreza,
   });
   const ev = { golpes: [], tiros: [], empiezan: [], t: 0 };
+  // EL 100 (doc/ARMAS_100.md): el tiro cargado cuesta MANÁ —30 la sombra, 10 la
+  // lanza (`reg.attack.mpdrain`, giattack.cpp:496 y :897-908)— y `pasoDelBrazo`
+  // le pasa a `tic` el del personaje y le resta lo que devuelve en `gastaMana`.
+  // Esta partida de mentira hace lo mismo, con maná de sobra: lo que se prueba
+  // aquí es el tiro, y el maná se prueba en test/armas100.test.mjs.
+  let mana = 1000;
   const paso = (pulsado) => {
-    const e = brazo.tic(DT, { pulsado, destreza });
+    const e = brazo.tic(DT, { pulsado, destreza, mana });
+    if (e.gastaMana > 0) mana -= e.gastaMana;
     ev.t += DT;
     if (e.empieza) ev.empiezan.push({ t: ev.t, ataque: e.empieza });
     if (e.golpe) ev.golpes.push({ t: ev.t, ataque: e.golpe });

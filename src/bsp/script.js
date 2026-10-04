@@ -1981,7 +1981,16 @@ function recogerObjeto(raiz, rutaScript, vistos, profundidad, acc) {
       // 178 armas sin habilidad, y una espada sin habilidad no da error: da un
       // arma que no entrena nada.
       const reg = l.match(/^local\s+reg\.attack\.([a-z0-9_.&]+)\s+(.*)$/i);
-      if (reg) { acc.ataque.set(reg[1].toLowerCase(), reg[2].trim()); continue; }
+      if (reg) {
+        acc.ataque.set(reg[1].toLowerCase(), reg[2].trim());
+        // EL 100: el `local` de un campo con cuentas va también a la lista, en
+        // su sitio: un `local` después de un `add` vuelve a empezar.
+        if (CAMPOS_CON_CUENTAS.has(reg[1].toLowerCase())) apuntarCuenta(acc, { op: "local", campo: reg[1].toLowerCase(), valor: reg[2].trim(), cond: null });
+        continue;
+      }
+      // EL 100: las CUENTAS sobre un `reg.attack.*` (doc/ARMAS_100.md). Ver
+      // `cuentaDeAtaque`: aplica las de `reqskill` y `mpdrain` y apunta el resto.
+      if (cuentaDeAtaque(l, acc)) continue;
 
       // Y el mismo canal para el PROYECTIL, que es otro juego de campos y otra
       // función del motor (`RegisterProjectile`, giprojectile.cpp:24). Un arco no
@@ -2236,6 +2245,128 @@ export function condicionDeAtaque(constantes, cond, variables = null) {
   return no ? !si : si;
 }
 
+// ── EL 100: LAS CUENTAS SOBRE UN `reg.attack.*` ──────────────────────────────
+//
+// Este lector no ejecuta guiones, y hasta el 99 tampoco hacía las CUENTAS que
+// las bases hacen con los campos del ataque antes de registrarlo:
+//
+//     local reg.attack.reqskill BASE_LEVEL_REQ
+//     add reg.attack.reqskill 4                          polearms_base.script:318-319
+//
+//     local reg.attack.reqskill 2
+//     if ( BASE_LEVEL_REQ > reg.attack.reqskill ) add reg.attack.reqskill BASE_LEVEL_REQ
+//                                                swords_base_twohanded.script:142-144
+//
+// `add` lee el valor de la variable con `atof`, le suma `atof` del segundo y lo
+// vuelve a escribir con dos decimales (`ScriptCmd_MathSet`, scriptcmds.cpp:
+// 4200-4229); `RegisterAttack` lo lee luego con `atoi` (giattack.cpp:509). Sin
+// las cuentas la lanza de Torkalath pedía 35 en vez de 39 y la Unholy Blade 2
+// en vez de 32 para su golpe cargado (doc/ARMAS_99.md, pendientes).
+//
+// SÓLO se aplican las de `reqskill` y `mpdrain`. Las demás —`multiply
+// reg.attack.dmg BWEAPON_DBL_CHARGE_ADJ`, el `range × 1,5` de los mandobles a
+// dos manos, el `add reg.attack.delay.strike 0.5` de la Blood Drinker...— se
+// APUNTAN en `cuentasSinAplicar` y no se aplican: el daño cargado ya lo
+// multiplica `Brazo.dano` con `multiplicadorDeCarga`, y aplicarlo aquí también
+// lo doblaría. Es un hueco contado, no decidido (doc/ARMAS_100.md §2).
+//
+// Y las cuentas se GUARDAN como una lista en el ataque y se hacen al montar la
+// ficha, no al leer la línea: en el motor las constantes existen todas antes
+// de que corra un solo evento, y aquí se van leyendo por orden de fichero.
+const CAMPOS_CON_CUENTAS = new Set(["reqskill", "mpdrain"]);
+const OPS_DE_CUENTA = { add: "+", inc: "+", subtract: "-", dec: "-", multiply: "*", divide: "/" };
+
+/** Añade una cuenta al ataque en curso, SIN tocar la lista de los ya registrados. */
+function apuntarCuenta(acc, op) {
+  acc.ataque.set("#cuentas", [...(acc.ataque.get("#cuentas") ?? []), op]);
+}
+
+/**
+ * ¿Es esta línea una cuenta o un `local` condicionado sobre un `reg.attack.*`?
+ * Si lo es, se apunta y devuelve `true`. Las dos formas que hay en los 833
+ * guiones de `items/`: `<op> reg.attack.X Y` (con o sin `if ( … )` delante en la
+ * misma línea) y `if ( … ) local reg.attack.X Y` (blunt_base_onehanded.script:74).
+ */
+function cuentaDeAtaque(l, acc) {
+  const m = l.match(/^(?:if\s*\(\s*(.+?)\s*\)\s*)?(add|inc|subtract|dec|multiply|divide|local)\s+reg\.attack\.([a-z0-9_.&]+)\s+(\S+)/i);
+  if (!m) return false;
+  const op = m[2].toLowerCase();
+  // Un `local` sin `if` delante lo recoge el lector de arriba; aquí sólo llega
+  // el condicionado.
+  if (op === "local" && !m[1]) return false;
+  // El `local` condicionado NO se escribe en el ataque aquí: sólo cuenta si su
+  // condición sale cierta, y eso lo decide `hacerCuentas`.
+  apuntarCuenta(acc, { op, campo: m[3].toLowerCase(), valor: m[4], cond: m[1] ?? null });
+  return true;
+}
+
+/**
+ * La condición de una cuenta: `A <cmp> B` con las comparaciones de
+ * `ScriptCmd_If` (scriptcmds.cpp:3984-4017): `equals`/`isnot` comparan el
+ * TEXTO (`FStrEq`) y las demás el número (`GetNumeric`). Un `reg.attack.*` vale
+ * lo que lleve la cuenta; un nombre, su constante o él mismo (script.cpp:350-354);
+ * y un literal entre comillas SIMPLES, su texto sin ellas y sin resolver: al
+ * ejecutar, cada parámetro pasa por `GetVar`, que las quita (script.cpp:4406-
+ * 4409; la corrección de `caidaDe` de este mismo día dice por qué la lectura
+ * del 82 era de otra etapa). Así `if ( SPECIAL_02_MP isnot 'SPECIAL_02_MP' )`
+ * es «la constante existe». Devuelve `null` si no es de esa forma.
+ */
+export function condicionDeCuenta(cond, valor) {
+  const m = String(cond ?? "").trim().match(/^(\S+)\s+(equals|isnot|!equals|<|>|<=|>=|==|!=)\s+(\S+)$/i);
+  if (!m) return null;
+  const a = valor(m[1]), b = valor(m[3]);
+  switch (m[2].toLowerCase()) {
+    case "equals": return a === b;
+    case "isnot": case "!equals": return a !== b;
+    case "<": return atof(a) < atof(b);
+    case ">": return atof(a) > atof(b);
+    case "<=": return atof(a) <= atof(b);
+    case ">=": return atof(a) >= atof(b);
+    case "==": return atof(a) === atof(b);
+    case "!=": return atof(a) !== atof(b);
+    default: return null;
+  }
+}
+
+/**
+ * Hace las cuentas de un ataque registrado. Devuelve el valor final de cada
+ * campo con cuentas (en TEXTO, como lo vería `GetFirstScriptVar`), las que se
+ * apuntan sin aplicar y las que no se han sabido decidir.
+ */
+export function hacerCuentas(ataque, constantes) {
+  const valores = new Map();
+  const sinAplicar = [];
+  const dudosas = [];
+  const valor = (t) => {
+    const s = String(t);
+    if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1);
+    const r = s.match(/^reg\.attack\.([a-z0-9_.&]+)$/i);
+    if (r) return valores.get(r[1].toLowerCase()) ?? String(t);
+    return String(valorDe(constantes, t));
+  };
+  for (const c of ataque.get("#cuentas") ?? []) {
+    if (!CAMPOS_CON_CUENTAS.has(c.campo)) { sinAplicar.push(`${c.op} ${c.campo} ${c.valor}`); continue; }
+    if (c.cond) {
+      const si = condicionDeCuenta(c.cond, valor);
+      if (si === null) { dudosas.push(`if ( ${c.cond} ) ${c.op} ${c.campo}`); continue; }
+      if (!si) continue;
+    }
+    if (c.op === "local") { valores.set(c.campo, valor(c.valor)); continue; }
+    const actual = atof(valores.get(c.campo) ?? `reg.attack.${c.campo}`);
+    const cuanto = atof(valor(c.valor));
+    let n = actual;
+    switch (OPS_DE_CUENTA[c.op]) {
+      case "+": n = actual + cuanto; break;
+      case "-": n = actual - cuanto; break;
+      case "*": n = actual * cuanto; break;
+      case "/": n = cuanto ? actual / cuanto : actual; break;
+    }
+    // `UTIL_VarArgs("%.2f", flValue)` (scriptcmds.cpp:4222).
+    valores.set(c.campo, n.toFixed(2));
+  }
+  return { valores, sinAplicar, dudosas };
+}
+
 /** Resuelve una constante que a su vez puede ser otra constante. */
 function valorDe(constantes, nombre, profundidad = 0) {
   if (nombre === undefined || profundidad > 8) return nombre;
@@ -2314,6 +2445,56 @@ function numeroDe(v) {
 }
 
 /**
+ * LO QUE SUENA AL SALIR UN PROYECTIL — el grito del Phoenix Bow.
+ *
+ * `game_tossprojectile` lo llama el motor dentro de `TossProjectile`, al nacer
+ * la flecha (giprojectile.cpp:114-116), y hay guiones que tocan algo ahí:
+ *
+ *     { [server] game_tossprojectile
+ *         //Thothie: Sound on launch - follows arrow
+ *         svplaysound 0 5 SOUND_PHOENIX          proj_arrow_phx.script:54-57
+ *
+ * con `const SOUND_PHOENIX monsters/birds/hawkcaw.wav` (:33). Es un sonido DEL
+ * PROYECTIL y no del arco: lo emite la flecha (`EMIT_SOUND2(m.pScriptedEnt->edict(), ...)`,
+ * scriptcmds.cpp:4759) y por eso «la sigue».
+ *
+ * La forma es `playsound <canal> <volumen> <sonido>` y el volumen va de 0 a 10:
+ * `Volume = atof(Params[1]) / 10.0f`, recortado a 1 (scriptcmds.cpp:4706-4712).
+ * Sólo se lee esa forma, la NUEVA; la vieja (`playsound <canal> <sonido>`,
+ * :4691-4692) usa el volumen de la entidad y aquí se deja sin leer.
+ *
+ * **Y se para en el primer `if`.** Este lector recibe las líneas APLANADAS —sin
+ * saber qué cuerpo es de qué condición— así que de un `if` en adelante no puede
+ * decir si la línea corre. Mejor corto que inventado: devuelve lo leído hasta
+ * ahí y `sinLeer` a `true`, para que se cuente.
+ *
+ * `resolver` es el de las constantes del guion (`c` en la ficha).
+ */
+export function sonidosAlSalir(lineas, resolver) {
+  const sonidos = [];
+  let sinLeer = false;
+  for (const l of lineas ?? []) {
+    const t = String(l).trim();
+    if (/^(if|else)\b/i.test(t)) { sinLeer = true; break; }
+    const m = t.match(/^(sv)?playsound\s+(\S+)\s+(\S+)\s+(\S+)/i);
+    if (!m) continue;
+    // `isdigit(Params[1][0])`: si el segundo no empieza por una cifra, es la
+    // forma vieja (scriptcmds.cpp:4706).
+    if (!/^\d/.test(m[3])) { sinLeer = true; continue; }
+    const archivo = resolver(m[4]) ?? (/[\/.]/.test(m[4]) ? m[4] : null);
+    if (!archivo || archivo === "none") continue;
+    sonidos.push({
+      canal: Number.parseInt(m[2], 10) || 0,
+      volumen: Math.max(0, Math.min(1, Number.parseFloat(m[3]) / 10)),
+      archivo,
+      /** `svplaysound`: lo emite el servidor y lo oyen todos (scriptcmds.cpp:150). */
+      deServidor: Boolean(m[1]),
+    });
+  }
+  return { sonidos, sinLeer };
+}
+
+/**
  * `GET_CHARGE_FROM_TIME(a) = a + V_max(a - 1, 0) * .5` (genericitem.h:99).
  *
  * Está copiada aquí —y no importada de `src/play/golpe.js`— porque este lector
@@ -2376,15 +2557,33 @@ export function caidaDe(lineas, resolver) {
   // objeto y las constantes son del script.
   const val = (t) => {
     if (t === undefined || t === null) return null;
-    // ── LAS COMILLAS SIMPLES NO SON COMILLAS ────────────────────────────
+    // ── LAS COMILLAS SIMPLES: UN LITERAL, Y SE QUITAN ───────────────────
     //
-    // Sólo las DOBLES agrupan y desaparecen (`GetParams`, script.cpp:5049-5064;
-    // y el lector de parámetros de un comando, :5639-5650). La simple es un
-    // carácter más del nombre, así que `'ANIM_PREFIX'` **no es** la constante
-    // `ANIM_PREFIX`: es una cadena que `GetConst` no encuentra y devuelve tal
-    // cual, comillas incluidas (script.cpp:349-354). Quitarlas aquí daría por
-    // ciertas unas comparaciones que en el juego son falsas siempre.
-    const limpio = String(t).trim().replace(/^"(.*)"$/s, "$1");
+    // CORRECCIÓN (2026-10-04, la primera misión nuestra). Esto decía que la
+    // comilla simple «es un carácter más del nombre» y que
+    // `if ( MODEL_WORLD equals 'misc/p_misc.mdl' )` es falso SIEMPRE, citando
+    // `GetConst` (script.cpp:349-354). La cita es de verdad, pero es de OTRA
+    // ETAPA: `GetConst` corre al cargar el guion, y ahí el literal pasa tal
+    // cual. Al EJECUTAR, cada parámetro de cada comando pasa por `GetVar`
+    // (`Params.add(GetVar(Event.GetLocal(...)))`, script.cpp:5745), y lo
+    // primero que hace `GetVar` es esto:
+    //
+    //     if (FullName[0] == '\'' && FullName[len - 1] == '\'')   //String literal.
+    //         Return = FullName.substr(1).thru_char("'");          //Don't try to resolve it
+    //                                                    script.cpp:4405-4409
+    //
+    // O sea que `'misc/p_misc.mdl'` llega a `FStrEq` SIN comillas y sin
+    // resolver, la condición es cierta, y un pellejo tirado se ve como un
+    // pellejo. Con la regla de antes caía con el submodelo 0, la manzana: lo vio
+    // el usuario jugando, que conoce el original. Y la gemela viva de esta
+    // función, `resolver` en `src/play/guion.js`, ya lo hacía bien desde el
+    // principio: las dos se contradecían y nadie las había puesto juntas.
+    //
+    // Es el modismo de 73 guiones (`if ( PARAM1 equals 'PARAM1' )`), que con las
+    // comillas dentro de la comparación no podría ser cierto nunca.
+    const crudo = String(t).trim();
+    if (crudo.length >= 2 && crudo.startsWith("'") && crudo.endsWith("'")) return crudo.slice(1, -1);
+    const limpio = crudo.replace(/^"(.*)"$/s, "$1");
     // EL 67 otra vez: este puerto es el lado SERVIDOR, y la mitad de los
     // `game_fall` del mod empiezan por `if game.serverside`. Sin esto el
     // lector se quedaría fuera de todos ellos — y además con la respuesta
@@ -2737,6 +2936,26 @@ export function leerFichaObjeto(raiz, ruta) {
       // Cuando SÍ le da a alguien el sonido no es del arma: lo pone el motor
       // por el tipo de daño. Aquí queda dicho lo que el script declara.
       contraCarne: c("SOUND_HITBODY"),
+      // LO QUE SUENA AL SOLTAR UN ARCO. No es `SOUND_SWIPE`, que es del mandoble:
+      // es `SOUND_SHOOT`, y lo toca `ranged_toss` —
+      // `playsound game.sound.weapon game.sound.maxvol SOUND_SHOOT`
+      // (bows_base.script:56-58, bows_crossbow_light.script:107)—. Sin leerlo, los
+      // quince arcos salían con `blandir: null` y este puerto ponía a mano la
+      // cuerda del arco a todos, ballestas incluidas (`weapons/bow/crossbow.wav`).
+      // Las comillas agrupan y no se guardan (`GetParams`, script.cpp:5049-5064):
+      // cuatro guiones escriben `const SOUND_SHOOT "debris/zap1.wav"`.
+      disparo: texto(c("SOUND_SHOOT")),
+      // Y lo que toca el PROYECTIL al nacer (`game_tossprojectile`): ver
+      // `sonidosAlSalir`. Se recorren todos los que sobreviven al `[override]`,
+      // que el motor ejecuta todos los que se llamen igual.
+      ...(() => {
+        const r = vivos.filter((e) => e.nombre === "game_tossprojectile")
+          .map((e) => sonidosAlSalir(e.lineas, (t) => (acc.constantes.has(t) ? c(t) : null)));
+        return {
+          alSalir: r.flatMap((x) => x.sonidos),
+          alSalirSinLeer: r.some((x) => x.sinLeer),
+        };
+      })(),
     },
     // Lo que multiplica el ataque cargado: `BWEAPON_DBL_CHARGE_ADJ`, que vale 2
     // en `base_melee`.
@@ -2752,8 +2971,14 @@ export function leerFichaObjeto(raiz, ruta) {
     // NÚMERO. `ATTACK_ANIMS` dice cuántas hay y la base elige una al azar: con
     // una sola, la espada golpea siempre igual y se nota.
     animaciones: {
-      sacar: numeroDe(c("ANIM_LIFT1")),
-      parado: numeroDe(c("ANIM_IDLE1")),
+      // El segundo juego de nombres, el de las astas (ver `enMano`, arriba):
+      // `VANIM_DRAW 3` y `VANIM_IDLE1 0` (polearms_base.script:32 y :35), que
+      // son los que ponen su `pole_draw` (:233) y su `game_switchhands` (:193).
+      // Sin él `parado` salía `null`, quien empuña ponía «la 1» por omisión y
+      // el bastón descansaba en `idle2`, que el juego sólo enseña una vez de
+      // cada seis vueltas de su bucle de reposo (:666-671).
+      sacar: numeroDe(c("ANIM_LIFT1") ?? c("VANIM_DRAW")),
+      parado: numeroDe(c("ANIM_IDLE1") ?? c("VANIM_IDLE1")),
       guardar: numeroDe(c("ANIM_SHEATH")),
       ataque: [1, 2, 3, 4, 5]
         .map((n) => numeroDe(c(`ANIM_ATTACK${n}`)))
@@ -2779,7 +3004,12 @@ export function leerFichaObjeto(raiz, ruta) {
     // Los ATAQUES, tal y como la base se los pasa al motor. Cada valor puede
     // ser una constante, así que se resuelve.
     ataques: acc.ataques.map((a) => {
-      const g = (n) => resueltoO(acc.constantes, a.get(n));
+      // EL 100: los campos con cuentas salen de `hacerCuentas`; los demás, del
+      // `local` tal cual.
+      const cuentas = hacerCuentas(a, acc.constantes);
+      const g = (n) => cuentas.valores.has(n)
+        ? resueltoO(acc.constantes, cuentas.valores.get(n))
+        : resueltoO(acc.constantes, a.get(n));
       return {
         tipo: (g("type") ?? "").toLowerCase() || null,
         habilidad: (g("stat") ?? "").toLowerCase() || null,
@@ -2809,6 +3039,15 @@ export function leerFichaObjeto(raiz, ruta) {
         // del cargado, que son dos ataques registrados y no un modificador.
         teclas: String(g("keys") ?? "").toLowerCase().split(/[;\s]+/).filter(Boolean),
         prioridad: numeroDe(g("priority")) ?? 0,
+        /**
+         * `reg.attack.callback` (giattack.cpp:508): el PREFIJO de los eventos
+         * del guion que el motor llama por este ataque —`<retorno>_start` al
+         * empezar (:345), `_strike` al caer (:879), `_end` al cancelarse (:648)—.
+         * Es por donde un ataque tiene animación: la secuencia del modelo de
+         * vista la pone el `playviewanim` de su `_start`, no un campo del
+         * ataque. Ver tools/animvista.mjs, que es quien lo corre.
+         */
+        retorno: g("callback") ?? null,
         // `chargeamt` en tanto por uno, ya pasado por `%`, y **pasado también
         // por la misma curva que los segundos aguantados**, que es lo que el
         // motor hace al REGISTRAR el ataque y no al compararlo:
@@ -2823,7 +3062,22 @@ export function leerFichaObjeto(raiz, ruta) {
         // línea el segundo nivel del cuchillo y del martillo pedía 2 de carga,
         // o sea 1,67 s, y salía antes de tiempo.
         carga: cargaDeTiempo(numeroDe(g("chargeamt"))),
-        pideHabilidad: numeroDe(g("reqskill")) ?? 0,
+        // `atoi(GetFirstScriptVar("reg.attack.reqskill"))` (giattack.cpp:509):
+        // con las cuentas del 100 hechas, «39.00» es 39.
+        pideHabilidad: g("reqskill") === null ? 0 : atoi(g("reqskill")),
+        /**
+         * EL 100: `reg.attack.mpdrain`, el MANÁ que cuesta el ataque:
+         *
+         *     attData.flMPDrain = atof(GetFirstScriptVar("reg.attack.mpdrain"));   giattack.cpp:496
+         *
+         * Sin poner vale su nombre y `atof` de un nombre es 0: gratis. Se cobra en
+         * `UseAmmo`, al EMPEZAR el ataque (giattack.cpp:392, :897-908, :1051-1053).
+         * Ver `Brazo` en src/play/golpe.js.
+         */
+        mana: g("mpdrain") === null ? 0 : atof(g("mpdrain")),
+        /** EL 100: las cuentas de su evento que este lector apunta y NO hace (ver `hacerCuentas`). */
+        cuentasSinAplicar: cuentas.sinAplicar,
+        cuentasDudosas: cuentas.dudosas,
         ruido: numeroDe(g("noise")),
         desde: vectorDe(g("ofs.startpos")),
         apunta: vectorDe(g("ofs.aimang")),

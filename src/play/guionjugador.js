@@ -249,6 +249,8 @@ export class GuionDelJugador {
     // EL 97: `m_nopush` de `CMSMonster`, nace en falso. Lo escribe el comando
     // `nopush` del propio guion (src/play/guion.js).
     this.nopush = false;
+    /** EL 101: los `setmodelbody` que su guion le ha hecho, en orden (`pev->body`). */
+    this.cuerpos = [];
 
     const dueño = this;
     this.guion = new Guion({
@@ -758,6 +760,20 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
     /** EL 97: `nopush <0|1>` (npcscript.cpp:318-330) -> `m_nopush`. */
     inempujable(si) { yo.nopush = Boolean(si); },
 
+    /**
+     * EL 101: `setmodelbody <grupo> <valor>` SOBRE EL JUGADOR — el lado del
+     * servidor, `SetBodygroup(pev, grupo, valor)` (scriptcmds.cpp:6054-6076).
+     * Es su `pev->body`: lo escribe `ext_setbodytype` cuando una armadura
+     * esconde partes del cuerpo (player/externals.script:1273-1317; la llama
+     * `hide_body_parts`, items/armor_base.script:54-58), y el motor lo guarda en
+     * la misión «BODY» para la pantalla de elección (scriptcmds.cpp:6078-6110).
+     * Aquí se guarda la lista en orden; la pliega `cuerpoDe`
+     * (src/play/equipovisto.js) contra las partes de `human/reference.mdl`.
+     */
+    ponerCuerpo(grupo, valor) { yo.cuerpos.push([grupo, valor]); },
+    /** `gender` no está entre las de todos (`PROPIEDADES`, guion.js): es de jugador. */
+    propiedadesPropias: new Set(["gender"]),
+
     ponerRecibeDano(tipo, mult, extra = null) {
       yo.resistencias.poner(tipo, mult);
       const m = Math.fround(mult);
@@ -795,6 +811,11 @@ function entornoDelJugador({ dueño, consejo, suceso, dar, maximos, usarDisparad
         // reposo era el bueno, y por eso el escudo no inmunizaba sin que nada
         // lo dijera.
         case "nopush": return yo.nopush ? "1" : "0";
+        // EL 101: `gender` (scriptcmds.cpp:1523) y `race` (:1390). De `gender`
+        // sale `PLR_GENDER` (player_main.script:1005, externals.script:1455),
+        // que es con lo que `ext_setbodytype` elige el dígito de mujer.
+        case "gender": return p.genero === "female" ? "female" : "male";
+        case "race": return "human";
         default: break;
       }
       // `skill.…` (el 66). El guion del jugador también se lee a sí mismo: el

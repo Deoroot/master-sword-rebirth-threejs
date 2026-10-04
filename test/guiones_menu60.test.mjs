@@ -174,7 +174,10 @@ describe("y el extractor usa esta regla, no la de antes", () => {
     const t = readFileSync("tools/guiones.mjs", "utf8");
     assert.ok(/export function tieneMenu/.test(t),
       "`tools/guiones.mjs` ya no exporta `tieneMenu`");
-    assert.ok(/cargarGuion\(ruta\)\.eventos\.some/.test(t),
+    // Desde la primera misión nuestra carga con la RAÍZ que se le dijo: sin ella
+    // caía siempre a los guiones del juego y un mapa nuestro salía con «0
+    // guiones guardados de 2».
+    assert.ok(/cargarGuion\(ruta, new Set\(\), RAIZ\)\.eventos\.some/.test(t),
       "`tieneMenu` ya no pregunta por los eventos cargados: mira otra cosa");
     assert.ok(/for \(const r of rutas\) \{\s*\n\s*if \(tieneMenu\(r\)\) conMenu\.push\(r\);/.test(t),
       "el censo ha vuelto a decidir sin resolver los `#include`");

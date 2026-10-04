@@ -158,6 +158,12 @@ export class InteraccionesNpc {
      * ataca, así que en la práctica no debería subir).
      */
     this.manadaEnchufada = null;
+    /**
+     * EL MUNDO DE LO CREADO CON `createnpc` (`src/play/creados.js`), o `null`.
+     * Se pone DESPUÉS de construir esto —necesita este registro de asas—, y sin
+     * él ningún guion de NPC puede crear: el comando se apunta, como siempre.
+     */
+    this.creados = null;
     this.costura = { sinGuion: 0, noDeCombate: 0, nacidos: 0, renacidos: 0, sinJugador: 0 };
     /** EL 94: asa del jugador -> su id en la manada. Ver `fijarObjetivoDe`. */
     this._idPorAsa = new Map();
@@ -546,6 +552,11 @@ export class InteraccionesNpc {
     // guion de su vida anterior se retira (sus relojes pendientes ya no
     // corren) y se le hace uno nuevo, con su `game_spawn` y su botín.
     const combate = esDeCombate(instancia);
+    // `createnpc`: lo que un guion ha creado y NO es de combate —una
+    // invocación— se mueve y pega desde su propio guion. Corre entero (cierre
+    // vacío: no hay IA portada que duplicar), con cuerpo y con sus
+    // `repeatdelay` armados, y con lo que le añade `MundoDeCreados.ampliar`.
+    const creado = !combate && instancia.creado ? instancia.creado : null;
     if (this.guionesVivos.has(clave)) {
       const viejo = this.guionesVivos.get(clave);
       if (!combate || viejo === null || viejo.nacimiento === (instancia.nacimientos ?? 0)) return viejo;
@@ -593,6 +604,9 @@ export class InteraccionesNpc {
       sitioDelJugador: () => (this.dondeEstaElJugador?.(caja.guion?.jugador?.ref ?? null) ?? []).join(" ") || null,
       npc: {
         nombre: instancia.ficha?.nombre ?? "Someone",
+        // El prefijo de `name a|Goblin`, que la manada separa al cargar la
+        // ficha (`partirNombreDeFicha`). Lo lee `name.full`.
+        prefijo: instancia.ficha?.prefijoDeNombre ?? "",
         script: instancia.ficha?.script ?? "",
         // EL 92: el bicho mismo, para que el veneno que pone sepa quién es su
         // atacante (`GuionDeNpc` -> `aplicarEfecto` -> `main.js`, `herir`).
@@ -657,11 +671,15 @@ export class InteraccionesNpc {
       // `applyeffect` sobre el jugador: la cura del sumo sacerdote de Edana.
       aplicarEfecto: this.aplicarEfecto ? (ruta, params, o) => this.aplicarEfecto(ruta, params, o) : null,
       // EL 91: el cierre y de qué vida es. Ver `esDeCombate`.
-      cierre: combate ? CIERRE_DE_BICHO : null,
+      cierre: combate ? CIERRE_DE_BICHO : creado ? [] : null,
+      // Y a todo NPC, si hay mundo de lo creado (`this.creados`, que pone quien
+      // lo monta: `src/main.js`), el gancho de `createnpc`. Sin él se apunta.
+      ampliar: creado ? (entorno, g) => creado.mundo.ampliar(entorno, g, instancia)
+        : this.creados ? (entorno, g) => this.creados.darCrear(entorno, g, instancia) : null,
       nacimiento: instancia.nacimientos ?? 0,
       // EL 93: el cuerpo del bicho, para su `setvelocity`, `setfollow`… Sólo
       // los de combate y sólo con la manada enchufada (ver `Manada.cuerpoDe`).
-      cuerpo: combate ? (this.manadaEnchufada?.cuerpoDe?.(instancia) ?? null) : null,
+      cuerpo: (combate || creado) ? (this.manadaEnchufada?.cuerpoDe?.(instancia) ?? null) : null,
     });
     if (combate) this.costura.nacidos++;
     /**
@@ -785,7 +803,14 @@ export class InteraccionesNpc {
     // la sonda del 95, con Beto leyendo en su consola el «Ana says» de Ana a
     // 527 unidades porque Beto había sido el último en pulsar la F. (Y
     // `yaDicho`, que llega desde el chat, no lo lee nadie: doc/RED_95.md §8.)
-    this.suceso?.("normal", linea.replace(/\n$/, ""), { sesion });
+    //
+    // EL 100: y ahora `yaDicho` SÍ se lee, porque dejó de dar igual. La frase
+    // del jugador es un `Speak` y va a la consola del CHAT (`canal`, ver
+    // `panelDeRecado` en src/play/chat.js), que es justo donde el cajetín ya la
+    // ha puesto cuando viene de él: sin la guarda saldría dos veces en la misma
+    // caja. `Speak` la escribe UNA vez por oyente (msmonsterserver.cpp:1700-1706).
+    // La opción `say` de un menú no pasa por el cajetín y la dice aquí.
+    if (!yaDicho) this.suceso?.("normal", linea.replace(/\n$/, ""), { sesion, canal: HABLA.LOCAL });
 
     const pies = this.dondeEstaElJugador?.() ?? null;
     const todos = this.losNpc?.() ?? [];

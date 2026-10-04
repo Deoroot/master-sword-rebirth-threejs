@@ -96,8 +96,16 @@ const consolaChat = () => pag.evaluate(() =>
   (window.probe.chat.estado()?.lineas ?? []).map((l) => (typeof l === "string" ? l : l.texto ?? "")));
 
 /** Las líneas de la consola de sucesos, de arriba abajo. */
-const consola = () => pag.evaluate(() =>
-  (window.probe.hud.estado()?.consola?.lineas ?? []).map((l) => (typeof l === "string" ? l : l.texto ?? "")));
+const consola = async () => {
+  // EL 100: lo que DICE un NPC ya no sale en la consola de sucesos sino en la
+  // del chat (`PrintSayText`, vgui_hud.cpp:310-313), así que leer sólo la
+  // primera es medir un panel vacío con el juego bien. `visto()` trae lo que se
+  // ve en LAS DOS, en orden de llegada, y el número de llegada de cada línea.
+  const v = await pag.evaluate(() => window.probe.misiones.visto());
+  const out = v.map((l) => l.texto ?? "");
+  out.n = v.map((l) => l.n ?? 0);
+  return out;
+};
 
 /**
  * Lo nuevo desde una foto anterior de la consola.
@@ -115,6 +123,13 @@ const consola = () => pag.evaluate(() =>
  * la cola de `antes`. Lo que quede después es lo que ha pasado.
  */
 function nuevasDesde(antes, ahora) {
+  // EL 100: con dos consolas mezcladas el solape ya no vale —cada una suelta
+  // sus líneas viejas a su ritmo, y una que se va de EN MEDIO lo rompe—, y
+  // tampoco hace falta: cada línea trae su número de llegada.
+  if (antes.n && ahora.n) {
+    const tope = Math.max(0, ...antes.n);
+    return ahora.filter((_, k) => ahora.n[k] > tope);
+  }
   for (let k = Math.min(antes.length, ahora.length); k > 0; k--) {
     const cabeza = ahora.slice(0, k).join("\u0000");
     if (antes.slice(antes.length - k).join("\u0000") === cabeza) return ahora.slice(k);

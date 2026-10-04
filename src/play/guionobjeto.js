@@ -78,7 +78,7 @@
 // del jugador —1 de vida cada doce segundos— es otro orden de magnitud. La
 // memoria del usuario era exacta.
 
-import { Guion, entornoVacio, numDe, enteroDe } from "./guion.js";
+import { Guion, entornoVacio, numDe, enteroDe, textoDeVector } from "./guion.js";
 import { atributosDe, GETSTAT } from "../juego/stats.js";
 import { resolverGuion } from "./cargador.js";
 import { RelojDeGuiones } from "./npcguion.js";
@@ -158,6 +158,11 @@ export class GuionDeObjeto {
   constructor({
     guiones = null, id = "", jugador = null, ahora = () => 0, suceso = null,
     maximos = null,
+    // `createnpc`: lo que un objeto le pide al MUNDO, que este archivo no
+    // tiene. `{ crearNpc(script, origenMotor, params, {creador}), asaDeObjeto(objeto),
+    // asaDelDueño(), origenDelDueño(), objetivoDelDueño(), llamarA(asa, evento, params) }`.
+    // Lo pone `src/main.js` con el `MundoDeCreados`. Sin él todo eso se apunta.
+    mundo = null,
   } = {}) {
     this.id = String(id);
     this.jugador = jugador;
@@ -181,6 +186,27 @@ export class GuionDeObjeto {
     this.contenedor = null;
     /** `m_CurrentDamage`: el golpe que se está repartiendo, o `null`. */
     this.golpeEnCurso = null;
+    /**
+     * EL 101: `m_ClEntity[ITEMENT_NORMAL]` — el modelo con que el objeto se ve
+     * sobre quien lo lleva, y los `SetBody(grupo, valor)` pedidos en orden.
+     * Los escribe su guion (`setmodel`, `setmodelbody`); `null` es sin modelo.
+     */
+    this.modelo = null;
+    this.cuerpos = [];
+    /**
+     * EL 101: `m_Hand`, lo que contesta `game.item.hand_index`
+     * (scriptcmds.cpp:1327). **La izquierda es el 0** (`hand_e`,
+     * genericitem.h:15-18). El 0 de salida es lo que valía antes de resolverlo
+     * —el nombre sin resolver suma 0—, no una afirmación sobre la mano: quien
+     * quiere saber cómo se ve en una mano lo pone (src/play/equipovisto.js).
+     */
+    this.mano = 0;
+    /**
+     * `m_ViewModel` (genericitem.cpp:1934-1948): lo que el guion ha dejado
+     * puesto con `setviewmodel`. `undefined` es «no lo ha tocado» —se ve el de
+     * la ficha, como siempre—; `null` es `setviewmodel none`, la mano vacía.
+     */
+    this.vista = undefined;
 
     const r = guiones?.resolver(this.id) ?? null;
     this.hay = Boolean(r && r.eventos.length);
@@ -190,7 +216,7 @@ export class GuionDeObjeto {
       preload: r?.preload ?? [],
       nombre: r ? `objeto ${this.id}` : `objeto ${this.id} (sin guion)`,
       ahora: () => this._ahora(),
-      entorno: { ...entornoVacio(), ...entornoDelObjeto({ dueño, jugador, suceso, maximos }) },
+      entorno: { ...entornoVacio(), ...entornoDelObjeto({ dueño, jugador, suceso, maximos, mundo }) },
     });
     // EL MISMO ORDEN QUE EL JUGADOR, y por el mismo motivo: `repeatdelay` lo
     // resuelve el cargador y el bloque sin nombre es un evento «programado para
@@ -234,7 +260,7 @@ export class GuionDeObjeto {
  * El entorno de un objeto. Lo que tiene y el del jugador no es **un dueño**:
  * `ent_owner` es a quién se le está poniendo, y por ahí va casi todo.
  */
-function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
+function entornoDelObjeto({ dueño, jugador, suceso, maximos, mundo = null }) {
   const yo = dueño;
   /** Las referencias que un objeto usa para hablar de su dueño. */
   const esElDueño = (ref) => {
@@ -258,6 +284,9 @@ function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
      * proyectiles y a otros jugadores, y nada de eso existe aquí.
      */
     llamarExterno(ref, nombre, params = []) {
+      // A lo que este objeto ha creado (`callexternal SWORD_ID return_to_owner`,
+      // swords_blood_drinker.script:199): por su asa, si el mundo la conoce.
+      if (!esElDueño(ref) && mundo?.llamarA?.(String(ref), String(nombre), params.map(String))) return;
       if (!esElDueño(ref)) { yo.noSoportados.push({ tipo: "callexternal", nombre: `${ref} ${nombre}` }); return; }
       const dicho = Boolean(jugador?.llamar(nombre, params));
       yo.pedidos.push({ evento: String(nombre), params: params.map(String), contestado: dicho });
@@ -286,8 +315,27 @@ function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
         if (!esElDueño(ref) && r !== "ent_me") yo.noSoportados.push({ tipo: "scriptvar de otra entidad", nombre: String(resto[0] ?? "") });
         return String(resto[0] ?? "");
       }
+      // `$get(ent_me,id)` — `EntToString` del propio objeto (scriptcmds.cpp:936).
+      // Es lo que un arma le pasa a su invocación para que le llame de vuelta
+      // (PARAM5 de la Blood Drinker, swords_blood_drinker.script:171). Sin
+      // mundo no hay registro de asas y sigue vacío, como antes.
+      if (nombre === "id" && r === "ent_me") return mundo?.asaDeObjeto?.(yo) ?? "";
       if (!esElDueño(ref)) return "";
+      // Del dueño, lo que sólo sabe el mundo: dónde está —`pev->origin`, el
+      // centro de su caja, «(x,y,z)» en unidades del motor (scriptcmds.cpp:1144)—
+      // y a quién mira (`ENT_TARGET`, :1178-1182; «0» si a nadie).
+      if (nombre === "origin" && mundo?.origenDelDueño) {
+        const o = mundo.origenDelDueño();
+        return o ? textoDeVector(o) : "0";
+      }
+      if (nombre === "target") return mundo?.objetivoDelDueño ? String(mundo.objetivoDelDueño() ?? "0") : "0";
       const p = jugador?.personaje;
+      // EL 101. SIN DUEÑO, `$get` devuelve «0» (`if (pEntity) … return "0"`,
+      // script.cpp:1195-1198), y de eso depende lo que se ve en la pantalla de
+      // elección: `if ( OWNER_GENDER equals 0 ) local OWNER_GENDER PARAM2`
+      // (armor_base.script:130). Sólo para estas dos, que son las que se
+      // midieron; las demás siguen dando vacío como antes.
+      if (!p && (nombre === "gender" || nombre === "race")) return "0";
       if (!p) return "";
       // EL 96. `$get(ent_owner,stat.strength)` — `GetNatStat`, que es
       // `GetStat(i, 0)` (msmonster.h:415; scriptcmds.cpp:1606-1622). Es
@@ -307,6 +355,11 @@ function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
         case "mp": return String(p.mana ?? 0);
         case "maxmp": return String(maximos?.().mana ?? p.manaMax ?? p.mana ?? 0);
         case "gold": return String(p.oro ?? 0);
+        // EL 101. Lo que pregunta `barmor_update_vest` para elegir el submodelo
+        // de mujer (armor_base.script:123-124): `gender` es «male»/«female»
+        // (scriptcmds.cpp:1523) y `race`, `_strlwr(m_Race)` (:1390).
+        case "gender": return p.genero === "female" ? "female" : "male";
+        case "race": return "human";
         // `$get(ent_owner,id)` es el asa con que el guion se lo pasa a otros.
         case "id": return "ent_owner";
         default: break;
@@ -353,11 +406,79 @@ function entornoDelObjeto({ dueño, jugador, suceso, maximos }) {
     // mundo. Ver `src/play/armadura.js`, que es quien llama.
 
     /** Las propiedades que sólo tienen sentido aquí. */
-    propiedadesPropias: new Set(["is_worn", "scriptvar", ...STATS.map((s) => `stat.${s}`)]),
+    // EL 101: `gender` también. Sin estar aquí el intérprete contestaba «0»
+    // ANTES de preguntar (guion.js, `PROPIEDADES`), y la coraza de mujer salía
+    // bien de rebote: por el `PARAM2` al que el guion cae cuando lee «0»
+    // (armor_base.script:130). Lo destapó romper el `case "gender"` a
+    // propósito y ver las 29 pruebas en verde.
+    propiedadesPropias: new Set(["is_worn", "scriptvar", "gender", ...STATS.map((s) => `stat.${s}`),
+      // `$get(ent_owner,target)`: sólo con mundo; sin él se apunta, como antes.
+      ...(mundo?.objetivoDelDueño ? ["target"] : []),
+      // `$get(ent_owner,mp)` — `RETURN_FLOAT(pMonster->m_MP)`. Su `case` está
+      // en `propiedad` desde el 66 y NO se llegaba a él: `mp` no está en
+      // `PROPIEDADES` (guion.js) y el intérprete contestaba «0» antes de
+      // preguntar. Lo destapó la Blood Drinker: `if $get(ent_owner,mp) <
+      // THROW_MP` (swords_blood_drinker.script:158) era SIEMPRE cierto y la
+      // espada volvía a la mano en el mismo `throwsword_start` que la quitaba.
+      // 72 líneas de `items/` preguntan esto mismo. Es el `gender` del 101
+      // otra vez: un `case` escrito detrás de una puerta cerrada.
+      "mp"]),
+
+    /**
+     * `createnpc` desde un OBJETO (scriptcmds.cpp:2766-2816). Quien crea es el
+     * mundo. Una cosa es de este puerto y va dicha: el asa con la que un objeto
+     * conoce a su dueño es «ent_owner» (`$get(ent_owner,id)`, arriba), que
+     * fuera de este guion no significa nada; al cruzar a la entidad creada se
+     * cambia por el asa del jugador que ella sí reconoce.
+     */
+    crearNpc(script, origen, params = []) {
+      if (!mundo?.crearNpc) { yo.noSoportados.push({ tipo: "comando", nombre: `createnpc ${script} (sin mundo)` }); return null; }
+      const suyo = mundo.asaDelDueño?.() ?? "ent_owner";
+      const asa = mundo.crearNpc(String(script), origen, params.map((x) => (esElDueño(x) ? suyo : String(x))), { creador: mundo.asaDeObjeto?.(yo) ?? null });
+      if (!asa) yo.noSoportados.push({ tipo: "createnpc", nombre: String(script) });
+      return asa;
+    },
+
+    /** `setviewmodel <ruta|none>` — genericitem.cpp:1934-1948. */
+    ponerModeloDeVista(ruta) {
+      const r = String(ruta ?? "");
+      yo.vista = r.toLowerCase() === "none" ? null : r;
+    },
 
     /** `registerarmor` — giarmor.cpp:19-74. `Protection` es `atof` de lo que valga YA. */
-    registrarArmadura({ tipo, proteccion, zonas }) {
-      yo.armadura = { tipo: String(tipo ?? ""), proteccion: numDe(proteccion), zonas: String(zonas ?? "") };
+    registrarArmadura({ tipo, proteccion, zonas, reemplaza }) {
+      yo.armadura = {
+        tipo: String(tipo ?? ""), proteccion: numDe(proteccion), zonas: String(zonas ?? ""),
+        // EL 101: `m_WearModelPositions`, de `ARMOR_REPLACE_BODYPARTS` y en el
+        // orden de los cuatro `strstr` (giarmor.cpp:43-51). Lo lee el muñeco.
+        reemplaza: ["head", "chest", "arms", "legs"].filter((z) => String(reemplaza ?? "").includes(z)),
+      };
+    },
+
+    // ── EL 101: EL MODELO QUE SE LE CUELGA AL MUÑECO ───────────────────────
+    //
+    // La mitad del CLIENTE de `Script_ExecuteCmd` (genericitem.cpp:2199-2225):
+    //
+    //     setmodel none      -> m_ClEntNormal.model = NULL
+    //     setmodel <ruta>    -> Mod_ForName("models/" + ruta)      — NO toca el body
+    //     setmodelbody g v   -> si hay modelo, m_ClEntNormal.SetBody(g, v)
+    //
+    // `SetBody` (clrenderent.cpp:102-117) necesita las bases del `.mdl`, que
+    // este archivo no tiene: aquí se guarda la LISTA de lo pedido, en orden, y
+    // `cuerpoDe` de src/play/equipovisto.js la pliega contra el manifiesto.
+    // Se vacía al cambiar de modelo porque un `body` de otro archivo no dice
+    // nada del nuevo — elección nuestra: el motor conserva el entero, y en los
+    // guiones todo `setmodel` va seguido de su `setmodelbody`.
+    ponerModelo(ruta) {
+      const r = String(ruta ?? "");
+      const nuevo = r.toLowerCase() === "none" ? null : r;
+      if (nuevo !== yo.modelo) yo.cuerpos = [];
+      yo.modelo = nuevo;
+    },
+    indiceDeMano: () => yo.mano,
+    ponerCuerpo(grupo, valor) {
+      if (!yo.modelo) return;                    // `if (m_ClEntNormal.model)`, :2218
+      yo.cuerpos.push([grupo, valor]);
     },
 
     /**

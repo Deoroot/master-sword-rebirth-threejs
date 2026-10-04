@@ -37,7 +37,8 @@ export async function cargarFlechas(clave, {
   if (!M) return null;
 
   const grupo = new THREE.Group();
-  grupo.name = "flechas";
+  // EL 100: uno por modelo; el nombre lleva la clave para reconocerlo en la escena.
+  grupo.name = `flechas:${clave}`;
   const piezas = [];
 
   for (let n = 0; n < cuantas; n++) {
@@ -106,7 +107,17 @@ export async function cargarFlechas(clave, {
       if (!p) { p = piezas[siguiente % piezas.length]; siguiente++; }
       p.libre = false;
       p.nodo.visible = true;
+      // EL 100: una pieza reciclada de una bola de maná llevaba su escala.
+      p.nodo.scale.setScalar(1);
       return p;
+    },
+    /**
+     * EL 100: la escala de una pieza. La bola de maná del Orion Bow se dibuja a
+     * `BALL_SIZE × 0,75` (proj_mana2_cl.script:35, :52); las flechas no se tocan.
+     */
+    escalar(p, s) {
+      if (!p || !Number.isFinite(s)) return;
+      p.nodo.scale.setScalar(s);
     },
     soltar(p) {
       if (!p) return;

@@ -69,6 +69,11 @@ try {
     }
     h.spellcasting ??= {};
     for (const k of ["fire", "ice", "lightning", "affliction"]) { h.spellcasting[k] ??= {}; h.spellcasting[k].valor = 60; }
+    // EL 100 (doc/ARMAS_100.md): la sombra cuesta 30 de maná y la lanza 10
+    // (`reg.attack.mpdrain`, giattack.cpp:897-908). Esta sonda mide el tiro y
+    // tira hasta dieciséis veces por arma: maná de sobra. El cobro lo mide
+    // sondas/armas100.mjs.
+    window.probe.sesion.personaje.mana = 100000;
   });
 
   /** Tira en dieciséis rumbos hasta que uno vuela 120 u sin chocar, y lo detiene ahí. */

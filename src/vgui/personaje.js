@@ -159,7 +159,7 @@ export class PanelDePersonaje extends PanelConNombre {
    * @param retratos  `Retratos` de `src/render/retratos.js`, o `null`
    */
   constructor({ esquema, listar, crear, jugar, borrar, armas = [], retratos = null,
-                nombrePropuesto = "" }) {
+                nombrePropuesto = "", equipo3d = null }) {
     super({
       nombre: NOMBRE,
       // `SetBits(m_Flags, MENUFLAG_TRAPNUMINPUT)` — vgui_choosecharacter.cpp:409.
@@ -172,6 +172,8 @@ export class PanelDePersonaje extends PanelConNombre {
     this.listar = listar; this.crear = crear; this.jugar = jugar; this.borrar = borrar;
     this.armas = armas;
     this.retratos = retratos;
+    /** EL 101: los modelos del equipo (`src/render/equipo3d.js`), o `null`. */
+    this.equipo3d = equipo3d;
 
     /**
      * TODOS los botones del panel, en una lista.
@@ -404,7 +406,7 @@ export class PanelDePersonaje extends PanelConNombre {
     // esto, volver a esta pantalla —«Name Character», o morir y reaparecer—
     // encontraba los lienzos puestos, se daba por hecha y enseñaba tres cajas
     // vacías. El lienzo se queda y se reutiliza; lo que se tira es el retrato.
-    for (const r of this.ranuras) r.retrato = null;
+    for (const r of this.ranuras) { r.retrato = null; r.aspectoPuesto = null; }
     for (const g of this.generos) g.retrato = null;
     return super.cerrar();
   }
@@ -413,6 +415,7 @@ export class PanelDePersonaje extends PanelConNombre {
   refrescar() {
     const lista = this.listar?.() ?? [];
     for (const [i, r] of this.ranuras.entries()) r.quien = lista[i] ?? null;
+    for (const r of this.ranuras) this._vestirRanura(r);
 
     const enElegir = this.etapa === ETAPA.ELEGIR;
     const enQuien = this.etapa === ETAPA.QUIEN;
@@ -571,6 +574,31 @@ export class PanelDePersonaje extends PanelConNombre {
    * repite en cada `colocar()` hasta que sale. El registro llama a `colocar()`
    * dentro de `abrir()`, o sea con el panel ya visible: ahí la caja mide.
    */
+  /**
+   * EL 101: CADA RANURA ENSEÑA A SU PERSONAJE, no al humano por defecto.
+   *
+   * `CRenderChar::Render` (vgui_choosecharacter.cpp:1220-1349) le pone al
+   * modelo tres cosas del personaje guardado, y aquí no se ponía ninguna:
+   *
+   *   el GÉNERO     `player.m_CharInfo[m_Idx].Gender` -> `SetBody(0..3, gv)`  :1326-1335
+   *   el EQUIPO     un modelo por `GearInfo`, atado al cuerpo           :1255-1300, :1337
+   *   la POSTURA    `idle` si lleva algo en la mano, `attention` si no  :1350-1360
+   *
+   * `aspecto` viene resuelto en la lista (`refrescarCenso`, src/main.js). Una
+   * ranura sin personaje vuelve al cuerpo pelado: sin esto se quedaría con la
+   * armadura del que se acaba de borrar.
+   */
+  _vestirRanura(r) {
+    if (!r.retrato) return;
+    const a = r.quien?.aspecto ?? null;
+    const firma = a ? `${a.genero}|${a.conArma}|${a.firma}` : "";
+    if (r.aspectoPuesto === firma) return;
+    r.aspectoPuesto = firma;
+    r.retrato.cambiarGenero(a?.genero ?? "male");
+    r.retrato.reposo(a?.conArma ? "conArma" : "sinArma");
+    if (this.equipo3d) r.retrato.vestir(this.equipo3d, a?.piezas ?? []);
+  }
+
   _montarRetratos() {
     if (!this.retratos) return;
     const poner = (destino, genero) => {
@@ -588,6 +616,8 @@ export class PanelDePersonaje extends PanelConNombre {
       })).then((r) => {
         destino.montando = false;
         destino.retrato = r ?? null;
+        // El retrato llega DESPUÉS del `refrescar()` que quiso vestirlo.
+        if (this.ranuras.includes(destino)) this._vestirRanura(destino);
       }).catch(() => { destino.montando = false; });
     };
     for (const r of this.ranuras) if (r.caja.nodo.isConnected) poner(r, "male");

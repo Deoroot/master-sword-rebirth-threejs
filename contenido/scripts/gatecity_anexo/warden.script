@@ -1,0 +1,122 @@
+// El guarda del anexo: el primer NPC de misión NUESTRO.
+//
+// Es el tubo de las misiones, como `sala88` fue el de los mapas: lo más pequeño
+// que recorre el camino entero. Pide matar a la rata del fondo de la calle, se
+// entera de que ha muerto porque la rata se lo dice (`rat.script`), y paga con
+// una armadura.
+//
+// Está escrito como `gatecity/mayor.script`, el alcalde de Gate City, que es el
+// modelo de misión de este mapa: palabras clave con `catchspeech`, el menú en
+// `game_menu_getoptions` y el aviso del bicho por `callexternal`.
+//
+// Lo que cambia respecto al alcalde, y es a propósito: él guarda su misión en
+// variables SUYAS (`ZOMBIE_QUEST`), o sea que es de todo el servidor y se pierde
+// al cambiar de mapa. Aquí el estado va en el PERSONAJE, con `quest set`, que es
+// lo que hace falta para una cadena: 0 sin empezar, 1 aceptada, 2 rata muerta,
+// 3 cobrada.
+//
+// CORRECCIÓN, tras la primera partida del usuario: la plantilla `base_chat` pone
+// en el menú «Ask about Jobs» por su cuenta, y este guion contestaba ahí con la
+// MISMA frase que al aceptar el trabajo, sin apuntar la misión. Con dos botones
+// casi iguales —«Ask about Jobs» y «Ask for work»— y la misma respuesta, se
+// podía salir a matar la rata creyendo tener el encargo y sin tenerlo. Ahora los
+// dos botones de la plantilla que aquí no pintan nada están apagados (`NO_JOB`,
+// `NO_RUMOR`, base_chat.script:24-25), la palabra «job» por el chat manda al
+// menú, y aceptar lo dice en pantalla.
+#include monsters/base_chat
+
+{ game_spawn
+
+	setvard NO_JOB 1
+	setvard NO_RUMOR 1
+
+	name_unique anexo_warden
+
+	hp 30
+	gold 0
+	name |Warden Borin
+	fov 120
+	width 32
+	height 72
+	race human
+	roam 0
+	setmodel dwarf/male1.mdl
+	setmodelbody 0 0
+	setmodelbody 1 0
+	setmodelbody 2 0
+	invincible 1
+
+	hearingsensitivity 10
+
+	setmoveanim idle
+
+	catchspeech say_hi hi hello hail greet hey
+	catchspeech say_job job work rat barrels
+}
+
+{ say_hi
+
+	saytext "Mind the street, Adventurer. Something has been gnawing at my barrels."
+}
+
+{ say_job
+
+	saytext "Aye, I have work for a blade. Ask me for it and we will shake on it."
+}
+
+{ game_menu_getoptions
+
+	local L_STAGE $get_quest_data(PARAM1,anexo_rat)
+
+	if ( L_STAGE == 0 )
+	{
+		local reg.mitem.title 	"Ask for work"
+		local reg.mitem.type 	callback
+		local reg.mitem.callback take_job
+		menuitem.register
+	}
+
+	if ( L_STAGE == 1 )
+	{
+		local reg.mitem.title 	"About that rat..."
+		local reg.mitem.type 	callback
+		local reg.mitem.callback remind_job
+		menuitem.register
+	}
+
+	if ( L_STAGE == 2 )
+	{
+		local reg.mitem.title 	"Collect your reward"
+		local reg.mitem.type 	callback
+		local reg.mitem.callback pay_out
+		menuitem.register
+	}
+}
+
+{ take_job
+
+	quest set PARAM1 anexo_rat 1
+	saytext "A giant rat nests at the far end of the street. Kill it and I will see you armoured."
+	infomsg PARAM1 "Quest accepted" "Kill the giant rat at the far end of the street."
+}
+
+{ remind_job
+
+	saytext "It is still alive. The far end of the street, past the lamp."
+}
+
+{ pay_out
+
+	if $get_quest_data(PARAM1,anexo_rat) == 2
+	quest set PARAM1 anexo_rat 3
+	saytext "A deal is a deal. Wear it well."
+	offer PARAM1 armor_plate
+}
+
+// Lo llama la rata al morir, con quien la mató.
+{ [server] rat_died
+
+	if $get_quest_data(PARAM1,anexo_rat) == 1
+	quest set PARAM1 anexo_rat 2
+	infomsg PARAM1 "The rat is dead" "Return to Warden Borin for your reward."
+}

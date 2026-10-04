@@ -93,6 +93,54 @@ export function bspDe(mapa, argv = process.argv.slice(2), existe = existsSync) {
   return propio;
 }
 
+/**
+ * La raíz del contenido del juego para ESE `.bsp`: de donde salen los modelos,
+ * los sprites y los `gfx` que el mapa nombra. Con la barra al final.
+ *
+ * Para un mapa del juego es la carpeta de encima de `maps/`, que es lo que se
+ * hacía siempre. **Para uno nuestro no**: su `.bsp` vive en `build/contenido/maps`
+ * y lo que nombra sigue estando en el juego. Sacando la raíz de la ruta del
+ * `.bsp`, el horneado buscaba `build/contenido/models/…`, no encontraba nada y
+ * dejaba el mapa sin un adorno ni una llama, con un «FALTAN» entre cien líneas
+ * y salida 0. No lo vio la sala del 88 porque no tenía ni adornos ni sprites: lo
+ * enseñó el segundo mapa nuestro, el anexo de Gate City.
+ */
+export function raizDeAssets(rutaBsp) {
+  const r = String(rutaBsp).replace(/\\/g, "/");
+  if (r.includes(`${PROPIOS}/`)) return `${CONTENIDO}/`;
+  return String(rutaBsp).replace(/maps[\\/][^\\/]+$/, "");
+}
+
+/** Los guiones del juego. No se tocan. */
+export const SCRIPTS_DEL_JUEGO = "../MSC/MSCScripts/scripts";
+
+/**
+ * El árbol MONTADO: los guiones del juego con los nuestros (`contenido/scripts`)
+ * encima. Lo deja `tools/contenido.mjs` (`montarScripts`), y vive en `build/`
+ * porque casi todo lo que hay dentro es de MSR.
+ */
+export const SCRIPTS_MONTADOS = "build/contenido/scripts";
+
+/**
+ * La carpeta de guiones con la que se hornea ESE mapa.
+ *
+ * Un mapa del juego, con los del juego, como siempre. **Uno nuestro, con el
+ * árbol montado**: sus NPC son guiones nuestros que hacen `#include` de los del
+ * juego (`monsters/base_chat`, `monsters/giantrat`), así que las dos carpetas
+ * tienen que verse como una. Se monta en vez de enseñarle dos raíces a cada
+ * lector, porque los lectores son siete y cada uno tiene la suya escrita.
+ *
+ * Si el mapa es nuestro y el árbol no está montado, se dice: caer a los del
+ * juego en silencio hornearía un mapa cuyos NPC «no tienen guion».
+ */
+export function scriptsDe(mapa, existe = existsSync) {
+  if (!existe(`${PROPIOS}/${mapa}.bsp`)) return SCRIPTS_DEL_JUEGO;
+  if (!existe(`${SCRIPTS_MONTADOS}/monsters`)) {
+    throw new Error(`«${mapa}» es un mapa nuestro y ${SCRIPTS_MONTADOS} no está montado: npm run contenido -- ${mapa}`);
+  }
+  return SCRIPTS_MONTADOS;
+}
+
 /** `build/<mapa>`, absoluta, que es lo que quieren `mkdir` y `writeFile`. */
 export function salidaDe(mapa) { return resolve("build", validado(mapa)); }
 

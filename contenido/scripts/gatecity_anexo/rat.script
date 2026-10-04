@@ -1,0 +1,15 @@
+// La rata de la misión del anexo: la rata gigante del juego, que además avisa
+// al guarda cuando muere.
+//
+// Es el mismo mecanismo que `monsters/dwarf_zombie_random.script` usa con el
+// alcalde de Gate City: buscar al NPC por su `name_unique` y llamarle un evento.
+// Todo lo demás —vida, mordisco, animaciones— es de `monsters/giantrat`.
+#include monsters/giantrat
+
+{ [server] game_death
+
+	local L_WARDEN $get_by_name(anexo_warden)
+	local L_WARDEN_ID $get(L_WARDEN,id)
+
+	callexternal L_WARDEN_ID rat_died $get(ent_laststruck,id)
+}

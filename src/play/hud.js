@@ -57,6 +57,17 @@ export const CVARS = Object.freeze({
 export const MAX_LINEAS = 128;
 
 /**
+ * EL ORDEN DE LLEGADA, compartido por todas las consolas — el 100.
+ *
+ * No es del motor: es para quien MIDE. Las consolas son dos (sucesos y chat,
+ * vgui_hud.cpp:189 y :197) y cada una es su anillo; una sonda que quiera leer
+ * «lo que ha pasado, en orden» necesita saber qué línea de una fue antes que
+ * cuál de la otra. Cada línea se lleva su número al imprimirse (`n`) y nadie
+ * del juego lo lee.
+ */
+let serie = 0;
+
+/**
  * Los SEIS colores de suceso, tal cual.
  *
  *     static COLOR HUDEventColor[] = {
@@ -578,7 +589,7 @@ export class ConsolaDeSucesos {
     this.encogeEn = 0;
 
     const [cabe, resto] = this.partir(texto);
-    this.linea[this.fisica(nueva)] = { tipo, texto: cabe, vieneDeArriba };
+    this.linea[this.fisica(nueva)] = { tipo, texto: cabe, vieneDeArriba, n: ++serie };
     if (resto) this.imprimir(tipo, resto, true);
     return this;
   }

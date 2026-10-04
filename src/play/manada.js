@@ -612,6 +612,37 @@ export function pasoMandado(manada, i, dt, arnes = {}, U = U_POR_METRO) {
  *
  * `cajasPorClave` es opcional y sólo la usa quien ponga colisionadores.
  */
+/**
+ * EL NOMBRE DE UN NPC SE PARTE POR LA BARRA — `ScriptCmd_Name`, scriptcmds.cpp:4371-4412.
+ *
+ *     //name <string>
+ *     //- if file pipe is used, becomes the name prefix, (eg. "a|bat" "some|apples")
+ *     if ((barloc = sTemp.find("|")) != msstring_error) {
+ *         Prefix = sTemp.substr(0, barloc);
+ *         Name = sTemp.substr(barloc + 1);
+ *
+ * Lo de antes de la barra es el PREFIJO (`DisplayPrefix`) y lo de después el
+ * nombre (`m_DisplayName`), que es lo que devuelve `DisplayName()` y lo que
+ * sale en «X says», en «Hit X» y encima de su cabeza. La ficha horneada guarda
+ * el `name` crudo, y enseñarlo tal cual sacaba la barra a pantalla: en Gate
+ * City, «|Mayor Vilhelm», «|Kendra» y «|Roderick the Miner» —tres guiones que
+ * escriben `name |Mayor Vilhelm`, con el prefijo VACÍO, para que nadie les
+ * ponga un artículo—. Lo vio el primer NPC nuestro, que copió ese modismo del
+ * alcalde: «|Warden Borin says, …».
+ *
+ * Se parte UNA vez, aquí, que es por donde pasan todas las fichas —las del
+ * navegador y las del servidor—, y no en cada uno de los 57 sitios que leen
+ * `ficha.nombre`. El prefijo se guarda para `name.full` (`GuionDeNpc`).
+ * Se exporta para la prueba.
+ */
+export function partirNombreDeFicha(ficha) {
+  if (!ficha || typeof ficha.nombre !== "string") return ficha;
+  const barra = ficha.nombre.indexOf("|");
+  if (barra < 0) return ficha;
+  ficha.prefijoDeNombre = ficha.nombre.slice(0, barra);
+  ficha.nombre = ficha.nombre.slice(barra + 1);
+  return ficha;
+}
 export class Manada {
   constructor(censo, {
     secuenciasPorClave = new Map(), cajasPorClave = new Map(),
@@ -656,8 +687,25 @@ export class Manada {
       alAire: 0, noPuede: 0, sinObjetivo: 0, sinArnes: 0, formaSinPortar: 0,
     };
 
-    for (const [n, c] of (censo?.colocados ?? []).entries()) {
-      const secuencias = secuenciasPorClave.get(c.clave) ?? [];
+    /** Lo que `_nacer` necesita de los modelos, guardado para `crear`. */
+    this._secuenciasPorClave = secuenciasPorClave;
+    this._cajasPorClave = cajasPorClave;
+    for (const c of censo?.colocados ?? []) this._nacer(c);
+  }
+
+  /**
+   * UNA INSTANCIA, hecha de su ficha. Es el cuerpo del bucle que tenía el
+   * constructor, sacado a un método para que `crear` —el `createnpc` de un
+   * guion— haga EXACTAMENTE lo mismo que el censo del mapa: un monstruo creado
+   * por guion es la misma clase que uno colocado (`CREATE_NAMED_ENTITY("ms_npc")`,
+   * scriptcmds.cpp:2778), y dos caminos serían dos bichos distintos.
+   */
+  _nacer(c) {
+    const n = this.instancias.length;
+    const azar = this.azar;
+    {
+      partirNombreDeFicha(c);
+      const secuencias = this._secuenciasPorClave.get(c.clave) ?? [];
       const i = {
         /** El identificador con el que este bicho viaja por el cable. */
         id: n,
@@ -667,7 +715,7 @@ export class Manada {
         // La MEDIDA primero: la de la cabecera del `.mdl` viene vacía en casi
         // todos estos modelos, y una caja de lado cero da un colisionador que
         // no choca con nada y no da ningún error.
-        caja: cajasPorClave.get(c.clave) ?? null,
+        caja: this._cajasPorClave.get(c.clave) ?? null,
         /** Dónde está, en METROS de escena. Era `nodo.position`. */
         donde: [c.escena[0], c.escena[1], c.escena[2]],
         /** El rumbo en radianes, convención de Three. Era `nodo.rotation.y`. */
@@ -854,7 +902,36 @@ export class Manada {
       // entero estaba plantado en mitad de una zancada, con un pie levantado.
       this.ponDeAndarOParar(i, this.quieto(i));
       this.instancias.push(i);
+      return i;
     }
+  }
+
+  /**
+   * **`createnpc`: UNA INSTANCIA NUEVA, EN MITAD DE LA PARTIDA.**
+   *
+   * `ficha` es la horneada (`creables` de `bichos.json`, o la de un colocado
+   * con el mismo guion) y `donde` el punto, en metros de escena:
+   * `NewMonster->pev->origin = Position` (scriptcmds.cpp:2781), sin bajarlo al
+   * suelo. Nace DESPIERTA y sin área: nadie la vuelve a sacar si muere.
+   *
+   * Se añade al FINAL de `instancias`, así que el `id` de los demás no se
+   * mueve. Con servidor esto NO vale —el protocolo manda los bichos por índice
+   * y el otro lado no sabe que la lista ha crecido—: quien llama no lo hace
+   * con red (ver `src/play/creados.js`).
+   */
+  crear(ficha, donde) {
+    if (!ficha || !Array.isArray(donde)) return null;
+    const c = {
+      ...ficha,
+      aparecedor: null, objetivo: null, alMorir: null,
+      escena: [donde[0], donde[1], donde[2]],
+      yaw: 0,
+      postspawn: ficha.postspawn ?? null,
+    };
+    const i = this._nacer(c);
+    i.nacidoPorGuion = true;
+    this.sucesos.push({ que: "creado", id: i.id, script: c.script ?? null });
+    return i;
   }
 
   get n() { return this.instancias.length; }
@@ -1601,6 +1678,9 @@ export class Manada {
     for (const i of this.instancias) {
       if (i.dormido) continue;               // todavía no ha aparecido
       if (i.muerto) continue;                // un cadáver no pasea
+      // Lo que vuela por su guion (`fly 1` en una invocación) lo mueve
+      // `MundoDeCreados._pensar`, no el paseo: ver `src/play/creados.js`.
+      if (i.vuelo?.vuela) continue;
       if (filtro && !filtro(i)) continue;
       // EL 77: con un destino MANDADO la casilla no es del paseo. El motor no
       // necesita este `if` porque la casilla es una sola y `SetWanderDest` se
@@ -1632,6 +1712,7 @@ export class Manada {
     for (const i of this.instancias) {
       if (i.dormido) continue;               // todavía no ha aparecido
       if (!i.cazador || i.muerto) continue;
+      if (i.vuelo?.vuela) continue;          // lo mueve su guion (creados.js)
       // ── EL 93: LO QUE EL GUION DEJA HACER AL BUCLE DE CAZA ─────────────
       //
       // La IA porta ese bucle, así que lee sus dos llaves: `if CAN_HUNT`
