@@ -1,5 +1,9 @@
 # Master Sword: Rebirth — in Three.js
 
+> **Archived.** This hand port has been superseded by [msr-web](https://github.com/Deoroot/msr-web),
+> which runs the original engine and game code in the browser as WebAssembly. This repository is kept
+> as a record: the notebook in [`doc/`](doc/) and the numbers below are as they stood when work stopped.
+
 <!-- insignias:inicio -->
 ![script commands: 115/325 · 35%](https://img.shields.io/badge/script%20commands-115%2F325%20%C2%B7%2035%25-orange)
 ![Edana scripts: 20/27 · 74%](https://img.shields.io/badge/Edana%20scripts-20%2F27%20%C2%B7%2074%25-yellowgreen)
